@@ -28,7 +28,7 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-* { box-sizing: border-box; }
+* { box-sizing: border-box; touch-action: manipulation; }
 html, body { margin: 0; padding: 0; height: 100%; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -38,7 +38,9 @@ body {
   line-height: 1.4;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
   overscroll-behavior-y: none;
+  touch-action: manipulation;
 }
 button { font: inherit; cursor: pointer; }
 input, select { font: inherit; }
@@ -330,6 +332,11 @@ input, select { font: inherit; }
 }
 .legend-check svg { width: 14px; height: 14px; fill: white; opacity: 0; transition: opacity 0.15s; }
 .legend-item:not(.off) .legend-check svg { opacity: 1; }
+.legend-item-total {
+  background: var(--surface-2);
+  margin-bottom: 4px;
+}
+.legend-item-total .legend-name { font-weight: 700; }
 
 /* ============ DONNÉES : ENTREPRISES ============ */
 .company-list { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 6px; }

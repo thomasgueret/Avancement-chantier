@@ -19,6 +19,8 @@ const CHART_COLORS = [
   '#a17500', // or
   '#455a64'  // ardoise
 ];
+const TOTAL_KEY = '__total__';
+const TOTAL_COLOR = '#1a1d23';
 
 // ---------- State ----------
 const state = {
@@ -197,10 +199,17 @@ function renderChart() {
   empty.hidden = true;
 
   const series = computeSeries(dates);
-  const maxVal = Math.max(
-    0,
-    ...visibleCompanies.flatMap(c => series[c.id] || [0])
-  );
+  // Série Total : somme de TOUTES les entreprises par date (indépendante des toggles)
+  const totalSeries = dates.map((_, i) => {
+    let sum = 0;
+    for (const c of state.companies) sum += (series[c.id]?.[i] || 0);
+    return sum;
+  });
+  const showTotal = !state.chartHidden[TOTAL_KEY];
+
+  const valuesForScale = visibleCompanies.flatMap(c => series[c.id] || [0]);
+  if (showTotal) valuesForScale.push(...totalSeries);
+  const maxVal = Math.max(0, ...valuesForScale);
   const yMax = niceMax(maxVal);
 
   // Dimensions du viewBox
@@ -239,25 +248,31 @@ function renderChart() {
     parts.push(`<text class="axis-label" x="${xOf(i)}" y="${plotB + 18}" text-anchor="middle">${shortDateFR(dates[i])}</text>`);
   });
 
-  // Courbes
+  // Helper de tracé : path + points
+  const drawSerie = (values, color, strokeWidth, pointRadius) => {
+    if (dates.length === 1) {
+      parts.push(`<circle class="data-point" cx="${xOf(0)}" cy="${yOf(values[0])}" r="${pointRadius + 0.5}" fill="${color}" />`);
+      return;
+    }
+    const d = values.map((v, i) => `${i === 0 ? 'M' : 'L'} ${xOf(i).toFixed(1)} ${yOf(v).toFixed(1)}`).join(' ');
+    parts.push(`<path class="data-line" d="${d}" stroke="${color}" stroke-width="${strokeWidth}" />`);
+    if (dates.length <= 20) {
+      values.forEach((v, i) => {
+        parts.push(`<circle class="data-point" cx="${xOf(i).toFixed(1)}" cy="${yOf(v).toFixed(1)}" r="${pointRadius}" fill="${color}" />`);
+      });
+    }
+  };
+
+  // Courbes par entreprise
   for (const company of visibleCompanies) {
     const values = series[company.id];
     if (!values || !values.length) continue;
-    const color = companyColor(company.id);
+    drawSerie(values, companyColor(company.id), 2.2, 3.5);
+  }
 
-    if (dates.length === 1) {
-      // Un seul point : juste un cercle
-      parts.push(`<circle class="data-point" cx="${xOf(0)}" cy="${yOf(values[0])}" r="4" fill="${color}" />`);
-    } else {
-      const d = values.map((v, i) => `${i === 0 ? 'M' : 'L'} ${xOf(i).toFixed(1)} ${yOf(v).toFixed(1)}`).join(' ');
-      parts.push(`<path class="data-line" d="${d}" stroke="${color}" />`);
-      // Points seulement si peu de dates (lisibilité)
-      if (dates.length <= 20) {
-        values.forEach((v, i) => {
-          parts.push(`<circle class="data-point" cx="${xOf(i).toFixed(1)}" cy="${yOf(v).toFixed(1)}" r="3.5" fill="${color}" />`);
-        });
-      }
-    }
+  // Courbe Total dessinée en dernier (au-dessus) si visible
+  if (showTotal && state.companies.length > 0) {
+    drawSerie(totalSeries, TOTAL_COLOR, 3.2, 4);
   }
 
   svg.innerHTML = parts.join('');
@@ -279,10 +294,10 @@ function renderLegend() {
     return;
   }
 
-  for (const company of state.companies) {
-    const hidden = !!state.chartHidden[company.id];
+  const makeItem = ({ key, name, color, isTotal }) => {
+    const hidden = !!state.chartHidden[key];
     const li = document.createElement('li');
-    li.className = 'legend-item' + (hidden ? ' off' : '');
+    li.className = 'legend-item' + (hidden ? ' off' : '') + (isTotal ? ' legend-item-total' : '');
     li.innerHTML = `
       <span class="legend-swatch"></span>
       <span class="legend-name"></span>
@@ -290,10 +305,18 @@ function renderLegend() {
         <svg viewBox="0 0 24 24"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>
       </span>
     `;
-    li.querySelector('.legend-swatch').style.background = companyColor(company.id);
-    li.querySelector('.legend-name').textContent = company.name;
-    li.addEventListener('click', () => toggleCompanyVisibility(company.id));
-    list.appendChild(li);
+    li.querySelector('.legend-swatch').style.background = color;
+    li.querySelector('.legend-name').textContent = name;
+    li.addEventListener('click', () => toggleCompanyVisibility(key));
+    return li;
+  };
+
+  // Total en tête
+  list.appendChild(makeItem({ key: TOTAL_KEY, name: 'Total', color: TOTAL_COLOR, isTotal: true }));
+
+  // Entreprises ensuite
+  for (const company of state.companies) {
+    list.appendChild(makeItem({ key: company.id, name: company.name, color: companyColor(company.id) }));
   }
 }
 
