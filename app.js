@@ -25,9 +25,9 @@ const TOTAL_COLOR = '#1a1d23';
 // ---------- State ----------
 const state = {
   companies: [],          // [{ id, name }]
+  zones: [],              // [{ id, name, parentId }] — arborescence à plat
   presences: {},          // { 'YYYY-MM-DD': [{ id, companyId, count }] }
   currentDate: todayISO(),
-  currentSub: 'saisie',   // 'saisie' | 'graphique'
   chartHidden: {},        // { [companyId]: true } — entreprises masquées du graphique
   chartRange: 30          // 7 | 30 | 'all'
 };
@@ -39,6 +39,7 @@ function load() {
     if (!raw) return;
     const data = JSON.parse(raw);
     if (data.companies) state.companies = data.companies;
+    if (data.zones) state.zones = data.zones;
     if (data.presences) state.presences = data.presences;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
@@ -49,6 +50,7 @@ function load() {
 function save() {
   const data = {
     companies: state.companies,
+    zones: state.zones,
     presences: state.presences,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange
@@ -104,6 +106,7 @@ function renderAll() {
   renderDate();
   renderEntries();
   renderCompanies();
+  renderZones();
   renderChart();
   renderLegend();
 }
@@ -338,13 +341,112 @@ function setChartRange(range) {
   renderChart();
 }
 
-// ---------- Sub-tabs Effectifs ----------
-function switchSubPage(name) {
-  state.currentSub = name;
-  document.querySelectorAll('.sub-page').forEach(p => p.classList.toggle('active', p.id === `sub-${name}`));
-  document.querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('active', b.dataset.sub === name));
-  document.querySelector('.segmented').dataset.active = name;
-  if (name === 'graphique') {
+// ---------- Zones (arborescence) ----------
+function getZoneChildren(parentId) {
+  return state.zones.filter(z => z.parentId === parentId);
+}
+
+function getZoneDescendants(id) {
+  const out = new Set();
+  const stack = [id];
+  while (stack.length) {
+    const cur = stack.pop();
+    for (const z of state.zones) {
+      if (z.parentId === cur && !out.has(z.id)) {
+        out.add(z.id);
+        stack.push(z.id);
+      }
+    }
+  }
+  return out;
+}
+
+function renderZones() {
+  const tree = document.getElementById('zonetree');
+  const empty = document.getElementById('zoneempty');
+  if (!tree || !empty) return;
+  tree.innerHTML = '';
+
+  if (state.zones.length === 0) {
+    empty.classList.add('show');
+    return;
+  }
+  empty.classList.remove('show');
+
+  const renderNode = (zone, depth) => {
+    const row = document.createElement('div');
+    row.className = 'zone-row';
+    row.dataset.id = zone.id;
+    row.dataset.depth = String(depth);
+    row.style.setProperty('--depth', depth);
+    row.innerHTML = `
+      <span class="zone-depth-mark">${depth === 0 ? '' : '└'}</span>
+      <input class="zone-name-input" type="text" maxlength="80" placeholder="Nom de la zone" />
+      <button class="zone-add-sub" data-action="add-child" aria-label="Ajouter un sous-niveau">+</button>
+      <button class="icon-btn danger" data-action="delete" aria-label="Supprimer">
+        <svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z"/></svg>
+      </button>
+    `;
+    const input = row.querySelector('input');
+    input.value = zone.name;
+    input.addEventListener('input', () => renameZone(zone.id, input.value));
+    row.querySelector('[data-action="add-child"]').addEventListener('click', () => addZone(zone.id));
+    row.querySelector('[data-action="delete"]').addEventListener('click', () => deleteZone(zone.id));
+    tree.appendChild(row);
+
+    for (const child of getZoneChildren(zone.id)) renderNode(child, depth + 1);
+  };
+
+  for (const root of getZoneChildren(null)) renderNode(root, 0);
+}
+
+function addZone(parentId) {
+  const zone = { id: uid(), name: '', parentId: parentId || null };
+  state.zones.push(zone);
+  save();
+  renderZones();
+  // focus le champ de la nouvelle zone
+  const input = document.querySelector(`.zone-row[data-id="${zone.id}"] input`);
+  if (input) {
+    input.focus();
+    // assure que le champ est visible
+    input.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+}
+
+function renameZone(id, name) {
+  const zone = state.zones.find(z => z.id === id);
+  if (!zone) return;
+  zone.name = name;
+  save();
+  // pas de re-render : l'utilisateur tape, on ne casse pas le focus
+}
+
+function deleteZone(id) {
+  const zone = state.zones.find(z => z.id === id);
+  if (!zone) return;
+  const descendants = getZoneDescendants(id);
+  const label = zone.name || 'cette zone';
+  const msg = descendants.size > 0
+    ? `Supprimer « ${label} » et ses ${descendants.size} sous-zone(s) ?`
+    : `Supprimer « ${label} » ?`;
+  if (!confirm(msg)) return;
+  const toRemove = new Set([id, ...descendants]);
+  state.zones = state.zones.filter(z => !toRemove.has(z.id));
+  save();
+  renderZones();
+}
+
+// ---------- Sub-tabs ----------
+function switchSubPage(group, name) {
+  const buttons = Array.from(document.querySelectorAll(`.seg-btn[data-group="${group}"]`));
+  const idx = buttons.findIndex(b => b.dataset.sub === name);
+  buttons.forEach((b, i) => b.classList.toggle('active', i === idx));
+  document.querySelectorAll(`.sub-page[data-group="${group}"]`).forEach(p => {
+    p.classList.toggle('active', p.id === `sub-${name}`);
+  });
+  document.querySelector(`.segmented[data-group="${group}"]`).dataset.position = String(idx < 0 ? 0 : idx);
+  if (group === 'effectifs' && name === 'graphique') {
     renderChart();
     renderLegend();
   }
@@ -481,7 +583,12 @@ function switchPage(name) {
 
 // ---------- Import / Export ----------
 function exportData() {
-  const data = { companies: state.companies, presences: state.presences, exportedAt: new Date().toISOString() };
+  const data = {
+    companies: state.companies,
+    zones: state.zones,
+    presences: state.presences,
+    exportedAt: new Date().toISOString()
+  };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -500,6 +607,7 @@ function importData(file) {
       if (!data.companies || !data.presences) throw new Error('Format invalide');
       if (!confirm('Importer ce fichier remplacera vos données actuelles. Continuer ?')) return;
       state.companies = data.companies;
+      state.zones = data.zones || [];
       state.presences = data.presences;
       save();
       renderAll();
@@ -512,8 +620,9 @@ function importData(file) {
 }
 
 function resetAll() {
-  if (!confirm('Effacer TOUTES les données (entreprises et présences) ?\nCette action est irréversible.')) return;
+  if (!confirm('Effacer TOUTES les données (entreprises, zones et présences) ?\nCette action est irréversible.')) return;
   state.companies = [];
+  state.zones = [];
   state.presences = {};
   save();
   renderAll();
@@ -531,10 +640,13 @@ function init() {
     btn.addEventListener('click', () => switchPage(btn.dataset.page));
   });
 
-  // Segmented control (Saisie / Graphique)
+  // Segmented controls (Saisie / Graphique, Entreprises / Zones)
   document.querySelectorAll('.seg-btn').forEach(btn => {
-    btn.addEventListener('click', () => switchSubPage(btn.dataset.sub));
+    btn.addEventListener('click', () => switchSubPage(btn.dataset.group, btn.dataset.sub));
   });
+
+  // Zones
+  document.getElementById('zoneaddroot').addEventListener('click', () => addZone(null));
 
   // Range chips du graphique
   document.querySelectorAll('.chip-btn').forEach(btn => {

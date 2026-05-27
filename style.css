@@ -91,7 +91,7 @@ input, select { font: inherit; }
   transition: transform 0.22s cubic-bezier(.4,.0,.2,1);
   z-index: 0;
 }
-.segmented[data-active="graphique"] .segmented-thumb {
+.segmented[data-position="1"] .segmented-thumb {
   transform: translateX(100%);
 }
 .seg-btn {
@@ -354,6 +354,64 @@ input, select { font: inherit; }
   margin-bottom: 4px;
 }
 .legend-item-total .legend-name { font-weight: 700; }
+
+/* ============ DONNÉES : ZONES (arborescence) ============ */
+.zone-tree { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.zone-row {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 6px 6px calc(12px + var(--depth, 0) * 20px);
+  box-shadow: var(--shadow-sm);
+  min-height: 48px;
+  position: relative;
+}
+.zone-row[data-depth="0"] {
+  background: var(--surface);
+  border-color: var(--border-strong);
+}
+.zone-depth-mark {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: ui-monospace, Menlo, monospace;
+  min-width: 12px;
+}
+.zone-name-input {
+  flex: 1; min-width: 0;
+  border: none;
+  background: transparent;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text);
+  padding: 8px 4px;
+  border-bottom: 1px solid transparent;
+  border-radius: 0;
+}
+.zone-name-input::placeholder { color: var(--text-3); font-style: italic; }
+.zone-name-input:focus {
+  outline: none;
+  border-bottom-color: var(--accent);
+}
+.zone-add-sub {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--accent);
+  border-radius: 999px;
+  font-size: 18px;
+  font-weight: 500;
+  width: 36px; height: 36px;
+  display: inline-flex; align-items: center; justify-content: center;
+  line-height: 1;
+}
+.zone-add-sub:active { background: var(--accent-soft); border-color: var(--accent); }
+.zone-add-root {
+  width: 100%;
+  margin-top: 8px;
+}
 
 /* ============ DONNÉES : ENTREPRISES ============ */
 .company-list { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 6px; }
