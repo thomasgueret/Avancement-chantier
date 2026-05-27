@@ -118,40 +118,41 @@ function renderDate() {
 function renderEntries() {
   const list = document.getElementById('entrylist');
   const empty = document.getElementById('emptystate');
-  const entries = state.presences[state.currentDate] || [];
-
   list.innerHTML = '';
+
+  if (state.companies.length === 0) {
+    empty.classList.add('show');
+    document.getElementById('totalcount').textContent = '0';
+    document.getElementById('totalsub').textContent = 'personne';
+    return;
+  }
+  empty.classList.remove('show');
+
+  const entries = state.presences[state.currentDate] || [];
   let total = 0;
 
-  if (entries.length === 0) {
-    empty.classList.add('show');
-  } else {
-    empty.classList.remove('show');
-    for (const entry of entries) {
-      const company = getCompany(entry.companyId);
-      const name = company ? company.name : '(entreprise supprimée)';
-      total += entry.count;
+  for (const company of state.companies) {
+    const entry = entries.find(e => e.companyId === company.id);
+    const count = entry ? entry.count : 0;
+    total += count;
 
-      const li = document.createElement('li');
-      li.className = 'entry-item';
-      li.innerHTML = `
-        <div class="entry-company"></div>
-        <div class="entry-count"><span class="num"></span><small>pers.</small></div>
-        <div class="entry-actions">
-          <button class="icon-btn" data-action="edit" aria-label="Modifier">
-            <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25Zm17.71-10.04a1 1 0 0 0 0-1.41l-2.51-2.51a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83Z"/></svg>
-          </button>
-          <button class="icon-btn danger" data-action="delete" aria-label="Supprimer">
-            <svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z"/></svg>
-          </button>
-        </div>
-      `;
-      li.querySelector('.entry-company').textContent = name;
-      li.querySelector('.num').textContent = entry.count;
-      li.querySelector('[data-action="edit"]').addEventListener('click', () => openEntryModal(entry));
-      li.querySelector('[data-action="delete"]').addEventListener('click', () => deleteEntry(entry.id));
-      list.appendChild(li);
-    }
+    const li = document.createElement('li');
+    li.className = 'entry-item' + (count === 0 ? ' is-zero' : '');
+    li.innerHTML = `
+      <div class="entry-company"></div>
+      <div class="counter">
+        <button class="counter-btn" data-action="dec" aria-label="Diminuer">−</button>
+        <span class="counter-value"></span>
+        <button class="counter-btn" data-action="inc" aria-label="Augmenter">+</button>
+      </div>
+    `;
+    li.querySelector('.entry-company').textContent = company.name;
+    li.querySelector('.counter-value').textContent = count;
+    const decBtn = li.querySelector('[data-action="dec"]');
+    if (count === 0) decBtn.disabled = true;
+    decBtn.addEventListener('click', () => decrementCount(company.id));
+    li.querySelector('[data-action="inc"]').addEventListener('click', () => incrementCount(company.id));
+    list.appendChild(li);
   }
 
   document.getElementById('totalcount').textContent = total;
@@ -403,78 +404,52 @@ function deleteCompany(id) {
 }
 
 // ---------- Entries (presences) ----------
-function openEntryModal(entry = null) {
-  if (state.companies.length === 0) {
-    showToast('Ajoutez d\'abord une entreprise dans l\'onglet Données', 'error');
-    return;
-  }
-  const modal = document.getElementById('entrymodal');
-  const select = document.getElementById('entrycompany');
-  const countInput = document.getElementById('entrycount');
-  const idInput = document.getElementById('entryid');
-  const title = document.getElementById('entrymodaltitle');
-
-  select.innerHTML = state.companies
-    .map(c => `<option value="${c.id}"></option>`)
-    .join('');
-  Array.from(select.options).forEach((opt, i) => {
-    opt.textContent = state.companies[i].name;
-  });
-
-  if (entry) {
-    title.textContent = 'Modifier la présence';
-    select.value = entry.companyId;
-    countInput.value = entry.count;
-    idInput.value = entry.id;
-  } else {
-    title.textContent = 'Ajouter une présence';
-    select.value = state.companies[0].id;
-    countInput.value = '';
-    idInput.value = '';
-  }
-
-  modal.hidden = false;
-  setTimeout(() => countInput.focus(), 50);
-}
-
-function closeEntryModal() {
-  document.getElementById('entrymodal').hidden = true;
-}
-
-function saveEntryFromForm(e) {
-  e.preventDefault();
-  const companyId = document.getElementById('entrycompany').value;
-  const count = parseInt(document.getElementById('entrycount').value, 10);
-  const id = document.getElementById('entryid').value;
-
-  if (!companyId || !Number.isFinite(count) || count < 1) return;
-
+function incrementCount(companyId) {
   const date = state.currentDate;
   if (!state.presences[date]) state.presences[date] = [];
-  const entries = state.presences[date];
-
-  if (id) {
-    const idx = entries.findIndex(en => en.id === id);
-    if (idx >= 0) entries[idx] = { id, companyId, count };
-  } else {
-    entries.push({ id: uid(), companyId, count });
+  let entry = state.presences[date].find(e => e.companyId === companyId);
+  if (!entry) {
+    entry = { id: uid(), companyId, count: 0 };
+    state.presences[date].push(entry);
   }
-
+  if (entry.count >= 999) return;
+  entry.count++;
   save();
-  closeEntryModal();
   renderEntries();
   renderChart();
-  showToast('Présence enregistrée');
 }
 
-function deleteEntry(id) {
+function decrementCount(companyId) {
   const date = state.currentDate;
-  if (!state.presences[date]) return;
-  state.presences[date] = state.presences[date].filter(e => e.id !== id);
-  if (state.presences[date].length === 0) delete state.presences[date];
+  const entries = state.presences[date];
+  if (!entries) return;
+  const idx = entries.findIndex(e => e.companyId === companyId);
+  if (idx < 0) return;
+  entries[idx].count--;
+  if (entries[idx].count <= 0) {
+    entries.splice(idx, 1);
+    if (entries.length === 0) delete state.presences[date];
+  }
   save();
   renderEntries();
   renderChart();
+}
+
+// Migration : fusionne les doublons éventuels (d'anciennes données pouvaient
+// contenir plusieurs entrées pour la même entreprise à la même date)
+function migratePresences() {
+  for (const date of Object.keys(state.presences)) {
+    const entries = state.presences[date];
+    if (!Array.isArray(entries)) continue;
+    const byCompany = new Map();
+    for (const entry of entries) {
+      const existing = byCompany.get(entry.companyId);
+      if (existing) existing.count += entry.count;
+      else byCompany.set(entry.companyId, { id: entry.id, companyId: entry.companyId, count: entry.count });
+    }
+    state.presences[date] = Array.from(byCompany.values());
+    if (state.presences[date].length === 0) delete state.presences[date];
+  }
 }
 
 // ---------- Date navigation ----------
@@ -548,6 +523,7 @@ function resetAll() {
 // ---------- Init ----------
 function init() {
   load();
+  migratePresences();
   renderAll();
 
   // Tabs (bas de l'écran)
@@ -582,14 +558,6 @@ function init() {
     state.currentDate = e.target.value;
     renderDate();
     renderEntries();
-  });
-
-  // Add entry
-  document.getElementById('addentry').addEventListener('click', () => openEntryModal());
-  document.getElementById('entrycancel').addEventListener('click', closeEntryModal);
-  document.getElementById('entryform').addEventListener('submit', saveEntryFromForm);
-  document.getElementById('entrymodal').addEventListener('click', (e) => {
-    if (e.target.id === 'entrymodal') closeEntryModal();
   });
 
   // Companies

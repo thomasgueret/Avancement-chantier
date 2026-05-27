@@ -46,15 +46,13 @@
         </div>
 
         <div class="list-section">
-          <h2 class="section-title">Présences</h2>
+          <h2 class="section-title">Présences par entreprise</h2>
           <ul class="entry-list" id="entrylist"></ul>
           <div class="empty-state" id="emptystate">
-            <p>Aucune présence enregistrée pour ce jour.</p>
-            <p class="hint">Appuyez sur le bouton « + » pour ajouter une entreprise.</p>
+            <p>Aucune entreprise enregistrée.</p>
+            <p class="hint">Allez dans l'onglet « Données » pour en ajouter.</p>
           </div>
         </div>
-
-        <button class="fab" id="addentry" aria-label="Ajouter une présence">+</button>
       </div>
 
       <!-- Sous-page : Graphique -->
@@ -119,28 +117,6 @@
       <span>Données</span>
     </button>
   </nav>
-
-  <!-- ============== MODALE : Ajouter une entrée ============== -->
-  <div class="modal-backdrop" id="entrymodal" hidden>
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="entrymodaltitle">
-      <h3 class="modal-title" id="entrymodaltitle">Ajouter une présence</h3>
-      <form id="entryform">
-        <label class="field">
-          <span>Entreprise</span>
-          <select id="entrycompany" required></select>
-        </label>
-        <label class="field">
-          <span>Nombre de personnes</span>
-          <input type="number" id="entrycount" min="1" max="999" inputmode="numeric" required />
-        </label>
-        <input type="hidden" id="entryid" />
-        <div class="modal-actions">
-          <button type="button" class="btn-secondary" id="entrycancel">Annuler</button>
-          <button type="submit" class="btn-primary">Enregistrer</button>
-        </div>
-      </form>
-    </div>
-  </div>
 
   <!-- ============== Toast ============== -->
   <div class="toast" id="toast" hidden></div>

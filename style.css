@@ -187,25 +187,59 @@ input, select { font: inherit; }
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 14px 16px;
+  padding: 10px 12px 10px 16px;
   box-shadow: var(--shadow-sm);
+  min-height: 56px;
 }
 .entry-company {
   flex: 1; font-size: 16px; font-weight: 600;
   color: var(--text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.entry-count {
-  font-size: 20px; font-weight: 700;
-  color: var(--accent);
+
+/* Compteur − / valeur / + */
+.counter {
+  display: flex;
+  align-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px;
+  flex-shrink: 0;
+}
+.counter-btn {
+  width: 36px; height: 36px;
+  border: none;
+  background: transparent;
+  border-radius: 50%;
+  font-size: 22px;
+  font-weight: 500;
+  color: var(--text-2);
+  display: flex; align-items: center; justify-content: center;
+  line-height: 1;
+  transition: background 0.1s, color 0.1s;
+}
+.counter-btn:active {
+  background: var(--accent);
+  color: white;
+}
+.counter-btn[disabled] {
+  color: var(--text-3);
+  opacity: 0.4;
+  background: transparent !important;
+}
+.counter-value {
+  min-width: 36px;
+  text-align: center;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
   font-variant-numeric: tabular-nums;
-  min-width: 48px; text-align: right;
+  padding: 0 4px;
 }
-.entry-count small {
-  font-size: 12px; font-weight: 500; color: var(--text-3);
-  margin-left: 2px;
-}
-.entry-actions { display: flex; gap: 4px; }
+.entry-item.is-zero .counter-value { color: var(--text-3); font-weight: 600; }
+.entry-item.is-zero .entry-company { color: var(--text-2); }
+
 .icon-btn {
   width: 36px; height: 36px;
   border: none; background: transparent;
@@ -229,23 +263,6 @@ input, select { font: inherit; }
 .empty-state.show { display: block; }
 .empty-state p { margin: 4px 0; }
 .empty-state .hint { font-size: 13px; color: var(--text-3); }
-
-/* ============ FAB ============ */
-.fab {
-  position: fixed;
-  right: 20px;
-  bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 16px);
-  width: 56px; height: 56px;
-  border-radius: 50%;
-  background: var(--accent);
-  color: white;
-  border: none;
-  font-size: 32px; font-weight: 300; line-height: 1;
-  box-shadow: var(--shadow-lg);
-  z-index: 20;
-  display: flex; align-items: center; justify-content: center;
-}
-.fab:active { background: var(--accent-dark); transform: scale(0.96); }
 
 /* ============ CHART (Graphique) ============ */
 .chart-card {
@@ -415,44 +432,6 @@ input, select { font: inherit; }
 .tab-btn.active { color: var(--accent); }
 .tab-btn:active { background: var(--surface-2); }
 
-/* ============ MODAL ============ */
-.modal-backdrop {
-  position: fixed; inset: 0;
-  background: rgba(20, 24, 33, 0.55);
-  display: flex; align-items: flex-end; justify-content: center;
-  z-index: 100;
-  padding: 16px;
-  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
-  animation: fadein 0.15s ease-out;
-}
-.modal-backdrop[hidden] { display: none !important; }
-.modal {
-  width: 100%; max-width: 480px;
-  background: var(--surface);
-  border-radius: var(--radius);
-  padding: 20px;
-  box-shadow: var(--shadow-lg);
-  animation: slideup 0.2s ease-out;
-}
-.modal-title { margin: 0 0 16px; font-size: 18px; font-weight: 700; }
-.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
-.field span { font-size: 13px; font-weight: 600; color: var(--text-2); }
-.field input, .field select {
-  border: 1px solid var(--border);
-  background: var(--surface);
-  border-radius: var(--radius-sm);
-  padding: 12px 14px;
-  font-size: 16px;
-  color: var(--text);
-}
-.field input:focus, .field select:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-.modal-actions { display: flex; gap: 8px; margin-top: 8px; }
-.modal-actions button { flex: 1; }
-
 /* ============ TOAST ============ */
 .toast {
   position: fixed;
@@ -478,5 +457,4 @@ input, select { font: inherit; }
 @media (min-width: 720px) {
   .app-header { justify-content: flex-start; padding: 0 24px; }
   .app-title { font-size: 18px; }
-  .modal-backdrop { align-items: center; }
 }
