@@ -10,9 +10,9 @@
   --text-2: #5a6170;
   --text-3: #8a92a2;
 
-  --accent: #ff6b35;
-  --accent-dark: #e85a24;
-  --accent-soft: #fff1ea;
+  --accent: #ff671d;
+  --accent-dark: #d85819;
+  --accent-soft: #fff3ed;
 
   --danger: #d93025;
   --danger-soft: #fdecea;
@@ -67,6 +67,47 @@ input, select { font: inherit; }
 }
 .page { display: none; padding: 16px; max-width: 720px; margin: 0 auto; }
 .page.active { display: block; }
+
+/* ============ SEGMENTED CONTROL (Saisie / Graphique) ============ */
+.segmented {
+  position: relative;
+  display: flex;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-sm);
+}
+.segmented-thumb {
+  position: absolute;
+  top: 4px; bottom: 4px;
+  left: 4px;
+  width: calc(50% - 4px);
+  background: var(--accent);
+  border-radius: 999px;
+  transition: transform 0.22s cubic-bezier(.4,.0,.2,1);
+  z-index: 0;
+}
+.segmented[data-active="graphique"] .segmented-thumb {
+  transform: translateX(100%);
+}
+.seg-btn {
+  position: relative; z-index: 1;
+  flex: 1;
+  border: none; background: transparent;
+  padding: 10px 14px;
+  font-size: 14px; font-weight: 600;
+  color: var(--text-2);
+  border-radius: 999px;
+  transition: color 0.22s;
+  min-height: 40px;
+}
+.seg-btn.active { color: white; }
+
+/* Sub-pages */
+.sub-page { display: none; }
+.sub-page.active { display: block; }
 
 /* ============ DATE BAR (Effectifs) ============ */
 .date-bar {
@@ -203,6 +244,91 @@ input, select { font: inherit; }
   display: flex; align-items: center; justify-content: center;
 }
 .fab:active { background: var(--accent-dark); transform: scale(0.96); }
+
+/* ============ CHART (Graphique) ============ */
+.chart-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 20px;
+}
+.chart-header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 12px; flex-wrap: wrap;
+}
+.chart-actions { display: flex; gap: 4px; }
+.chip-btn {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px; font-weight: 600;
+  color: var(--text-2);
+  min-height: 32px;
+}
+.chip-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.chart-wrap { position: relative; width: 100%; }
+#chart { width: 100%; height: auto; display: block; }
+#chart .axis-line { stroke: var(--border); stroke-width: 1; }
+#chart .grid-line { stroke: var(--border); stroke-width: 1; stroke-dasharray: 2 4; }
+#chart .axis-label { fill: var(--text-3); font-size: 11px; font-family: inherit; }
+#chart .data-line { fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+#chart .data-point { stroke: white; stroke-width: 1.5; }
+.chart-empty {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  color: var(--text-3);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  text-align: center;
+  padding: 16px;
+}
+.chart-empty p { margin: 4px 0; }
+.chart-empty .hint { font-size: 13px; }
+
+/* ============ LEGEND (toggles d'entreprises) ============ */
+.legend-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.legend-item {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  user-select: none;
+  min-height: 48px;
+  transition: opacity 0.15s;
+}
+.legend-item:active { background: var(--surface-2); }
+.legend-item.off { opacity: 0.45; }
+.legend-swatch {
+  width: 16px; height: 16px; border-radius: 4px;
+  flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);
+}
+.legend-name { flex: 1; font-size: 15px; font-weight: 500; color: var(--text); }
+.legend-check {
+  width: 22px; height: 22px;
+  border: 2px solid var(--border-strong);
+  border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.legend-item:not(.off) .legend-check {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.legend-check svg { width: 14px; height: 14px; fill: white; opacity: 0; transition: opacity 0.15s; }
+.legend-item:not(.off) .legend-check svg { opacity: 1; }
 
 /* ============ DONNÉES : ENTREPRISES ============ */
 .company-list { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 6px; }

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#ff6b35" />
+  <meta name="theme-color" content="#ff671d" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="Chantier" />
@@ -21,32 +21,68 @@
   <main class="app-body">
     <!-- ============== ONGLET : EFFECTIFS ============== -->
     <section class="page active" id="page-effectifs">
-      <div class="date-bar">
-        <button class="date-nav" id="dateprev" aria-label="Jour précédent">‹</button>
-        <button class="date-display" id="datedisplay">
-          <span class="date-weekday" id="dateweekday"></span>
-          <span class="date-full" id="datefull"></span>
-        </button>
-        <button class="date-nav" id="datenext" aria-label="Jour suivant">›</button>
-        <input type="date" id="datepicker" class="date-input-hidden" />
+      <div class="segmented" role="tablist">
+        <div class="segmented-thumb" id="segthumb"></div>
+        <button class="seg-btn active" data-sub="saisie" role="tab">Saisie</button>
+        <button class="seg-btn" data-sub="graphique" role="tab">Graphique</button>
       </div>
 
-      <div class="total-card">
-        <div class="total-label">Effectif total du jour</div>
-        <div class="total-value" id="totalcount">0</div>
-        <div class="total-sub" id="totalsub">personne</div>
+      <!-- Sous-page : Saisie -->
+      <div class="sub-page active" id="sub-saisie">
+        <div class="date-bar">
+          <button class="date-nav" id="dateprev" aria-label="Jour précédent">‹</button>
+          <button class="date-display" id="datedisplay">
+            <span class="date-weekday" id="dateweekday"></span>
+            <span class="date-full" id="datefull"></span>
+          </button>
+          <button class="date-nav" id="datenext" aria-label="Jour suivant">›</button>
+          <input type="date" id="datepicker" class="date-input-hidden" />
+        </div>
+
+        <div class="total-card">
+          <div class="total-label">Effectif total du jour</div>
+          <div class="total-value" id="totalcount">0</div>
+          <div class="total-sub" id="totalsub">personne</div>
+        </div>
+
+        <div class="list-section">
+          <h2 class="section-title">Présences</h2>
+          <ul class="entry-list" id="entrylist"></ul>
+          <div class="empty-state" id="emptystate">
+            <p>Aucune présence enregistrée pour ce jour.</p>
+            <p class="hint">Appuyez sur le bouton « + » pour ajouter une entreprise.</p>
+          </div>
+        </div>
+
+        <button class="fab" id="addentry" aria-label="Ajouter une présence">+</button>
       </div>
 
-      <div class="list-section">
-        <h2 class="section-title">Présences</h2>
-        <ul class="entry-list" id="entrylist"></ul>
-        <div class="empty-state" id="emptystate">
-          <p>Aucune présence enregistrée pour ce jour.</p>
-          <p class="hint">Appuyez sur le bouton « + » pour ajouter une entreprise.</p>
+      <!-- Sous-page : Graphique -->
+      <div class="sub-page" id="sub-graphique">
+        <div class="chart-card">
+          <div class="chart-header">
+            <h2 class="section-title" style="margin: 0;">Évolution des effectifs</h2>
+            <div class="chart-actions">
+              <button class="chip-btn" data-range="7">7 j.</button>
+              <button class="chip-btn active" data-range="30">30 j.</button>
+              <button class="chip-btn" data-range="all">Tout</button>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <svg id="chart" viewBox="0 0 500 300" preserveAspectRatio="none" aria-label="Graphique d'évolution des effectifs"></svg>
+            <div class="chart-empty" id="chartempty" hidden>
+              <p>Aucune donnée à afficher.</p>
+              <p class="hint">Ajoutez des présences pour voir le graphique.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="list-section">
+          <h2 class="section-title">Entreprises affichées</h2>
+          <p class="section-help">Touchez une entreprise pour afficher ou masquer sa courbe.</p>
+          <ul class="legend-list" id="legendlist"></ul>
         </div>
       </div>
-
-      <button class="fab" id="addentry" aria-label="Ajouter une présence">+</button>
     </section>
 
     <!-- ============== ONGLET : DONNÉES ============== -->
