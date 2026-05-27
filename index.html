@@ -1,1037 +1,114 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Suivi d'Avancement Chantier</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --bg: #0f1117; --surface: #181c27; --surface2: #1e2333;
-    --border: #2a3148; --accent: #f0c040; --accent2: #4fc3f7;
-    --danger: #ef5350; --success: #66bb6a;
-    --text: #e8eaf0; --text2: #8892a4; --text3: #5a6478;
-    --radius: 8px; --tab-h: 60px;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; }
-  body { font-family: 'Syne', sans-serif; background: var(--bg); color: var(--text); font-size: 14px; display: flex; flex-direction: column; height: 100%; }
-
-  /* HEADER */
-  .app-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
-  .app-title { font-size: 17px; font-weight: 800; letter-spacing: 0.04em; color: var(--accent); display: flex; align-items: center; gap: 10px; }
-  .app-title span { color: var(--text2); font-weight: 400; font-size: 12px; }
-  .header-actions { display: flex; gap: 8px; }
-
-  /* SCROLLABLE BODY */
-  .app-body { flex: 1; overflow-y: auto; padding-bottom: 8px; }
-
-  /* BOTTOM TABS */
-  .tabs { display: flex; background: var(--surface); border-top: 1px solid var(--border); flex-shrink: 0; height: var(--tab-h); }
-  .tab-btn { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; background: none; border: none; border-top: 3px solid transparent; color: var(--text2); font-family: 'Syne', sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 0.05em; cursor: pointer; transition: all 0.15s; }
-  .tab-btn .tab-icon { font-size: 18px; line-height: 1; }
-  .tab-btn:hover { color: var(--text); background: var(--surface2); }
-  .tab-btn.active { color: var(--accent); border-top-color: var(--accent); background: rgba(240,192,64,0.04); }
-
-  /* CONTENT */
-  .tab-content { display: none; padding: 24px; max-width: 960px; margin: 0 auto; }
-  .tab-content.active { display: block; }
-  .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
-  .section-title { font-size: 15px; font-weight: 700; color: var(--text); }
-
-  /* SUB-TABS */
-  .sub-tabs { display: flex; gap: 2px; margin-bottom: 20px; background: var(--surface2); border-radius: var(--radius); padding: 4px; border: 1px solid var(--border); }
-  .sub-tab-btn { flex: 1; padding: 8px 14px; background: none; border: none; border-radius: 6px; color: var(--text2); font-family: 'Syne', sans-serif; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; transition: all 0.15s; text-align: center; }
-  .sub-tab-btn:hover { color: var(--text); }
-  .sub-tab-btn.active { background: var(--surface); color: var(--accent); box-shadow: 0 1px 4px rgba(0,0,0,0.3); }
-  .sub-content { display: none; }
-  .sub-content.active { display: block; }
-
-  /* BUTTONS */
-  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: var(--radius); font-family: 'Syne', sans-serif; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; border: none; transition: all 0.15s; }
-  .btn-accent { background: var(--accent); color: #111; }
-  .btn-accent:hover { background: #ffd060; }
-  .btn-ghost { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); }
-  .btn-ghost:hover { color: var(--text); border-color: var(--text3); }
-  .btn-danger-outline { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
-  .btn-danger-outline:hover { background: rgba(239,83,80,0.1); }
-  .btn-export { background: var(--accent2); color: #111; }
-  .btn-export:hover { background: #81d4fa; }
-  .btn-import { background: var(--surface2); color: var(--accent2); border: 1px solid var(--accent2); }
-  .btn-import:hover { background: rgba(79,195,247,0.1); }
-  .btn-sm { padding: 5px 10px; font-size: 11px; }
-
-  /* DELETE BUTTON in tree — icon only, no border by default */
-  .btn-del {
-    background: transparent; border: 1px solid transparent;
-    color: var(--text3); border-radius: 6px;
-    padding: 4px 8px; font-size: 14px; cursor: pointer;
-    transition: all 0.15s; line-height: 1; font-family: inherit;
-  }
-  .btn-del:hover { color: var(--danger); border-color: var(--danger); background: rgba(239,83,80,0.08); }
-
-  /* TASK TEMPLATE LIST */
-  .task-template-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
-  .task-template-item { display: flex; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; }
-  .task-template-num { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text3); min-width: 20px; }
-  .task-template-input { flex: 1; background: transparent; border: none; border-bottom: 1px solid transparent; color: var(--text); font-family: 'Syne', sans-serif; font-size: 13px; font-weight: 600; outline: none; transition: border-color 0.15s; }
-  .task-template-input:focus { border-bottom-color: var(--accent); }
-  .task-template-input::placeholder { color: var(--text3); font-weight: 400; }
-  .weight-field { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
-  .weight-input { width: 58px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--accent); font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 500; padding: 4px 6px; outline: none; text-align: right; transition: border-color 0.15s; -moz-appearance: textfield; }
-  .weight-input::-webkit-inner-spin-button, .weight-input::-webkit-outer-spin-button { -webkit-appearance: none; }
-  .weight-input:focus { border-color: var(--accent); }
-  .weight-unit { font-size: 12px; color: var(--text3); }
-  .weight-header { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 10px; }
-  .weight-header-label { font-size: 12px; color: var(--text2); }
-  .weight-total { font-family: 'DM Mono', monospace; font-size: 15px; font-weight: 700; }
-  .weight-total.ok { color: var(--success); }
-  .weight-total.warn { color: var(--danger); }
-  .weight-hint { font-size: 11px; color: var(--text3); }
-  .weight-hint.ok { color: var(--success); }
-
-  /* ZONE TREE */
-  .zone-tree { display: flex; flex-direction: column; gap: 6px; }
-  .zone-node { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-  .zone-node-header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--surface2); }
-  .zone-level-badge { font-family: 'DM Mono', monospace; font-size: 10px; padding: 2px 6px; border-radius: 4px; background: var(--border); color: var(--text2); min-width: 22px; text-align: center; white-space: nowrap; }
-  .zone-level-0 > .zone-node-header .zone-level-badge { background: rgba(240,192,64,0.15); color: var(--accent); }
-  .zone-level-1 > .zone-node-header .zone-level-badge { background: rgba(79,195,247,0.15); color: var(--accent2); }
-  .zone-level-2 > .zone-node-header .zone-level-badge { background: rgba(102,187,106,0.15); color: var(--success); }
-  .zone-name-input { flex: 1; background: transparent; border: none; border-bottom: 1px solid transparent; color: var(--text); font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 600; padding: 2px 4px; outline: none; transition: border-color 0.15s; }
-  .zone-name-input:focus { border-bottom-color: var(--accent); }
-  .zone-name-input::placeholder { color: var(--text3); font-weight: 400; }
-  .zone-actions { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
-  .zone-children { padding: 8px 12px 8px 28px; display: flex; flex-direction: column; gap: 6px; }
-
-  /* TASK ASSIGNMENT */
-  .zone-tasks-panel { padding: 10px 14px; border-top: 1px solid var(--border); background: rgba(15,17,23,0.4); }
-  .zone-tasks-panel-label { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; color: var(--text3); text-transform: uppercase; margin-bottom: 8px; }
-  .task-assign-list { display: flex; flex-direction: column; gap: 4px; }
-  .task-assign-item { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; cursor: pointer; transition: background 0.1s; user-select: none; }
-  .task-assign-item:hover { background: var(--surface2); }
-  .task-assign-check { width: 16px; height: 16px; border-radius: 4px; border: 2px solid var(--border); background: var(--bg); display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all 0.1s; }
-  .task-assign-check.checked { background: var(--accent); border-color: var(--accent); }
-  .task-assign-check.checked::after { content: '✓'; font-size: 10px; color: #111; font-weight: 900; }
-  .task-assign-all .task-assign-check { border-color: var(--accent2); }
-  .task-assign-all .task-assign-check.checked { background: var(--accent2); border-color: var(--accent2); }
-  .task-assign-name { font-size: 12px; color: var(--text2); }
-  .task-assign-name.checked { color: var(--text); }
-  .no-tasks-hint { font-size: 12px; color: var(--text3); font-style: italic; }
-
-  /* AVANCEMENT NAV */
-  .nav-breadcrumb { display: flex; align-items: flex-end; gap: 8px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 20px; flex-wrap: wrap; }
-  .breadcrumb-arrow { color: var(--text3); padding-bottom: 10px; }
-  .nav-select-wrapper { display: flex; flex-direction: column; gap: 4px; }
-  .nav-select-label { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; color: var(--text3); text-transform: uppercase; }
-  .nav-select { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-family: 'Syne', sans-serif; font-size: 13px; font-weight: 600; padding: 7px 30px 7px 10px; outline: none; cursor: pointer; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238892a4' stroke-width='2.5'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 8px center; transition: border-color 0.15s; min-width: 140px; }
-  .nav-select:focus { border-color: var(--accent); }
-  .nav-select:disabled { opacity: 0.4; cursor: not-allowed; }
-
-  /* PROGRESS PANEL */
-  .progress-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-  .progress-panel-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border); background: var(--surface2); }
-  .progress-panel-title { font-size: 15px; font-weight: 700; }
-  .progress-panel-subtitle { font-size: 12px; color: var(--text2); margin-top: 2px; }
-  .global-pct { font-family: 'DM Mono', monospace; font-size: 28px; font-weight: 500; color: var(--accent); }
-  .task-progress-list { padding: 12px 20px; display: flex; flex-direction: column; gap: 14px; }
-  .task-progress-row { display: flex; align-items: center; gap: 16px; }
-  .task-progress-name { flex: 1; font-size: 13px; font-weight: 600; color: var(--text); }
-  .task-progress-controls { display: flex; align-items: center; gap: 10px; }
-  .pct-btn { width: 28px; height: 28px; border-radius: 6px; background: var(--surface2); border: 1px solid var(--border); color: var(--text); font-size: 16px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.1s; line-height: 1; }
-  .pct-btn:hover { background: var(--border); }
-  .pct-btn:active { transform: scale(0.93); }
-  .pct-btn-done { color: var(--text3); font-size: 14px; }
-  .pct-btn-done.is-done { background: var(--success); border-color: var(--success); color: #111; }
-  .pct-btn-done:hover { color: var(--success); border-color: var(--success); }
-  .pct-display { font-family: 'DM Mono', monospace; font-size: 14px; font-weight: 500; color: var(--accent); min-width: 42px; text-align: center; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; outline: none; }
-  .pct-display::-webkit-inner-spin-button, .pct-display::-webkit-outer-spin-button { -webkit-appearance: none; }
-  .pct-bar-track { width: 100px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
-  .pct-bar-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--accent2), var(--accent)); transition: width 0.3s ease; }
-  .pct-bar-fill.full { background: var(--success); }
-  .pct-bar-fill.low { background: var(--danger); }
-
-  /* RECAP */
-  .summary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
-  .summary-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
-  .summary-card-label { font-size: 10px; color: var(--text2); font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; margin-bottom: 6px; }
-  .summary-card-value { font-family: 'DM Mono', monospace; font-size: 24px; color: var(--accent); }
-  .summary-card-sub { font-size: 11px; color: var(--text3); margin-top: 2px; }
-  .big-progress-bar { height: 10px; background: var(--border); border-radius: 5px; overflow: hidden; margin-top: 8px; }
-  .big-progress-fill { height: 100%; border-radius: 5px; background: linear-gradient(90deg, var(--accent2), var(--accent)); transition: width 0.5s ease; }
-  .recap-table { width: 100%; border-collapse: collapse; }
-  .recap-table th { text-align: left; padding: 8px 12px; font-size: 11px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text3); border-bottom: 1px solid var(--border); }
-  .recap-table td { padding: 9px 12px; font-size: 13px; border-bottom: 1px solid rgba(42,49,72,0.5); }
-  .recap-table tr:last-child td { border-bottom: none; }
-  .recap-table tr:hover td { background: var(--surface2); }
-  .pct-cell { font-family: 'DM Mono', monospace; font-size: 13px; color: var(--accent); font-weight: 500; }
-  .path-cell { color: var(--text2); font-size: 12px; }
-  .badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 700; }
-  .badge-ok { background: rgba(102,187,106,0.12); color: var(--success); }
-  .badge-mid { background: rgba(240,192,64,0.12); color: var(--accent); }
-  .badge-low { background: rgba(239,83,80,0.12); color: var(--danger); }
-
-  /* RECAP TREE */
-  .recap-tree { padding: 8px 0; }
-  .recap-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid rgba(42,49,72,0.4); transition: background 0.1s; }
-  .recap-row:last-child { border-bottom: none; }
-  .recap-row:hover { background: var(--surface2); }
-  .recap-chevron { background: none; border: none; cursor: pointer; color: var(--text3); font-size: 10px; padding: 2px 6px; border-radius: 4px; transition: all 0.1s; flex-shrink: 0; width: 24px; }
-  .recap-chevron:hover { color: var(--text); background: var(--border); }
-  .recap-chevron-placeholder { width: 24px; flex-shrink: 0; display: inline-block; }
-  .recap-row-name { flex: 1; display: flex; align-items: center; gap: 8px; }
-  .recap-task-info { font-size: 11px; color: var(--text3); font-weight: 400; }
-  .recap-row-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-  .recap-children { border-left: 1px solid var(--border); margin-left: 24px; }
-
-  /* MODAL */
-  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 500; display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: opacity 0.15s; }
-  .modal-overlay.open { opacity: 1; pointer-events: all; }
-  .modal-box { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; width: 320px; max-width: 90vw; box-shadow: 0 8px 40px rgba(0,0,0,0.5); transform: translateY(8px); transition: transform 0.15s; }
-  .modal-overlay.open .modal-box { transform: translateY(0); }
-  .modal-title { font-size: 15px; font-weight: 700; margin-bottom: 8px; }
-  .modal-msg { font-size: 13px; color: var(--text2); margin-bottom: 20px; line-height: 1.5; }
-  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
-
-  /* MISC */
-  .empty-state { text-align: center; padding: 48px 24px; color: var(--text3); }
-  .empty-state .icon { font-size: 36px; margin-bottom: 12px; }
-  .empty-state p { font-size: 13px; line-height: 1.6; }
-  .info-tip { background: rgba(79,195,247,0.07); border: 1px solid rgba(79,195,247,0.18); border-radius: var(--radius); padding: 10px 14px; font-size: 12px; color: var(--accent2); margin-bottom: 18px; display: flex; gap: 8px; align-items: flex-start; line-height: 1.5; }
-  .collapse-btn { background: none; border: none; cursor: pointer; color: var(--text3); font-size: 11px; padding: 2px 6px; transition: color 0.15s; flex-shrink: 0; }
-  .collapse-btn:hover { color: var(--text); }
-  .toast { position: fixed; bottom: 72px; right: 20px; background: var(--success); color: #111; padding: 10px 18px; border-radius: var(--radius); font-weight: 700; font-size: 13px; opacity: 0; pointer-events: none; transform: translateY(6px); transition: all 0.2s; z-index: 999; }
-  .toast.show { opacity: 1; transform: translateY(0); }
-  .toast.error { background: var(--danger); color: #fff; }
-  input[type="number"] { -moz-appearance: textfield; }
-  #file-import { display: none; }
-  .collapse-btn { user-select: none; }
-</style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#ff6b35" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Chantier" />
+  <title>Suivi de chantier</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icon-192.png" type="image/png" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <header class="app-header">
+    <h1 class="app-title">Suivi de chantier</h1>
+  </header>
 
-<header class="app-header">
-  <div class="app-title">◈ CHANTIER <span>/ Suivi d'Avancement</span></div>
-  <div class="header-actions">
-    <button class="btn btn-import" onclick="triggerImport()">⬆ Import</button>
-    <button class="btn btn-export" onclick="exportJSON()">⬇ Export</button>
-  </div>
-</header>
-<input type="file" id="file-import" accept=".json" onchange="importJSON(this)">
-
-<div class="app-body">
-
-  <!-- RÉCAPITULATIF -->
-  <div class="tab-content active" id="tab-recap">
-    <div class="section-header">
-      <div class="section-title">Vue globale du chantier</div>
-      <button class="btn btn-ghost btn-sm" onclick="refreshRecap()">↺ Actualiser</button>
-    </div>
-    <div id="recap-content"></div>
-  </div>
-
-  <!-- AVANCEMENTS -->
-  <div class="tab-content" id="tab-avancement">
-    <div class="section-header"><div class="section-title">Saisie des avancements</div></div>
-    <div class="nav-breadcrumb" id="nav-breadcrumb"></div>
-    <div id="progress-panel-container"></div>
-  </div>
-
-  <!-- DONNÉES -->
-  <div class="tab-content" id="tab-donnees">
-    <div class="sub-tabs">
-      <button class="sub-tab-btn active" onclick="switchSubTab('arbo')">🗂 Arborescence</button>
-      <button class="sub-tab-btn" onclick="switchSubTab('taches')">📋 Tâches types</button>
-    </div>
-    <div class="sub-content active" id="sub-arbo">
-      <div class="section-header">
-        <div class="section-title">Zones du chantier</div>
-        <button class="btn btn-accent" onclick="addRootZone()">+ Bâtiment</button>
+  <main class="app-body">
+    <!-- ============== ONGLET : EFFECTIFS ============== -->
+    <section class="page active" id="page-effectifs">
+      <div class="date-bar">
+        <button class="date-nav" id="dateprev" aria-label="Jour précédent">‹</button>
+        <button class="date-display" id="datedisplay">
+          <span class="date-weekday" id="dateweekday"></span>
+          <span class="date-full" id="datefull"></span>
+        </button>
+        <button class="date-nav" id="datenext" aria-label="Jour suivant">›</button>
+        <input type="date" id="datepicker" class="date-input-hidden" />
       </div>
-      <div class="info-tip">ℹ Créez l'arborescence du chantier. Sur chaque zone feuille, cochez les tâches types à réaliser.</div>
-      <div class="zone-tree" id="zone-tree"></div>
-    </div>
-    <div class="sub-content" id="sub-taches">
-      <div class="section-header">
-        <div class="section-title">Tâches types</div>
-        <button class="btn btn-accent" onclick="addTaskTemplate()">+ Ajouter une tâche</button>
+
+      <div class="total-card">
+        <div class="total-label">Effectif total du jour</div>
+        <div class="total-value" id="totalcount">0</div>
+        <div class="total-sub" id="totalsub">personne</div>
       </div>
-      <div class="info-tip">ℹ Définissez ici les tâches communes à tous vos voiles. Assignez-les ensuite zone par zone dans l'Arborescence.</div>
-      <div class="task-template-list" id="task-template-list"></div>
-    </div>
-  </div>
 
-</div>
-
-<!-- BOTTOM TABS -->
-<nav class="tabs">
-  <button class="tab-btn active" onclick="switchTab('recap')"><span class="tab-icon">📊</span>RÉCAPITULATIF</button>
-  <button class="tab-btn" onclick="switchTab('avancement')"><span class="tab-icon">✏️</span>AVANCEMENTS</button>
-  <button class="tab-btn" onclick="switchTab('donnees')"><span class="tab-icon">⚙️</span>DONNÉES</button>
-</nav>
-
-<!-- MODAL CONFIRMATION -->
-<div class="modal-overlay" id="modal-overlay">
-  <div class="modal-box">
-    <div class="modal-title" id="modal-title">Confirmer</div>
-    <div class="modal-msg" id="modal-msg"></div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
-      <button class="btn btn-danger-outline" id="modal-confirm-btn">Supprimer</button>
-    </div>
-  </div>
-</div>
-
-<div class="toast" id="toast"></div>
-
-<script>
-// ============================================================
-// DATA MODEL
-// data.zones         : [{ id, name, children[], taskIds[] }]
-// data.taskTemplates : [{ id, name }]
-// data.progress      : { zoneId: { taskId: pct } }
-// ============================================================
-let data = { zones: [], taskTemplates: [], progress: {} };
-let nodeCounter = 0;
-let taskCounter = 0;
-
-function newZoneId() { return 'z_' + (++nodeCounter); }
-function newTaskId()  { return 't_' + (++taskCounter); }
-
-// ============================================================
-// MODAL (replaces confirm() which is blocked in webviews)
-// ============================================================
-let _modalCallback = null;
-function showModal(title, msg, onConfirm) {
-  document.getElementById('modal-title').textContent = title;
-  document.getElementById('modal-msg').textContent = msg;
-  _modalCallback = onConfirm;
-  document.getElementById('modal-overlay').classList.add('open');
-}
-function closeModal() {
-  document.getElementById('modal-overlay').classList.remove('open');
-  _modalCallback = null;
-}
-document.getElementById('modal-confirm-btn').addEventListener('click', function() {
-  const cb = _modalCallback;
-  closeModal();
-  if (cb) cb();
-});
-document.getElementById('modal-overlay').addEventListener('click', function(e) {
-  if (e.target === this) closeModal();
-});
-
-// ============================================================
-// PERSISTENCE
-// ============================================================
-function save() {
-  try { localStorage.setItem('chantier_v2', JSON.stringify(data)); } catch(e) {}
-}
-function load() {
-  try {
-    const s = localStorage.getItem('chantier_v2');
-    if (s) {
-      data = JSON.parse(s);
-      function maxZ(nodes) {
-        nodes.forEach(n => {
-          const x = parseInt(n.id.replace('z_','')) || 0;
-          if (x > nodeCounter) nodeCounter = x;
-          if (n.children) maxZ(n.children);
-        });
-      }
-      maxZ(data.zones || []);
-      (data.taskTemplates || []).forEach(t => {
-        const x = parseInt(t.id.replace('t_','')) || 0;
-        if (x > taskCounter) taskCounter = x;
-      });
-    }
-  } catch(e) {}
-  if (!data.taskTemplates) data.taskTemplates = [];
-  if (!data.progress)      data.progress = {};
-  if (!data.zones)         data.zones = [];
-}
-
-// ============================================================
-// IMPORT / EXPORT JSON
-// ============================================================
-async function exportJSON() {
-  const leaves = getAllLeaves();
-  const filename = `avancement_chantier_${new Date().toISOString().slice(0,10)}.json`;
-  const exportData = {
-    _version: 2,
-    export_date: new Date().toISOString().split('T')[0],
-    export_datetime: new Date().toISOString(),
-    _raw: {
-      zones: data.zones,
-      taskTemplates: data.taskTemplates,
-      progress: data.progress
-    },
-    taches_types: data.taskTemplates.map(t => ({ id: t.id, nom: t.name, poids: t.weight||0 })),
-    global_progress: (() => {
-      const def = leaves.filter(l => getNodeTaskTemplates(l.node).length > 0);
-      if (!def.length) return 0;
-      return Math.round(def.reduce((a,l) => a + (getNodePct(l.node)||0), 0) / def.length);
-    })(),
-    zones: leaves.map(l => {
-      const tasks = getNodeTaskTemplates(l.node);
-      const prog  = data.progress[l.node.id] || {};
-      return {
-        chemin: l.path.join(' > '),
-        niveaux: l.path,
-        zone: l.node.name || '',
-        avancement_global: getNodePct(l.node),
-        taches: tasks.map(t => ({
-          id: t.id,
-          tache: t.name,
-          poids: t.weight || 0,
-          avancement: prog[t.id] !== undefined ? prog[t.id] : 0
-        }))
-      };
-    })
-  };
-  const json = JSON.stringify(exportData, null, 2);
-
-  // Tentative avec showSaveFilePicker (Chrome/Edge) — fenêtre "Enregistrer sous"
-  if (window.showSaveFilePicker) {
-    try {
-      const handle = await window.showSaveFilePicker({
-        suggestedName: filename,
-        types: [{ description: 'Fichier JSON', accept: { 'application/json': ['.json'] } }]
-      });
-      const writable = await handle.createWritable();
-      await writable.write(json);
-      await writable.close();
-      showToast('✓ Fichier enregistré : ' + handle.name);
-      return;
-    } catch(e) {
-      if (e.name === 'AbortError') return; // L'utilisateur a annulé
-      // Autre erreur → fallback
-    }
-  }
-
-  // Fallback : téléchargement automatique dans le dossier Téléchargements
-  const blob = new Blob([json], { type: 'application/json' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href     = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-  showToast('✓ Enregistré dans Téléchargements : ' + filename);
-}
-
-function triggerImport() {
-  document.getElementById('file-import').value = '';
-  document.getElementById('file-import').click();
-}
-
-function importJSON(input) {
-  const file = input.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    try {
-      const parsed = JSON.parse(e.target.result);
-      // Accepte les fichiers v2 (avec _raw) ou les anciens formats
-      let imported = null;
-      if (parsed._version === 2 && parsed._raw) {
-        imported = parsed._raw;
-      } else if (parsed.zones !== undefined && parsed.taskTemplates !== undefined) {
-        // Ancien format interne direct
-        imported = parsed;
-      } else {
-        showToast('✗ Format de fichier non reconnu', true);
-        return;
-      }
-      // Validation minimale
-      if (!Array.isArray(imported.zones) || !Array.isArray(imported.taskTemplates)) {
-        showToast('✗ Fichier JSON invalide', true);
-        return;
-      }
-      showModal(
-        'Importer des données',
-        'Cette action remplacera toutes les données actuelles par celles du fichier. Continuer ?',
-        function() {
-          data.zones         = imported.zones;
-          data.taskTemplates = imported.taskTemplates;
-          data.progress      = imported.progress || {};
-          // Recalibrer les compteurs
-          nodeCounter = 0; taskCounter = 0;
-          function maxZ(nodes) {
-            nodes.forEach(n => {
-              const x = parseInt((n.id||'').replace('z_','')) || 0;
-              if (x > nodeCounter) nodeCounter = x;
-              if (n.children) maxZ(n.children);
-            });
-          }
-          maxZ(data.zones);
-          data.taskTemplates.forEach(t => {
-            const x = parseInt((t.id||'').replace('t_','')) || 0;
-            if (x > taskCounter) taskCounter = x;
-          });
-          save();
-          renderTree();
-          renderTaskTemplates();
-          refreshRecap();
-          showToast('✓ Données importées avec succès');
-        }
-      );
-    } catch(err) {
-      showToast('✗ Erreur de lecture du fichier', true);
-    }
-  };
-  reader.readAsText(file);
-}
-
-// ============================================================
-// TABS
-// ============================================================
-function switchTab(name) {
-  document.querySelectorAll('.tab-btn').forEach((b,i) => {
-    b.classList.toggle('active', ['recap','avancement','donnees'][i] === name);
-  });
-  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-  document.getElementById('tab-'+name).classList.add('active');
-  if (name === 'avancement') renderNavSelects();
-  if (name === 'recap')      refreshRecap();
-}
-function switchSubTab(name) {
-  document.querySelectorAll('.sub-tab-btn').forEach((b,i) => {
-    b.classList.toggle('active', ['arbo','taches'][i] === name);
-  });
-  document.querySelectorAll('.sub-content').forEach(c => c.classList.remove('active'));
-  document.getElementById('sub-'+name).classList.add('active');
-  if (name === 'taches') renderTaskTemplates();
-  if (name === 'arbo')   renderTree();
-}
-
-// ============================================================
-// TASK TEMPLATES
-// ============================================================
-function addTaskTemplate() {
-  data.taskTemplates.push({ id: newTaskId(), name: '' });
-  save(); renderTaskTemplates();
-}
-function removeTaskTemplate(id) {
-  showModal(
-    'Supprimer la tâche',
-    'Supprimer cette tâche type ? Elle sera retirée de toutes les zones.',
-    function() {
-      data.taskTemplates = data.taskTemplates.filter(t => t.id !== id);
-      function cleanNode(nodes) {
-        nodes.forEach(n => {
-          n.taskIds = (n.taskIds||[]).filter(tid => tid !== id);
-          if (n.children) cleanNode(n.children);
-        });
-      }
-      cleanNode(data.zones);
-      save(); renderTaskTemplates(); renderTree();
-    }
-  );
-}
-function updateTaskTemplateName(id, val) {
-  const t = data.taskTemplates.find(t => t.id === id);
-  if (t) { t.name = val; save(); }
-}
-function updateTaskWeight(id, val, rerender) {
-  const t = data.taskTemplates.find(t => t.id === id);
-  if (t) {
-    const n = parseFloat(val);
-    t.weight = isNaN(n) ? 0 : Math.max(0, Math.min(100, n));
-    save();
-    if (rerender) renderTaskTemplates();
-    else {
-      // Mise à jour en temps réel du compteur total sans recréer le DOM
-      const totalWeight = data.taskTemplates.reduce((a,t2) => a + (parseFloat(t2.weight)||0), 0);
-      const weightOk = Math.round(totalWeight) === 100;
-      const totalEl = document.querySelector('.weight-total');
-      const hintEl  = document.querySelector('.weight-hint');
-      if (totalEl) {
-        totalEl.textContent = Math.round(totalWeight*10)/10 + ' %';
-        totalEl.className = 'weight-total ' + (weightOk ? 'ok' : 'warn');
-      }
-      if (hintEl) {
-        hintEl.textContent = weightOk ? '✓ Correct' : '⚠ Doit être égal à 100 %';
-        hintEl.className = 'weight-hint' + (weightOk ? ' ok' : '');
-      }
-    }
-  }
-}
-function renderTaskTemplates() {
-  const list = document.getElementById('task-template-list');
-  if (!list) return;
-  if (!data.taskTemplates.length) {
-    list.innerHTML = `<div class="empty-state" style="padding:32px 0"><div class="icon">📋</div><p>Aucune tâche type définie.<br>Ajoutez vos tâches de chantier ici.</p></div>`;
-    return;
-  }
-  const totalWeight = data.taskTemplates.reduce((a,t) => a + (parseFloat(t.weight)||0), 0);
-  const weightOk = Math.round(totalWeight) === 100;
-  list.innerHTML = `
-    <div class="weight-header">
-      <span class="weight-header-label">Total des pondérations :</span>
-      <span class="weight-total ${weightOk ? 'ok' : 'warn'}">${Math.round(totalWeight*10)/10} %</span>
-      ${!weightOk ? '<span class="weight-hint">⚠ Doit être égal à 100 %</span>' : '<span class="weight-hint ok">✓ Correct</span>'}
-    </div>` +
-  data.taskTemplates.map((t, i) => `
-    <div class="task-template-item">
-      <span class="task-template-num">${String(i+1).padStart(2,'0')}</span>
-      <input class="task-template-input" type="text" placeholder="Nom de la tâche…" value="${escHtml(t.name)}"
-        oninput="updateTaskTemplateName('${t.id}',this.value)"
-        onchange="updateTaskTemplateName('${t.id}',this.value)">
-      <div class="weight-field">
-        <input class="weight-input" type="number" min="0" max="100" step="0.5"
-          placeholder="%" value="${t.weight !== undefined ? t.weight : ''}"
-          oninput="updateTaskWeight('${t.id}',this.value,false)"
-          onchange="updateTaskWeight('${t.id}',this.value,true)">
-        <span class="weight-unit">%</span>
-      </div>
-      <button class="btn-del" onclick="removeTaskTemplate('${t.id}')">✕</button>
-    </div>`).join('');
-}
-
-// ============================================================
-// ZONE TREE HELPERS
-// ============================================================
-function addRootZone() {
-  data.zones.push({ id: newZoneId(), name: '', children: [], taskIds: [] });
-  save(); renderTree();
-}
-function addChild(parentId, nodes) {
-  nodes = nodes || data.zones;
-  for (let n of nodes) {
-    if (n.id === parentId) {
-      n.children.push({ id: newZoneId(), name: '', children: [], taskIds: [] });
-      return true;
-    }
-    if (n.children && addChild(parentId, n.children)) return true;
-  }
-  return false;
-}
-function removeNode(id, nodes) {
-  nodes = nodes || data.zones;
-  for (let i = 0; i < nodes.length; i++) {
-    if (nodes[i].id === id) { nodes.splice(i, 1); return true; }
-    if (nodes[i].children && removeNode(id, nodes[i].children)) return true;
-  }
-  return false;
-}
-function findNode(id, nodes) {
-  nodes = nodes || data.zones;
-  for (let n of nodes) {
-    if (n.id === id) return n;
-    if (n.children) { const f = findNode(id, n.children); if (f) return f; }
-  }
-  return null;
-}
-function isLeaf(node) { return !node.children || node.children.length === 0; }
-
-// ============================================================
-// TASK ASSIGNMENT
-// ============================================================
-function toggleAllTasks(zoneId) {
-  const node = findNode(zoneId);
-  if (!node) return;
-  const allIds    = (data.taskTemplates||[]).map(t => t.id);
-  const allChecked = allIds.every(id => (node.taskIds||[]).includes(id));
-  node.taskIds    = allChecked ? [] : [...allIds];
-  save(); renderTree();
-}
-function toggleTaskAssign(zoneId, taskId) {
-  const node = findNode(zoneId);
-  if (!node) return;
-  if (!node.taskIds) node.taskIds = [];
-  const idx = node.taskIds.indexOf(taskId);
-  if (idx === -1) node.taskIds.push(taskId);
-  else node.taskIds.splice(idx, 1);
-  save(); renderTree();
-}
-
-// ============================================================
-// ZONE TREE RENDER
-// ============================================================
-function addChildZone(pid) { addChild(pid); save(); renderTree(); }
-function deleteZone(id, name) {
-  showModal(
-    'Supprimer la zone',
-    `Supprimer « ${name || 'cette zone'} » et tout son contenu ?`,
-    function() { removeNode(id); save(); renderTree(); }
-  );
-}
-function updateZoneName(id, val) {
-  const n = findNode(id);
-  if (n) { n.name = val; save(); }
-}
-function toggleCollapse(id) {
-  const k = 'col_' + id;
-  sessionStorage.setItem(k, sessionStorage.getItem(k) === '1' ? '0' : '1');
-  renderTree();
-}
-
-function renderNode(node, level) {
-  const isL    = isLeaf(node);
-  const labels = ['Bâtiment','Étage','Voile','Zone'];
-  const label  = labels[level] || 'Zone';
-  const isCollapsed = sessionStorage.getItem('col_' + node.id) === '1';
-  const taskIds = node.taskIds || [];
-  const hasChildren = node.children && node.children.length > 0;
-
-  // --- Children ---
-  let childrenHTML = '';
-  if (!isCollapsed && hasChildren) {
-    childrenHTML = `<div class="zone-children">${node.children.map(c => renderNode(c, level+1)).join('')}</div>`;
-  }
-
-  // --- Task assignment panel (leaves only) ---
-  let tasksHTML = '';
-  if (isL && !isCollapsed) {
-    const templates = data.taskTemplates || [];
-    if (!templates.length) {
-      tasksHTML = `<div class="zone-tasks-panel">
-        <div class="zone-tasks-panel-label">Tâches assignées</div>
-        <span class="no-tasks-hint">Définissez d'abord des tâches types dans Données → Tâches types</span>
-      </div>`;
-    } else {
-      const allChecked = templates.every(t => taskIds.includes(t.id));
-      const count      = taskIds.length;
-      const selectAll  = `
-        <div class="task-assign-item task-assign-all" onclick="toggleAllTasks('${node.id}')">
-          <div class="task-assign-check ${allChecked ? 'checked' : ''}"></div>
-          <span class="task-assign-name" style="color:var(--accent2);font-weight:700;">Tout sélectionner</span>
-          <span style="font-size:11px;color:var(--text3);margin-left:auto;">${count}/${templates.length}</span>
-        </div>
-        <div style="height:1px;background:var(--border);margin:4px 0;"></div>`;
-      const items = templates.map(t => {
-        const checked = taskIds.includes(t.id);
-        return `<div class="task-assign-item" onclick="toggleTaskAssign('${node.id}','${t.id}')">
-          <div class="task-assign-check ${checked ? 'checked' : ''}"></div>
-          <span class="task-assign-name ${checked ? 'checked' : ''}">${escHtml(t.name)||'(sans nom)'}</span>
-        </div>`;
-      }).join('');
-      tasksHTML = `<div class="zone-tasks-panel">
-        <div class="zone-tasks-panel-label">Tâches assignées</div>
-        <div class="task-assign-list">${selectAll}${items}</div>
-      </div>`;
-    }
-  }
-
-  // --- Collapse button ---
-  const colBtn = `<button class="collapse-btn" onclick="toggleCollapse('${node.id}')">${isCollapsed ? '▶' : '▼'}</button>`;
-
-  // --- Safe name for modal message (escaped for JS string) ---
-  const safeName = (node.name||'').replace(/'/g,"\\'");
-
-  return `
-    <div class="zone-node zone-level-${Math.min(level,2)}" id="node_${node.id}">
-      <div class="zone-node-header">
-        ${colBtn}
-        <span class="zone-level-badge">${label}</span>
-        <input class="zone-name-input" type="text" placeholder="Nom de la zone…" value="${escHtml(node.name)}"
-          oninput="updateZoneName('${node.id}',this.value)"
-          onchange="updateZoneName('${node.id}',this.value)">
-        <div class="zone-actions">
-          <button class="btn btn-ghost btn-sm" onclick="addChildZone('${node.id}')">+ Sous-zone</button>
-          <button class="btn-del" onclick="deleteZone('${node.id}','${safeName}')">✕</button>
+      <div class="list-section">
+        <h2 class="section-title">Présences</h2>
+        <ul class="entry-list" id="entrylist"></ul>
+        <div class="empty-state" id="emptystate">
+          <p>Aucune présence enregistrée pour ce jour.</p>
+          <p class="hint">Appuyez sur le bouton « + » pour ajouter une entreprise.</p>
         </div>
       </div>
-      ${tasksHTML}
-      ${childrenHTML}
-    </div>`;
-}
 
-function renderTree() {
-  const tree = document.getElementById('zone-tree');
-  if (!tree) return;
-  if (!data.zones.length) {
-    tree.innerHTML = `<div class="empty-state"><div class="icon">🏗</div><p>Aucune zone définie.<br>Ajoutez un bâtiment pour commencer.</p></div>`;
-  } else {
-    tree.innerHTML = data.zones.map(z => renderNode(z, 0)).join('');
-  }
-}
+      <button class="fab" id="addentry" aria-label="Ajouter une présence">+</button>
+    </section>
 
-// ============================================================
-// AVANCEMENT NAV
-// ============================================================
-let navPath = [];
-
-function renderNavSelects() {
-  const bc = document.getElementById('nav-breadcrumb');
-  let html  = '';
-  let nodes = data.zones;
-  const levelLabels = ['Bâtiment','Étage','Voile','Zone'];
-
-  for (let lvl = 0; ; lvl++) {
-    const selectedId = navPath[lvl];
-    const label      = levelLabels[lvl] || ('Niveau '+(lvl+1));
-    const opts       = nodes.map(n => `<option value="${n.id}" ${n.id===selectedId?'selected':''}>${escHtml(n.name)||'(sans nom)'}</option>`).join('');
-    if (lvl > 0) html += `<span class="breadcrumb-arrow">›</span>`;
-    html += `<div class="nav-select-wrapper">
-      <div class="nav-select-label">${label}</div>
-      <select class="nav-select" ${!nodes.length?'disabled':''} onchange="selectNavLevel(${lvl},this.value)">
-        <option value="">— Choisir —</option>${opts}
-      </select>
-    </div>`;
-    if (!selectedId) break;
-    const sel = nodes.find(n => n.id === selectedId);
-    if (!sel || !sel.children || !sel.children.length) break;
-    nodes = sel.children;
-  }
-  bc.innerHTML = html;
-  renderProgressPanel();
-}
-
-function selectNavLevel(lvl, val) {
-  navPath = navPath.slice(0, lvl);
-  if (val) navPath.push(val);
-  renderNavSelects();
-}
-
-function getSelectedLeafNode() {
-  if (!navPath.length) return null;
-  const node = findNode(navPath[navPath.length - 1]);
-  return (node && isLeaf(node)) ? node : null;
-}
-
-function getNodeTaskTemplates(node) {
-  return (node.taskIds||[]).map(id => data.taskTemplates.find(t => t.id === id)).filter(Boolean);
-}
-
-function renderProgressPanel() {
-  const container = document.getElementById('progress-panel-container');
-  const node = getSelectedLeafNode();
-  if (!node) {
-    container.innerHTML = `<div class="empty-state"><div class="icon">🔍</div><p>Sélectionnez une zone dans les menus ci-dessus.</p></div>`;
-    return;
-  }
-  const tasks = getNodeTaskTemplates(node);
-  if (!tasks.length) {
-    container.innerHTML = `<div class="empty-state"><div class="icon">📋</div><p>Aucune tâche assignée à cette zone.<br>Assignez des tâches dans <strong>Données → Arborescence</strong>.</p></div>`;
-    return;
-  }
-  const prog        = data.progress[node.id] || {};
-  const pcts        = tasks.map(t => prog[t.id] !== undefined ? prog[t.id] : 0);
-  const totalWeight = tasks.reduce((a,t) => a + (parseFloat(t.weight)||0), 0);
-  let globalPct;
-  if (totalWeight > 0) {
-    globalPct = Math.round(tasks.reduce((a,t,i) => {
-      return a + pcts[i] * (parseFloat(t.weight)||0) / 100;
-    }, 0));
-  } else {
-    globalPct = Math.round(pcts.reduce((a,b) => a+b, 0) / pcts.length);
-  }
-  const barClassG = globalPct===100?'full':globalPct<25?'low':'';
-
-  const taskRows = tasks.map((t, i) => {
-    const pct = pcts[i];
-    const bc  = pct===100?'full':pct<25?'low':'';
-    return `<div class="task-progress-row">
-      <div class="task-progress-name">${escHtml(t.name)||'(tâche sans nom)'}</div>
-      <div class="task-progress-controls">
-        <div class="pct-bar-track"><div class="pct-bar-fill ${bc}" style="width:${pct}%"></div></div>
-        <button class="pct-btn" onclick="changePct('${node.id}','${t.id}',-5)">−</button>
-        <input class="pct-display" type="number" min="0" max="100" value="${pct}"
-          onchange="setPct('${node.id}','${t.id}',parseInt(this.value),true)"
-          oninput="setPct('${node.id}','${t.id}',parseInt(this.value),false)">%
-        <button class="pct-btn" onclick="changePct('${node.id}','${t.id}',5)">+</button>
-        <button class="pct-btn pct-btn-done ${pct===100?'is-done':''}" onclick="toggleDone('${node.id}','${t.id}')" title="Marquer à 100%">✓</button>
+    <!-- ============== ONGLET : DONNÉES ============== -->
+    <section class="page" id="page-donnees">
+      <div class="list-section">
+        <h2 class="section-title">Entreprises</h2>
+        <p class="section-help">Liste des entreprises présentes sur le chantier (vous-même, sous-traitants…).</p>
+        <ul class="company-list" id="companylist"></ul>
+        <form class="add-company-form" id="addcompanyform" autocomplete="off">
+          <input type="text" id="newcompanyname" placeholder="Nom de l'entreprise" maxlength="60" required />
+          <button type="submit" class="btn-primary">Ajouter</button>
+        </form>
       </div>
-    </div>`;
-  }).join('');
 
-  container.innerHTML = `<div class="progress-panel">
-    <div class="progress-panel-header">
-      <div>
-        <div class="progress-panel-title">${escHtml(node.name)||'(zone sans nom)'}</div>
-        <div class="progress-panel-subtitle">${tasks.length} tâche${tasks.length>1?'s':''}</div>
+      <div class="list-section danger-zone">
+        <h2 class="section-title">Données enregistrées</h2>
+        <p class="section-help">Toutes les données sont stockées dans votre navigateur.</p>
+        <button class="btn-secondary" id="exportbtn">Exporter (fichier JSON)</button>
+        <button class="btn-secondary" id="importbtn">Importer (fichier JSON)</button>
+        <input type="file" id="importinput" accept="application/json" hidden />
+        <button class="btn-danger" id="resetbtn">Tout effacer</button>
       </div>
-      <div style="text-align:right">
-        <div style="font-size:11px;color:var(--text2);margin-bottom:4px;">Avancement global</div>
-        <div class="global-pct">${globalPct} %</div>
-        <div class="pct-bar-track" style="width:110px;margin-top:6px;margin-left:auto">
-          <div class="pct-bar-fill ${barClassG}" style="width:${globalPct}%"></div>
+    </section>
+  </main>
+
+  <!-- ============== TAB BAR ============== -->
+  <nav class="tab-bar" role="tablist">
+    <button class="tab-btn active" data-page="effectifs" role="tab">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 2c-2.67 0-8 1.34-8 4v3h10v-3c0-.96.5-1.85 1.35-2.59A12.3 12.3 0 0 0 8 13Zm8 0c-.34 0-.7.02-1.07.05A4.43 4.43 0 0 1 17 16v3h7v-3c0-2.66-5.33-4-8-4Z"/></svg>
+      <span>Effectifs</span>
+    </button>
+    <button class="tab-btn" data-page="donnees" role="tab">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94a7.07 7.07 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.14.55-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.65 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.39 1.04.7 1.63.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54c.59-.24 1.14-.55 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z"/></svg>
+      <span>Données</span>
+    </button>
+  </nav>
+
+  <!-- ============== MODALE : Ajouter une entrée ============== -->
+  <div class="modal-backdrop" id="entrymodal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="entrymodaltitle">
+      <h3 class="modal-title" id="entrymodaltitle">Ajouter une présence</h3>
+      <form id="entryform">
+        <label class="field">
+          <span>Entreprise</span>
+          <select id="entrycompany" required></select>
+        </label>
+        <label class="field">
+          <span>Nombre de personnes</span>
+          <input type="number" id="entrycount" min="1" max="999" inputmode="numeric" required />
+        </label>
+        <input type="hidden" id="entryid" />
+        <div class="modal-actions">
+          <button type="button" class="btn-secondary" id="entrycancel">Annuler</button>
+          <button type="submit" class="btn-primary">Enregistrer</button>
         </div>
-      </div>
+      </form>
     </div>
-    <div class="task-progress-list">${taskRows}</div>
-  </div>`;
-}
+  </div>
 
-function toggleDone(zoneId, taskId) {
-  if (!data.progress[zoneId]) data.progress[zoneId] = {};
-  const cur = data.progress[zoneId][taskId] || 0;
-  data.progress[zoneId][taskId] = cur === 100 ? 0 : 100;
-  save(); renderProgressPanel();
-}
-function changePct(zoneId, taskId, delta) {
-  if (!data.progress[zoneId]) data.progress[zoneId] = {};
-  const cur = data.progress[zoneId][taskId] || 0;
-  data.progress[zoneId][taskId] = Math.max(0, Math.min(100, cur + delta));
-  save(); renderProgressPanel();
-}
-function setPct(zoneId, taskId, val, rerender) {
-  if (isNaN(val)) return;
-  if (!data.progress[zoneId]) data.progress[zoneId] = {};
-  data.progress[zoneId][taskId] = Math.max(0, Math.min(100, val));
-  save();
-  if (rerender !== false) renderProgressPanel();
-}
+  <!-- ============== Toast ============== -->
+  <div class="toast" id="toast" hidden></div>
 
-// ============================================================
-// RÉCAPITULATIF
-// ============================================================
-function getAllLeaves(nodes, path) {
-  nodes = nodes || data.zones; path = path || [];
-  let leaves = [];
-  for (let n of nodes) {
-    const p = [...path, n.name || '(sans nom)'];
-    if (isLeaf(n)) leaves.push({ node: n, path: p });
-    else leaves = leaves.concat(getAllLeaves(n.children, p));
-  }
-  return leaves;
-}
-function getNodePct(node) {
-  const tasks = getNodeTaskTemplates(node);
-  if (!tasks.length) return null;
-  const prog = data.progress[node.id] || {};
-  const totalWeight = tasks.reduce((a,t) => a + (parseFloat(t.weight)||0), 0);
-  if (totalWeight > 0) {
-    // Moyenne pondérée
-    const weighted = tasks.reduce((a,t) => {
-      const pct = prog[t.id] !== undefined ? prog[t.id] : 0;
-      return a + pct * (parseFloat(t.weight)||0) / 100;
-    }, 0);
-    return Math.round(weighted);
-  } else {
-    // Pas de pondération définie → moyenne simple
-    const pcts = tasks.map(t => prog[t.id] !== undefined ? prog[t.id] : 0);
-    return Math.round(pcts.reduce((a,b) => a+b, 0) / pcts.length);
-  }
-}
-function getTreePct(node) {
-  if (isLeaf(node)) return getNodePct(node);
-  const childPcts = (node.children||[]).map(c => getTreePct(c)).filter(p => p !== null);
-  if (!childPcts.length) return null;
-  return Math.round(childPcts.reduce((a,b) => a+b, 0) / childPcts.length);
-}
-function getTreeLeaves(node) {
-  if (isLeaf(node)) return [node];
-  return (node.children||[]).flatMap(c => getTreeLeaves(c));
-}
-function toggleRecapNode(id) {
-  const k = 'recap_col_' + id;
-  sessionStorage.setItem(k, sessionStorage.getItem(k) === '0' ? '1' : '0');
-  refreshRecap();
-}
-function expandAllRecap() {
-  function setAll(nodes) {
-    nodes.forEach(n => { sessionStorage.setItem('recap_col_'+n.id,'1'); if(n.children) setAll(n.children); });
-  }
-  setAll(data.zones); refreshRecap();
-}
-function renderRecapNode(node, level) {
-  const pct    = getTreePct(node);
-  const isL    = isLeaf(node);
-  const leaves = getTreeLeaves(node);
-  const total  = leaves.reduce((a,n) => a + getNodeTaskTemplates(n).length, 0);
-  const done   = leaves.reduce((a,n) => {
-    const prog = data.progress[n.id] || {};
-    return a + getNodeTaskTemplates(n).filter(t => (prog[t.id]||0)===100).length;
-  }, 0);
-  const badge = pct===null ? '<span style="color:var(--text3);font-size:11px;">—</span>'
-    : pct===100 ? '<span class="badge badge-ok">Terminé</span>'
-    : pct>=50   ? '<span class="badge badge-mid">En cours</span>'
-    :             '<span class="badge badge-low">Démarré</span>';
-  const bar = pct !== null
-    ? `<div class="pct-bar-track" style="width:90px;display:inline-block;vertical-align:middle;"><div class="pct-bar-fill ${pct===100?'full':pct<25?'low':''}" style="width:${pct}%"></div></div>`
-    : '<span style="color:var(--text3);font-size:11px;">Aucune tâche</span>';
-  const pctTxt  = pct !== null ? `<span class="pct-cell">${pct} %</span>` : '<span style="color:var(--text3)">—</span>';
-  const indent  = level * 20;
-  const hasChildren = !isL && (node.children||[]).length > 0;
-  const colKey  = 'recap_col_' + node.id;
-  const isOpen  = sessionStorage.getItem(colKey) !== '0';
-  const chevron = hasChildren
-    ? `<button class="recap-chevron" onclick="toggleRecapNode('${node.id}')">${isOpen ? '▼' : '▶'}</button>`
-    : `<span class="recap-chevron-placeholder"></span>`;
-  const levelColors = ['var(--accent)','var(--accent2)','var(--success)','var(--text2)'];
-  const nameColor   = levelColors[Math.min(level, levelColors.length-1)];
-  const taskInfo = total > 0
-    ? `<span class="recap-task-info">${done}/${total} tâche${total>1?'s':''}</span>` : '';
-  let html = `
-    <div class="recap-row" style="padding-left:${12+indent}px">
-      ${chevron}
-      <div class="recap-row-name" style="color:${nameColor};font-weight:${level===0?'700':'600'};font-size:${level===0?'14px':'13px'}">
-        ${escHtml(node.name)||'(sans nom)'}${taskInfo}
-      </div>
-      <div class="recap-row-right">${bar}${pctTxt}${badge}</div>
-    </div>`;
-  if (hasChildren && isOpen) {
-    html += `<div class="recap-children">${node.children.map(c => renderRecapNode(c, level+1)).join('')}</div>`;
-  }
-  return html;
-}
-function refreshRecap() {
-  const container = document.getElementById('recap-content');
-  if (!data.zones.length) {
-    container.innerHTML = `<div class="empty-state"><div class="icon">📊</div><p>Aucune donnée à afficher.<br>Configurez votre arborescence dans <strong>Données</strong>.</p></div>`;
-    return;
-  }
-  const leaves     = getAllLeaves();
-  const defined    = leaves.filter(l => getNodePct(l.node) !== null);
-  const globalAvg  = defined.length ? Math.round(defined.reduce((a,l) => a+(getNodePct(l.node)||0),0)/defined.length) : 0;
-  const totalTasks = leaves.reduce((a,l) => a + getNodeTaskTemplates(l.node).length, 0);
-  const doneTasks  = leaves.reduce((a,l) => {
-    const prog = data.progress[l.node.id] || {};
-    return a + getNodeTaskTemplates(l.node).filter(t => (prog[t.id]||0)===100).length;
-  }, 0);
-  const treeHTML = data.zones.map(z => renderRecapNode(z, 0)).join('');
-  container.innerHTML = `
-    <div class="summary-grid">
-      <div class="summary-card">
-        <div class="summary-card-label">Avancement global</div>
-        <div class="summary-card-value">${globalAvg} %</div>
-        <div class="big-progress-bar"><div class="big-progress-fill" style="width:${globalAvg}%"></div></div>
-      </div>
-      <div class="summary-card">
-        <div class="summary-card-label">Zones feuilles</div>
-        <div class="summary-card-value">${leaves.length}</div>
-        <div class="summary-card-sub">${defined.length} avec tâches assignées</div>
-      </div>
-      <div class="summary-card">
-        <div class="summary-card-label">Tâches</div>
-        <div class="summary-card-value">${totalTasks}</div>
-        <div class="summary-card-sub">${doneTasks} terminées</div>
-      </div>
-    </div>
-    <div class="progress-panel">
-      <div class="progress-panel-header" style="padding:12px 16px;">
-        <div class="section-title">Détail par bâtiment</div>
-        <button class="btn btn-ghost btn-sm" onclick="expandAllRecap()">Tout déplier</button>
-      </div>
-      <div class="recap-tree">${treeHTML}</div>
-    </div>`;
-}
-
-// ============================================================
-// UTILS
-// ============================================================
-function escHtml(s) {
-  if (!s) return '';
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-function showToast(msg, isError) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.className = 'toast' + (isError ? ' error' : '');
-  t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 2800);
-}
-
-// ============================================================
-// INIT
-// ============================================================
-load();
-renderTree();
-renderTaskTemplates();
-refreshRecap();
-</script>
+  <script src="app.js"></script>
 </body>
 </html>
