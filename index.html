@@ -142,10 +142,18 @@
 
     <!-- ============== ONGLET : AVANCEMENT ============== -->
     <section class="page" id="page-avancement">
-      <div class="empty-state show">
-        <p>Suivi d'avancement</p>
-        <p class="hint">Cette page affichera l'avancement des tâches affectées aux zones du chantier.<br />Commencez par créer vos zones dans l'onglet « Données ».</p>
+      <div class="zone-pickers" id="zonepickers"></div>
+
+      <div class="zone-fiche" id="zonefiche" hidden>
+        <div class="fiche-header">
+          <button class="fiche-arrow" id="ficheprev" aria-label="Zone précédente">‹</button>
+          <h2 class="fiche-title" id="fichetitle"></h2>
+          <button class="fiche-arrow" id="fichenext" aria-label="Zone suivante">›</button>
+        </div>
+        <ul class="progress-list" id="progresslist"></ul>
       </div>
+
+      <div class="empty-state" id="avancementempty"></div>
     </section>
   </main>
 

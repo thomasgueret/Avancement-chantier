@@ -480,6 +480,106 @@ input, select { font: inherit; }
   border-bottom-color: var(--accent);
 }
 
+/* ============ AVANCEMENT : SÉLECTEURS EN CASCADE ============ */
+.zone-pickers { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.zone-picker {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 12px 6px 14px;
+  box-shadow: var(--shadow-sm);
+  min-height: 52px;
+}
+.zone-picker-label {
+  font-size: 11px; font-weight: 700;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-3);
+  flex-shrink: 0;
+  min-width: 64px;
+}
+.zone-picker select {
+  flex: 1; min-width: 0;
+  font-size: 16px; font-weight: 600;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  padding: 8px 0;
+  -webkit-appearance: menulist;
+}
+.zone-picker select:focus { outline: none; }
+
+/* ============ AVANCEMENT : FICHE ZONE ============ */
+.zone-fiche[hidden] { display: none; }
+.fiche-header {
+  display: flex; align-items: center; gap: 6px;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%);
+  color: white;
+  border-radius: var(--radius);
+  padding: 10px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-md);
+}
+.fiche-arrow {
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.18);
+  color: white;
+  border: none;
+  font-size: 26px; font-weight: 400; line-height: 1;
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.fiche-arrow:active { background: rgba(255, 255, 255, 0.32); }
+.fiche-arrow:disabled { opacity: 0.3; }
+.fiche-title {
+  flex: 1; text-align: center;
+  font-size: 18px; font-weight: 700;
+  margin: 0; padding: 0 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ============ AVANCEMENT : LISTE DES TÂCHES ============ */
+.progress-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.progress-item {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 10px 10px 14px;
+  box-shadow: var(--shadow-sm);
+  min-height: 56px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.progress-task-name {
+  flex: 1; font-size: 15px; font-weight: 600;
+  color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.counter.is-percent .counter-value { min-width: 52px; }
+.progress-tick {
+  flex-shrink: 0;
+  width: 40px; height: 40px;
+  border: 1.5px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text-3);
+  border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+}
+.progress-tick:active { background: var(--surface); }
+.progress-tick svg { width: 20px; height: 20px; fill: currentColor; }
+.progress-item.is-done {
+  background: rgba(46, 125, 50, 0.05);
+  border-color: rgba(46, 125, 50, 0.35);
+}
+.progress-item.is-done .progress-tick {
+  background: #2e7d32;
+  border-color: #2e7d32;
+  color: white;
+}
+.progress-item.is-done .counter-value { color: #2e7d32; }
+
 /* ============ FAB ============ */
 .fab {
   position: fixed;

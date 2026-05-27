@@ -28,6 +28,8 @@ const state = {
   zones: [],              // [{ id, name, parentId }] — arborescence à plat
   tasks: [],              // [{ id, name }] — liste ordonnée des tâches
   zoneHasTasks: {},       // { [zoneId]: true } — zones qui reçoivent les tâches
+  taskProgress: {},       // { [zoneId]: { [taskId]: percent 0..100 } }
+  avancementZoneId: null, // zone affichée dans l'onglet Avancement
   presences: {},          // { 'YYYY-MM-DD': [{ id, companyId, count }] }
   currentDate: todayISO(),
   chartHidden: {},        // { [companyId]: true } — entreprises masquées du graphique
@@ -44,6 +46,8 @@ function load() {
     if (data.zones) state.zones = data.zones;
     if (data.tasks) state.tasks = data.tasks;
     if (data.zoneHasTasks) state.zoneHasTasks = data.zoneHasTasks;
+    if (data.taskProgress) state.taskProgress = data.taskProgress;
+    if (data.avancementZoneId) state.avancementZoneId = data.avancementZoneId;
     if (data.presences) state.presences = data.presences;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
@@ -57,6 +61,8 @@ function save() {
     zones: state.zones,
     tasks: state.tasks,
     zoneHasTasks: state.zoneHasTasks,
+    taskProgress: state.taskProgress,
+    avancementZoneId: state.avancementZoneId,
     presences: state.presences,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange
@@ -116,6 +122,7 @@ function renderAll() {
   renderTasks();
   renderChart();
   renderLegend();
+  renderAvancement();
 }
 
 function renderDate() {
@@ -446,16 +453,26 @@ function deleteZone(id) {
   if (!confirm(msg)) return;
   const toRemove = new Set([id, ...descendants]);
   state.zones = state.zones.filter(z => !toRemove.has(z.id));
-  for (const zid of toRemove) delete state.zoneHasTasks[zid];
+  for (const zid of toRemove) {
+    delete state.zoneHasTasks[zid];
+    delete state.taskProgress[zid];
+  }
+  if (toRemove.has(state.avancementZoneId)) state.avancementZoneId = null;
   save();
   renderZones();
+  renderAvancement();
 }
 
 function toggleZoneTasks(zoneId, btnEl) {
   if (state.zoneHasTasks[zoneId]) delete state.zoneHasTasks[zoneId];
   else state.zoneHasTasks[zoneId] = true;
+  // Si on retire le marqueur de la zone actuellement affichée, on invalide
+  if (!state.zoneHasTasks[zoneId] && state.avancementZoneId === zoneId) {
+    state.avancementZoneId = null;
+  }
   save();
   if (btnEl) btnEl.classList.toggle('active', !!state.zoneHasTasks[zoneId]);
+  renderAvancement();
 }
 
 // ---------- Tasks (tâches du chantier) ----------
@@ -518,8 +535,14 @@ function deleteTask(id) {
   const label = t.name || 'cette tâche';
   if (!confirm(`Supprimer la tâche « ${label} » ?`)) return;
   state.tasks = state.tasks.filter(t => t.id !== id);
+  // Nettoyage des avancements liés à cette tâche
+  for (const zoneId of Object.keys(state.taskProgress)) {
+    delete state.taskProgress[zoneId][id];
+    if (Object.keys(state.taskProgress[zoneId]).length === 0) delete state.taskProgress[zoneId];
+  }
   save();
   renderTasks();
+  renderAvancement();
 }
 
 // ---------- Drag & drop des tâches (long-press 300ms puis glisser) ----------
@@ -604,6 +627,214 @@ function attachTaskDrag(handle, itemEl) {
     document.addEventListener('pointerup', onUp);
     document.addEventListener('pointercancel', onUp);
   });
+}
+
+// ---------- Avancement ----------
+function getZonePath(zoneId) {
+  const path = [];
+  let id = zoneId;
+  const seen = new Set();
+  while (id && !seen.has(id)) {
+    seen.add(id);
+    const z = state.zones.find(z => z.id === id);
+    if (!z) break;
+    path.unshift(z);
+    id = z.parentId;
+  }
+  return path;
+}
+
+function getTaskZonesInOrder() {
+  // parcours pré-ordre de l'arborescence, en respectant l'ordre d'insertion
+  const result = [];
+  const walk = (parentId) => {
+    for (const z of state.zones.filter(z => z.parentId === parentId)) {
+      if (state.zoneHasTasks[z.id]) result.push(z);
+      walk(z.id);
+    }
+  };
+  walk(null);
+  return result;
+}
+
+function drillDown(zoneId) {
+  let current = zoneId;
+  const seen = new Set();
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    if (state.zoneHasTasks[current]) return current;
+    const children = state.zones.filter(z => z.parentId === current);
+    if (children.length === 0) return current;
+    current = children[0].id;
+  }
+  return current;
+}
+
+function getProgress(zoneId, taskId) {
+  return state.taskProgress[zoneId]?.[taskId] || 0;
+}
+
+function setProgress(zoneId, taskId, percent) {
+  percent = Math.max(0, Math.min(100, Math.round(percent / 5) * 5));
+  if (percent === 0) {
+    if (state.taskProgress[zoneId]) {
+      delete state.taskProgress[zoneId][taskId];
+      if (Object.keys(state.taskProgress[zoneId]).length === 0) delete state.taskProgress[zoneId];
+    }
+  } else {
+    if (!state.taskProgress[zoneId]) state.taskProgress[zoneId] = {};
+    state.taskProgress[zoneId][taskId] = percent;
+  }
+  save();
+}
+
+function changeProgress(zoneId, taskId, delta) {
+  const cur = getProgress(zoneId, taskId);
+  setProgress(zoneId, taskId, cur + delta);
+  renderProgressList();
+}
+
+function navigateAvancement(delta) {
+  const list = getTaskZonesInOrder();
+  const idx = list.findIndex(z => z.id === state.avancementZoneId);
+  if (idx < 0) return;
+  const newIdx = idx + delta;
+  if (newIdx < 0 || newIdx >= list.length) return;
+  state.avancementZoneId = list[newIdx].id;
+  save();
+  renderAvancement();
+}
+
+function resolveAvancementZone() {
+  // Valide / fallback la zone sélectionnée
+  const list = getTaskZonesInOrder();
+  if (list.length === 0) {
+    state.avancementZoneId = null;
+    return null;
+  }
+  const current = list.find(z => z.id === state.avancementZoneId);
+  if (current) return current;
+  state.avancementZoneId = list[0].id;
+  return list[0];
+}
+
+function renderAvancement() {
+  const pickers = document.getElementById('zonepickers');
+  const fiche = document.getElementById('zonefiche');
+  const empty = document.getElementById('avancementempty');
+  if (!pickers || !fiche || !empty) return;
+
+  pickers.innerHTML = '';
+
+  // Cas 1 : pas de zones du tout
+  if (state.zones.length === 0) {
+    fiche.hidden = true;
+    empty.innerHTML = '<p>Aucune zone créée.</p><p class="hint">Commencez par construire votre arborescence dans <strong>Données → Zones</strong>.</p>';
+    empty.classList.add('show');
+    return;
+  }
+  // Cas 2 : pas de tâches définies
+  if (state.tasks.length === 0) {
+    fiche.hidden = true;
+    empty.innerHTML = '<p>Aucune tâche définie.</p><p class="hint">Définissez vos tâches dans <strong>Données → Tâches</strong>.</p>';
+    empty.classList.add('show');
+    return;
+  }
+  // Cas 3 : aucune zone marquée comme recevant les tâches
+  const taskZones = getTaskZonesInOrder();
+  if (taskZones.length === 0) {
+    fiche.hidden = true;
+    empty.innerHTML = '<p>Aucune zone n\'est marquée pour recevoir les tâches.</p><p class="hint">Dans <strong>Données → Zones</strong>, activez le bouton « tâche » sur les zones où vous voulez suivre l\'avancement.</p>';
+    empty.classList.add('show');
+    return;
+  }
+
+  const zone = resolveAvancementZone();
+  if (!zone) {
+    fiche.hidden = true;
+    empty.classList.add('show');
+    return;
+  }
+  empty.classList.remove('show');
+
+  // Sélecteurs en cascade : un par niveau du chemin
+  const path = getZonePath(zone.id);
+  let parentId = null;
+  for (let d = 0; d < path.length; d++) {
+    const siblings = state.zones.filter(z => z.parentId === parentId);
+    if (siblings.length === 0) break;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'zone-picker';
+    wrap.innerHTML = `
+      <span class="zone-picker-label">Niveau ${d + 1}</span>
+      <select></select>
+    `;
+    const select = wrap.querySelector('select');
+    for (const sib of siblings) {
+      const opt = document.createElement('option');
+      opt.value = sib.id;
+      opt.textContent = sib.name || '(sans nom)';
+      if (sib.id === path[d].id) opt.selected = true;
+      select.appendChild(opt);
+    }
+    select.addEventListener('change', () => {
+      state.avancementZoneId = drillDown(select.value);
+      save();
+      renderAvancement();
+    });
+    pickers.appendChild(wrap);
+
+    parentId = path[d].id;
+  }
+
+  // Fiche : en-tête (flèches + titre) + liste de tâches
+  fiche.hidden = false;
+  document.getElementById('fichetitle').textContent = zone.name || '(zone sans nom)';
+  const idx = taskZones.findIndex(z => z.id === zone.id);
+  document.getElementById('ficheprev').disabled = idx <= 0;
+  document.getElementById('fichenext').disabled = idx < 0 || idx >= taskZones.length - 1;
+
+  renderProgressList();
+}
+
+function renderProgressList() {
+  const list = document.getElementById('progresslist');
+  if (!list) return;
+  list.innerHTML = '';
+  const zoneId = state.avancementZoneId;
+  if (!zoneId) return;
+
+  for (const task of state.tasks) {
+    const percent = getProgress(zoneId, task.id);
+    const isDone = percent >= 100;
+    const li = document.createElement('li');
+    li.className = 'progress-item' + (isDone ? ' is-done' : '');
+    li.innerHTML = `
+      <span class="progress-task-name"></span>
+      <div class="counter is-percent">
+        <button class="counter-btn" data-action="dec" aria-label="−5 %">−</button>
+        <span class="counter-value"></span>
+        <button class="counter-btn" data-action="inc" aria-label="+5 %">+</button>
+      </div>
+      <button class="progress-tick" data-action="tick" aria-label="Marquer terminé à 100 %">
+        <svg viewBox="0 0 24 24"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>
+      </button>
+    `;
+    li.querySelector('.progress-task-name').textContent = task.name || '(tâche sans nom)';
+    li.querySelector('.counter-value').textContent = `${percent} %`;
+    const decBtn = li.querySelector('[data-action="dec"]');
+    const incBtn = li.querySelector('[data-action="inc"]');
+    if (percent <= 0) decBtn.disabled = true;
+    if (percent >= 100) incBtn.disabled = true;
+    decBtn.addEventListener('click', () => changeProgress(zoneId, task.id, -5));
+    incBtn.addEventListener('click', () => changeProgress(zoneId, task.id, +5));
+    li.querySelector('[data-action="tick"]').addEventListener('click', () => {
+      setProgress(zoneId, task.id, isDone ? 0 : 100);
+      renderProgressList();
+    });
+    list.appendChild(li);
+  }
 }
 
 // ---------- Sub-tabs ----------
@@ -748,6 +979,7 @@ function switchPage(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === `page-${name}`));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.page === name));
   window.scrollTo({ top: 0, behavior: 'instant' });
+  if (name === 'avancement') renderAvancement();
 }
 
 // ---------- Import / Export ----------
@@ -757,6 +989,7 @@ function exportData() {
     zones: state.zones,
     tasks: state.tasks,
     zoneHasTasks: state.zoneHasTasks,
+    taskProgress: state.taskProgress,
     presences: state.presences,
     exportedAt: new Date().toISOString()
   };
@@ -781,6 +1014,8 @@ function importData(file) {
       state.zones = data.zones || [];
       state.tasks = data.tasks || [];
       state.zoneHasTasks = data.zoneHasTasks || {};
+      state.taskProgress = data.taskProgress || {};
+      state.avancementZoneId = null;
       state.presences = data.presences;
       save();
       renderAll();
@@ -793,11 +1028,13 @@ function importData(file) {
 }
 
 function resetAll() {
-  if (!confirm('Effacer TOUTES les données (entreprises, zones, tâches et présences) ?\nCette action est irréversible.')) return;
+  if (!confirm('Effacer TOUTES les données (entreprises, zones, tâches, avancements et présences) ?\nCette action est irréversible.')) return;
   state.companies = [];
   state.zones = [];
   state.tasks = [];
   state.zoneHasTasks = {};
+  state.taskProgress = {};
+  state.avancementZoneId = null;
   state.presences = {};
   save();
   renderAll();
@@ -825,6 +1062,10 @@ function init() {
 
   // Tâches
   document.getElementById('taskfab').addEventListener('click', addTask);
+
+  // Avancement : flèches de navigation
+  document.getElementById('ficheprev').addEventListener('click', () => navigateAvancement(-1));
+  document.getElementById('fichenext').addEventListener('click', () => navigateAvancement(+1));
 
   // Range chips du graphique
   document.querySelectorAll('.chip-btn').forEach(btn => {
