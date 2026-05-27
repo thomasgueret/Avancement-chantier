@@ -85,10 +85,11 @@
 
     <!-- ============== ONGLET : DONNÉES ============== -->
     <section class="page" id="page-donnees">
-      <div class="segmented" role="tablist" data-group="donnees">
+      <div class="segmented" role="tablist" data-group="donnees" style="--count:3;">
         <div class="segmented-thumb"></div>
         <button class="seg-btn active" data-group="donnees" data-sub="entreprises" role="tab">Entreprises</button>
         <button class="seg-btn" data-group="donnees" data-sub="zones" role="tab">Zones</button>
+        <button class="seg-btn" data-group="donnees" data-sub="taches" role="tab">Tâches</button>
       </div>
 
       <!-- Sous-page : Entreprises -->
@@ -114,6 +115,19 @@
           </div>
           <button class="btn-primary zone-add-root" id="zoneaddroot">+ Ajouter une zone</button>
         </div>
+      </div>
+
+      <!-- Sous-page : Tâches -->
+      <div class="sub-page" id="sub-taches" data-group="donnees">
+        <div class="list-section">
+          <p class="section-help">Définissez la liste des tâches du chantier. Tapez et maintenez la poignée ☰ pour réorganiser.</p>
+          <ul class="task-list" id="tasklist"></ul>
+          <div class="empty-state" id="taskempty">
+            <p>Aucune tâche définie.</p>
+            <p class="hint">Appuyez sur le bouton « + » en bas à droite pour en créer.</p>
+          </div>
+        </div>
+        <button class="fab" id="taskfab" aria-label="Ajouter une tâche">+</button>
       </div>
 
       <div class="list-section danger-zone">

@@ -72,6 +72,7 @@ input, select { font: inherit; }
 
 /* ============ SEGMENTED CONTROL (Saisie / Graphique) ============ */
 .segmented {
+  --count: 2;
   position: relative;
   display: flex;
   background: var(--surface);
@@ -85,25 +86,27 @@ input, select { font: inherit; }
   position: absolute;
   top: 4px; bottom: 4px;
   left: 4px;
-  width: calc(50% - 4px);
+  width: calc((100% - 8px) / var(--count));
   background: var(--accent);
   border-radius: 999px;
   transition: transform 0.22s cubic-bezier(.4,.0,.2,1);
   z-index: 0;
 }
-.segmented[data-position="1"] .segmented-thumb {
-  transform: translateX(100%);
-}
+.segmented[data-position="1"] .segmented-thumb { transform: translateX(100%); }
+.segmented[data-position="2"] .segmented-thumb { transform: translateX(200%); }
 .seg-btn {
   position: relative; z-index: 1;
-  flex: 1;
+  flex: 1; min-width: 0;
   border: none; background: transparent;
-  padding: 10px 14px;
-  font-size: 14px; font-weight: 600;
+  padding: 10px 8px;
+  font-size: 13px; font-weight: 600;
   color: var(--text-2);
   border-radius: 999px;
   transition: color 0.22s;
   min-height: 40px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .seg-btn.active { color: white; }
 
@@ -412,6 +415,87 @@ input, select { font: inherit; }
   width: 100%;
   margin-top: 8px;
 }
+.zone-task-toggle {
+  flex-shrink: 0;
+  width: 36px; height: 36px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+}
+.zone-task-toggle svg { width: 18px; height: 18px; fill: currentColor; }
+.zone-task-toggle:active { background: var(--accent-soft); }
+.zone-task-toggle.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+/* ============ DONNÉES : TÂCHES ============ */
+.task-list { list-style: none; padding: 0; margin: 0 0 8px; display: flex; flex-direction: column; gap: 6px; }
+.task-item {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px 6px 4px;
+  box-shadow: var(--shadow-sm);
+  min-height: 52px;
+  transition: box-shadow 0.15s, background 0.15s;
+  will-change: transform;
+}
+.task-item.dragging {
+  z-index: 10;
+  box-shadow: 0 12px 28px rgba(20, 24, 33, 0.25);
+  background: var(--surface);
+  border-color: var(--accent);
+}
+.drag-handle {
+  flex-shrink: 0;
+  width: 40px; height: 40px;
+  border: none; background: transparent;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-3);
+  border-radius: var(--radius-sm);
+  cursor: grab;
+  touch-action: none;
+}
+.drag-handle:active { cursor: grabbing; background: var(--surface-2); }
+.drag-handle svg { width: 20px; height: 20px; fill: currentColor; }
+.task-name-input {
+  flex: 1; min-width: 0;
+  border: none;
+  background: transparent;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text);
+  padding: 8px 4px;
+  border-bottom: 1px solid transparent;
+}
+.task-name-input::placeholder { color: var(--text-3); font-style: italic; }
+.task-name-input:focus {
+  outline: none;
+  border-bottom-color: var(--accent);
+}
+
+/* ============ FAB ============ */
+.fab {
+  position: fixed;
+  right: 20px;
+  bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 16px);
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: white;
+  border: none;
+  font-size: 32px; font-weight: 300; line-height: 1;
+  box-shadow: var(--shadow-lg);
+  z-index: 20;
+  display: flex; align-items: center; justify-content: center;
+}
+.fab:active { background: var(--accent-dark); transform: scale(0.96); }
 
 /* ============ DONNÉES : ENTREPRISES ============ */
 .company-list { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 6px; }

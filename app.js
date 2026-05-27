@@ -26,6 +26,8 @@ const TOTAL_COLOR = '#1a1d23';
 const state = {
   companies: [],          // [{ id, name }]
   zones: [],              // [{ id, name, parentId }] — arborescence à plat
+  tasks: [],              // [{ id, name }] — liste ordonnée des tâches
+  zoneHasTasks: {},       // { [zoneId]: true } — zones qui reçoivent les tâches
   presences: {},          // { 'YYYY-MM-DD': [{ id, companyId, count }] }
   currentDate: todayISO(),
   chartHidden: {},        // { [companyId]: true } — entreprises masquées du graphique
@@ -40,6 +42,8 @@ function load() {
     const data = JSON.parse(raw);
     if (data.companies) state.companies = data.companies;
     if (data.zones) state.zones = data.zones;
+    if (data.tasks) state.tasks = data.tasks;
+    if (data.zoneHasTasks) state.zoneHasTasks = data.zoneHasTasks;
     if (data.presences) state.presences = data.presences;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
@@ -51,6 +55,8 @@ function save() {
   const data = {
     companies: state.companies,
     zones: state.zones,
+    tasks: state.tasks,
+    zoneHasTasks: state.zoneHasTasks,
     presences: state.presences,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange
@@ -107,6 +113,7 @@ function renderAll() {
   renderEntries();
   renderCompanies();
   renderZones();
+  renderTasks();
   renderChart();
   renderLegend();
 }
@@ -382,6 +389,9 @@ function renderZones() {
     row.innerHTML = `
       <span class="zone-depth-mark">${depth === 0 ? '' : '└'}</span>
       <input class="zone-name-input" type="text" maxlength="80" placeholder="Nom de la zone" />
+      <button class="zone-task-toggle" data-action="toggle-task" aria-label="Affecter les tâches à cette zone">
+        <svg viewBox="0 0 24 24"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm-7 0a1 1 0 1 1 0 2 1 1 0 0 1 0-2Zm-2 14-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8Z"/></svg>
+      </button>
       <button class="zone-add-sub" data-action="add-child" aria-label="Ajouter un sous-niveau">+</button>
       <button class="icon-btn danger" data-action="delete" aria-label="Supprimer">
         <svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z"/></svg>
@@ -390,6 +400,9 @@ function renderZones() {
     const input = row.querySelector('input');
     input.value = zone.name;
     input.addEventListener('input', () => renameZone(zone.id, input.value));
+    const taskBtn = row.querySelector('[data-action="toggle-task"]');
+    if (state.zoneHasTasks[zone.id]) taskBtn.classList.add('active');
+    taskBtn.addEventListener('click', () => toggleZoneTasks(zone.id, taskBtn));
     row.querySelector('[data-action="add-child"]').addEventListener('click', () => addZone(zone.id));
     row.querySelector('[data-action="delete"]').addEventListener('click', () => deleteZone(zone.id));
     tree.appendChild(row);
@@ -433,8 +446,164 @@ function deleteZone(id) {
   if (!confirm(msg)) return;
   const toRemove = new Set([id, ...descendants]);
   state.zones = state.zones.filter(z => !toRemove.has(z.id));
+  for (const zid of toRemove) delete state.zoneHasTasks[zid];
   save();
   renderZones();
+}
+
+function toggleZoneTasks(zoneId, btnEl) {
+  if (state.zoneHasTasks[zoneId]) delete state.zoneHasTasks[zoneId];
+  else state.zoneHasTasks[zoneId] = true;
+  save();
+  if (btnEl) btnEl.classList.toggle('active', !!state.zoneHasTasks[zoneId]);
+}
+
+// ---------- Tasks (tâches du chantier) ----------
+function renderTasks() {
+  const list = document.getElementById('tasklist');
+  const empty = document.getElementById('taskempty');
+  if (!list || !empty) return;
+  list.innerHTML = '';
+
+  if (state.tasks.length === 0) {
+    empty.classList.add('show');
+    return;
+  }
+  empty.classList.remove('show');
+
+  for (const task of state.tasks) {
+    const li = document.createElement('li');
+    li.className = 'task-item';
+    li.dataset.id = task.id;
+    li.innerHTML = `
+      <button class="drag-handle" aria-label="Maintenir et glisser pour réorganiser">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4V6Zm0 5h16v2H4v-2Zm0 5h16v2H4v-2Z"/></svg>
+      </button>
+      <input class="task-name-input" type="text" maxlength="80" placeholder="Nom de la tâche" />
+      <button class="icon-btn danger" data-action="delete" aria-label="Supprimer">
+        <svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z"/></svg>
+      </button>
+    `;
+    const input = li.querySelector('input');
+    input.value = task.name;
+    input.addEventListener('input', () => renameTask(task.id, input.value));
+    li.querySelector('[data-action="delete"]').addEventListener('click', () => deleteTask(task.id));
+    attachTaskDrag(li.querySelector('.drag-handle'), li);
+    list.appendChild(li);
+  }
+}
+
+function addTask() {
+  const task = { id: uid(), name: '' };
+  state.tasks.push(task);
+  save();
+  renderTasks();
+  const input = document.querySelector(`.task-item[data-id="${task.id}"] input`);
+  if (input) {
+    input.focus();
+    input.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+}
+
+function renameTask(id, name) {
+  const t = state.tasks.find(t => t.id === id);
+  if (!t) return;
+  t.name = name;
+  save();
+}
+
+function deleteTask(id) {
+  const t = state.tasks.find(t => t.id === id);
+  if (!t) return;
+  const label = t.name || 'cette tâche';
+  if (!confirm(`Supprimer la tâche « ${label} » ?`)) return;
+  state.tasks = state.tasks.filter(t => t.id !== id);
+  save();
+  renderTasks();
+}
+
+// ---------- Drag & drop des tâches (long-press 300ms puis glisser) ----------
+const LONG_PRESS_MS = 300;
+
+function attachTaskDrag(handle, itemEl) {
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    e.preventDefault();
+    const list = itemEl.parentElement;
+    if (!list) return;
+
+    const startY = e.clientY;
+    const items = Array.from(list.children);
+    const startIdx = items.indexOf(itemEl);
+    const rects = items.map(el => el.getBoundingClientRect());
+    const gap = (rects[1]?.top || 0) - (rects[0]?.bottom || 0);
+    const slot = (rects[0]?.height || 56) + Math.max(gap, 0);
+    let currentIdx = startIdx;
+    let dragMode = false;
+
+    const enterDrag = () => {
+      dragMode = true;
+      itemEl.classList.add('dragging');
+      if (navigator.vibrate) navigator.vibrate(12);
+    };
+    const pressTimer = setTimeout(enterDrag, LONG_PRESS_MS);
+
+    const onMove = (ev) => {
+      const dy = ev.clientY - startY;
+      if (!dragMode) {
+        if (Math.abs(dy) > 8) {
+          clearTimeout(pressTimer);
+        }
+        return;
+      }
+      ev.preventDefault();
+      itemEl.style.transform = `translateY(${dy}px)`;
+
+      const dragCenter = rects[startIdx].top + rects[startIdx].height / 2 + dy;
+      let newIdx = startIdx;
+      for (let i = 0; i < rects.length; i++) {
+        if (i === startIdx) continue;
+        const r = rects[i];
+        if (dragCenter >= r.top && dragCenter <= r.bottom) {
+          newIdx = i;
+          break;
+        }
+      }
+      if (dragCenter < rects[0].top) newIdx = 0;
+      else if (dragCenter > rects[rects.length - 1].bottom) newIdx = rects.length - 1;
+
+      if (newIdx !== currentIdx) {
+        currentIdx = newIdx;
+        for (let i = 0; i < items.length; i++) {
+          if (i === startIdx) continue;
+          let shift = 0;
+          if (startIdx < currentIdx && i > startIdx && i <= currentIdx) shift = -slot;
+          else if (startIdx > currentIdx && i < startIdx && i >= currentIdx) shift = slot;
+          items[i].style.transform = `translateY(${shift}px)`;
+        }
+      }
+    };
+
+    const onUp = () => {
+      clearTimeout(pressTimer);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
+
+      if (dragMode && currentIdx !== startIdx) {
+        const [moved] = state.tasks.splice(startIdx, 1);
+        state.tasks.splice(currentIdx, 0, moved);
+        save();
+      }
+      items.forEach(el => { el.style.transform = ''; });
+      itemEl.classList.remove('dragging');
+      if (dragMode) renderTasks();
+    };
+
+    document.addEventListener('pointermove', onMove, { passive: false });
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
+  });
 }
 
 // ---------- Sub-tabs ----------
@@ -586,6 +755,8 @@ function exportData() {
   const data = {
     companies: state.companies,
     zones: state.zones,
+    tasks: state.tasks,
+    zoneHasTasks: state.zoneHasTasks,
     presences: state.presences,
     exportedAt: new Date().toISOString()
   };
@@ -608,6 +779,8 @@ function importData(file) {
       if (!confirm('Importer ce fichier remplacera vos données actuelles. Continuer ?')) return;
       state.companies = data.companies;
       state.zones = data.zones || [];
+      state.tasks = data.tasks || [];
+      state.zoneHasTasks = data.zoneHasTasks || {};
       state.presences = data.presences;
       save();
       renderAll();
@@ -620,9 +793,11 @@ function importData(file) {
 }
 
 function resetAll() {
-  if (!confirm('Effacer TOUTES les données (entreprises, zones et présences) ?\nCette action est irréversible.')) return;
+  if (!confirm('Effacer TOUTES les données (entreprises, zones, tâches et présences) ?\nCette action est irréversible.')) return;
   state.companies = [];
   state.zones = [];
+  state.tasks = [];
+  state.zoneHasTasks = {};
   state.presences = {};
   save();
   renderAll();
@@ -647,6 +822,9 @@ function init() {
 
   // Zones
   document.getElementById('zoneaddroot').addEventListener('click', () => addZone(null));
+
+  // Tâches
+  document.getElementById('taskfab').addEventListener('click', addTask);
 
   // Range chips du graphique
   document.querySelectorAll('.chip-btn').forEach(btn => {
