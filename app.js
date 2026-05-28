@@ -5,6 +5,7 @@
    ========================================================= */
 
 const STORAGE_KEY = 'chantier_v1';
+const APP_VERSION = '0.9.0';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -29,6 +30,7 @@ const state = {
   tasks: [],              // [{ id, name }] — liste ordonnée des tâches
   zoneHasTasks: {},       // { [zoneId]: true } — zones qui reçoivent les tâches
   taskProgress: {},       // { [zoneId]: { [taskId]: percent 0..100 } }
+  zoneUpdated: {},        // { [zoneId]: timestamp (ms) — dernière modif d'avancement }
   avancementZoneId: null, // zone affichée dans l'onglet Avancement
   presences: {},          // { 'YYYY-MM-DD': [{ id, companyId, count }] }
   currentDate: todayISO(),
@@ -47,6 +49,7 @@ function load() {
     if (data.tasks) state.tasks = data.tasks;
     if (data.zoneHasTasks) state.zoneHasTasks = data.zoneHasTasks;
     if (data.taskProgress) state.taskProgress = data.taskProgress;
+    if (data.zoneUpdated) state.zoneUpdated = data.zoneUpdated;
     if (data.avancementZoneId) state.avancementZoneId = data.avancementZoneId;
     if (data.presences) state.presences = data.presences;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
@@ -62,6 +65,7 @@ function save() {
     tasks: state.tasks,
     zoneHasTasks: state.zoneHasTasks,
     taskProgress: state.taskProgress,
+    zoneUpdated: state.zoneUpdated,
     avancementZoneId: state.avancementZoneId,
     presences: state.presences,
     chartHidden: state.chartHidden,
@@ -456,6 +460,7 @@ function deleteZone(id) {
   for (const zid of toRemove) {
     delete state.zoneHasTasks[zid];
     delete state.taskProgress[zid];
+    delete state.zoneUpdated[zid];
   }
   if (toRemove.has(state.avancementZoneId)) state.avancementZoneId = null;
   save();
@@ -685,12 +690,29 @@ function setProgress(zoneId, taskId, percent) {
     if (!state.taskProgress[zoneId]) state.taskProgress[zoneId] = {};
     state.taskProgress[zoneId][taskId] = percent;
   }
+  state.zoneUpdated[zoneId] = Date.now();
   save();
+}
+
+// Moyenne des avancements des tâches de la zone (0..100)
+function getZoneProgress(zoneId) {
+  if (state.tasks.length === 0) return 0;
+  let sum = 0;
+  for (const task of state.tasks) sum += getProgress(zoneId, task.id);
+  return Math.round(sum / state.tasks.length);
+}
+
+function formatUpdatedDate(ts) {
+  const d = new Date(ts);
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  return `${dd}/${mm}/${d.getFullYear()}`;
 }
 
 function changeProgress(zoneId, taskId, delta) {
   const cur = getProgress(zoneId, taskId);
   setProgress(zoneId, taskId, cur + delta);
+  renderFicheHeader();
   renderProgressList();
 }
 
@@ -790,12 +812,35 @@ function renderAvancement() {
 
   // Fiche : en-tête (flèches + titre) + liste de tâches
   fiche.hidden = false;
-  document.getElementById('fichetitle').textContent = zone.name || '(zone sans nom)';
   const idx = taskZones.findIndex(z => z.id === zone.id);
   document.getElementById('ficheprev').disabled = idx <= 0;
   document.getElementById('fichenext').disabled = idx < 0 || idx >= taskZones.length - 1;
 
+  renderFicheHeader();
   renderProgressList();
+}
+
+function renderFicheHeader() {
+  const zone = state.zones.find(z => z.id === state.avancementZoneId);
+  if (!zone) return;
+
+  const titleEl = document.getElementById('fichetitle');
+  titleEl.textContent = '';
+  const nameSpan = document.createElement('span');
+  nameSpan.textContent = zone.name || '(zone sans nom)';
+  const pctSpan = document.createElement('span');
+  pctSpan.className = 'fiche-pct';
+  pctSpan.textContent = `(${getZoneProgress(zone.id)} %)`;
+  titleEl.append(nameSpan, ' ', pctSpan);
+
+  const updatedEl = document.getElementById('ficheupdated');
+  const ts = state.zoneUpdated[zone.id];
+  if (ts) {
+    updatedEl.textContent = `Mis à jour le ${formatUpdatedDate(ts)}`;
+    updatedEl.hidden = false;
+  } else {
+    updatedEl.hidden = true;
+  }
 }
 
 function renderProgressList() {
@@ -831,6 +876,7 @@ function renderProgressList() {
     incBtn.addEventListener('click', () => changeProgress(zoneId, task.id, +5));
     li.querySelector('[data-action="tick"]').addEventListener('click', () => {
       setProgress(zoneId, task.id, isDone ? 0 : 100);
+      renderFicheHeader();
       renderProgressList();
     });
     list.appendChild(li);
@@ -1015,6 +1061,7 @@ function importData(file) {
       state.tasks = data.tasks || [];
       state.zoneHasTasks = data.zoneHasTasks || {};
       state.taskProgress = data.taskProgress || {};
+      state.zoneUpdated = data.zoneUpdated || {};
       state.avancementZoneId = null;
       state.presences = data.presences;
       save();
@@ -1034,6 +1081,7 @@ function resetAll() {
   state.tasks = [];
   state.zoneHasTasks = {};
   state.taskProgress = {};
+  state.zoneUpdated = {};
   state.avancementZoneId = null;
   state.presences = {};
   save();
@@ -1045,6 +1093,7 @@ function resetAll() {
 function init() {
   load();
   migratePresences();
+  document.getElementById('appversion').textContent = `Version ${APP_VERSION}`;
   renderAll();
 
   // Tabs (bas de l'écran)

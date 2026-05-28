@@ -1,5 +1,5 @@
 /* Service worker — cache simple pour fonctionnement hors-ligne */
-const CACHE = 'chantier-v8';
+const CACHE = 'chantier-v9';
 const ASSETS = [
   './',
   './index.html',
