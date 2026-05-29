@@ -146,10 +146,16 @@
 
     <!-- ============== ONGLET : AVANCEMENT ============== -->
     <section class="page" id="page-avancement">
-      <div class="segmented" role="tablist" data-group="avancement" style="--count:2;">
-        <span class="seg-indicator" aria-hidden="true"></span>
-        <button class="seg-btn active" data-group="avancement" data-sub="fiche" role="tab">Avancement</button>
+      <div class="segmented" role="tablist" data-group="avancement" data-position="1" style="--count:2;">
+        <div class="segmented-thumb"></div>
         <button class="seg-btn" data-group="avancement" data-sub="recap" role="tab">Récapitulatif</button>
+        <button class="seg-btn active" data-group="avancement" data-sub="fiche" role="tab">Avancement</button>
+      </div>
+
+      <div class="sub-page" id="sub-recap" data-group="avancement">
+        <div class="recap-picker" id="recappicker"></div>
+        <div class="recap-content" id="recapcontent"></div>
+        <div class="empty-state" id="recapempty"></div>
       </div>
 
       <div class="sub-page active" id="sub-fiche" data-group="avancement">
@@ -166,12 +172,6 @@
         </div>
 
         <div class="empty-state" id="avancementempty"></div>
-      </div>
-
-      <div class="sub-page" id="sub-recap" data-group="avancement">
-        <div class="recap-picker" id="recappicker"></div>
-        <div class="recap-content" id="recapcontent"></div>
-        <div class="empty-state" id="recapempty"></div>
       </div>
     </section>
   </main>

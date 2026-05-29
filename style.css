@@ -725,8 +725,8 @@ input, select { font: inherit; }
 .progress-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
 .progress-section-header {
   display: flex; align-items: center; justify-content: space-between;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: var(--ouvrage-bg, var(--surface-2));
+  border: 1px solid var(--ouvrage-border, var(--border));
   border-radius: var(--radius);
   padding: 8px 14px;
   margin-top: 10px;
@@ -747,8 +747,8 @@ input, select { font: inherit; }
 .progress-section-header.is-done .progress-section-pct { color: #2e7d32; }
 .progress-item {
   display: flex; align-items: center; gap: 8px;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: var(--ouvrage-bg, var(--surface));
+  border: 1px solid var(--ouvrage-border, var(--border));
   border-radius: var(--radius);
   padding: 10px 10px 10px 14px;
   box-shadow: var(--shadow-sm);
@@ -945,8 +945,8 @@ input, select { font: inherit; }
 .recap-section { margin-bottom: 18px; }
 .recap-section:last-child { margin-bottom: 0; }
 .recap-section-header {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: var(--ouvrage-bg, var(--surface-2));
+  border: 1px solid var(--ouvrage-border, var(--border));
   border-radius: var(--radius);
   padding: 8px 14px;
   box-shadow: var(--shadow-sm);
@@ -960,8 +960,8 @@ input, select { font: inherit; }
 .recap-rows { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
 .recap-row {
   display: flex; align-items: center; gap: 10px;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: var(--ouvrage-bg, var(--surface));
+  border: 1px solid var(--ouvrage-border, var(--border));
   border-radius: var(--radius);
   padding: 10px 14px;
   box-shadow: var(--shadow-sm);

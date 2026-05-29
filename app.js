@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.19';
+const APP_VERSION = '0.20';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -594,6 +594,29 @@ function deleteZone(id) {
 // Picker (select natif iOS) pour AJOUTER un ouvrage à une zone.
 // Le select ne liste que les ouvrages pas encore affectés à la zone.
 const ZONE_UNITS = ['u', 'Ens.', 'm²', 'ml'];
+
+// Palette de couleurs d'arrière-plan attribuées automatiquement aux ouvrages
+// (selon leur position dans state.taskSetups). Volontairement très transparentes
+// pour différencier sans alourdir l'interface.
+const OUVRAGE_PALETTE = [
+  { bg: 'rgba(33, 150, 243, 0.10)',  border: 'rgba(33, 150, 243, 0.35)' },
+  { bg: 'rgba(76, 175, 80, 0.10)',   border: 'rgba(76, 175, 80, 0.35)'  },
+  { bg: 'rgba(255, 152, 0, 0.12)',   border: 'rgba(255, 152, 0, 0.40)'  },
+  { bg: 'rgba(156, 39, 176, 0.10)',  border: 'rgba(156, 39, 176, 0.35)' },
+  { bg: 'rgba(0, 188, 212, 0.10)',   border: 'rgba(0, 188, 212, 0.35)'  },
+  { bg: 'rgba(233, 30, 99, 0.10)',   border: 'rgba(233, 30, 99, 0.35)'  },
+  { bg: 'rgba(121, 85, 72, 0.10)',   border: 'rgba(121, 85, 72, 0.35)'  },
+  { bg: 'rgba(96, 125, 139, 0.10)',  border: 'rgba(96, 125, 139, 0.40)' }
+];
+function getOuvrageColor(setup) {
+  const idx = state.taskSetups.findIndex(s => s.id === setup.id);
+  return OUVRAGE_PALETTE[(idx >= 0 ? idx : 0) % OUVRAGE_PALETTE.length];
+}
+function applyOuvrageColor(el, setup) {
+  const c = getOuvrageColor(setup);
+  el.style.setProperty('--ouvrage-bg', c.bg);
+  el.style.setProperty('--ouvrage-border', c.border);
+}
 function buildZoneTaskPicker(zone) {
   const assigned = state.zoneOuvrages[zone.id] || [];
   const assignedIds = new Set(assigned.map(o => o.setupId));
@@ -1308,6 +1331,7 @@ function renderProgressList() {
     `;
     header.querySelector('.progress-section-name').textContent = setup.name || '(ouvrage sans nom)';
     header.querySelector('.progress-section-pct').textContent = `${formatPct(ouvragePct)} %`;
+    applyOuvrageColor(header, setup);
     list.appendChild(header);
 
     if (setup.tasks.length === 0) {
@@ -1318,15 +1342,16 @@ function renderProgressList() {
       continue;
     }
     for (const task of setup.tasks) {
-      list.appendChild(buildProgressItem(zoneId, task));
+      list.appendChild(buildProgressItem(zoneId, setup, task));
     }
   }
 }
 
-function buildProgressItem(zoneId, task) {
+function buildProgressItem(zoneId, setup, task) {
   const percent = getProgress(zoneId, task.id);
   const isDone = percent >= 100;
   const li = document.createElement('li');
+  applyOuvrageColor(li, setup);
   li.className = 'progress-item' + (isDone ? ' is-done' : '') + (task.excluded ? ' is-excluded' : '');
   li.innerHTML = `
     <div class="progress-info">
@@ -1456,6 +1481,7 @@ function renderRecap() {
     const group = agg[sid];
     const section = document.createElement('div');
     section.className = 'recap-section';
+    applyOuvrageColor(section, group.setup);
 
     const header = document.createElement('div');
     header.className = 'recap-section-header';
