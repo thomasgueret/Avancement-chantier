@@ -596,6 +596,7 @@ input, select { font: inherit; }
 }
 .task-item.excluded { background: var(--surface-2); }
 .task-item.excluded .task-name-input { color: var(--text-2); }
+.task-item.excluded .task-ratio-input { color: var(--text-3); opacity: 0.75; }
 
 /* ============ AVANCEMENT : SÉLECTEURS EN CASCADE ============ */
 .zone-pickers { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }

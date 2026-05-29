@@ -5,7 +5,7 @@
    ========================================================= */
 
 const STORAGE_KEY = 'chantier_v1';
-const APP_VERSION = '0.11.0';
+const APP_VERSION = '0.11.1';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -718,31 +718,32 @@ function renderTasks() {
     input.addEventListener('input', () => renameTask(task.id, input.value));
 
     const slot = li.querySelector('.task-ratio-slot');
+    const wrap = document.createElement('span');
+    wrap.className = 'task-ratio';
+    const ri = document.createElement('input');
+    ri.className = 'task-ratio-input';
+    ri.type = 'text';
+    ri.inputMode = 'decimal';
+    ri.placeholder = '0';
+    ri.value = task.ratio ? formatRatio(task.ratio) : '';
+    ri.addEventListener('input', () => {
+      task.ratio = parseRatio(ri.value);
+      save();
+      updateRatioSum();
+    });
+    wrap.appendChild(ri);
     if (excluded) {
       const badge = document.createElement('span');
       badge.className = 'task-hors-ratio';
       badge.textContent = 'hors ratio';
-      slot.replaceWith(badge);
+      wrap.appendChild(badge);
     } else {
-      const wrap = document.createElement('span');
-      wrap.className = 'task-ratio';
-      const ri = document.createElement('input');
-      ri.className = 'task-ratio-input';
-      ri.type = 'text';
-      ri.inputMode = 'decimal';
-      ri.placeholder = '0';
-      ri.value = task.ratio ? formatRatio(task.ratio) : '';
-      ri.addEventListener('input', () => {
-        task.ratio = parseRatio(ri.value);
-        save();
-        updateRatioSum();
-      });
       const unit = document.createElement('span');
       unit.className = 'task-ratio-unit';
       unit.textContent = 'h/m²';
-      wrap.append(ri, unit);
-      slot.replaceWith(wrap);
+      wrap.appendChild(unit);
     }
+    slot.replaceWith(wrap);
 
     li.querySelector('[data-action="exclude"]').addEventListener('click', () => toggleTaskExcluded(task.id));
     li.querySelector('[data-action="delete"]').addEventListener('click', () => deleteTask(task.id));
