@@ -5,7 +5,7 @@
    ========================================================= */
 
 const STORAGE_KEY = 'chantier_v1';
-const APP_VERSION = '0.11.1';
+const APP_VERSION = '0.11.2';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -1474,9 +1474,17 @@ function init() {
   });
   document.getElementById('resetbtn').addEventListener('click', resetAll);
 
-  // Service worker
+  // Service worker : enregistrement + rechargement auto à chaque mise à jour
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+      .then((reg) => { reg.update(); })
+      .catch(() => {});
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (refreshing) return;
+      refreshing = true;
+      window.location.reload();
+    });
   }
 }
 

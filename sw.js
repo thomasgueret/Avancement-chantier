@@ -1,5 +1,5 @@
-/* Service worker — cache simple pour fonctionnement hors-ligne */
-const CACHE = 'chantier-v13';
+/* Service worker — « réseau d'abord » en ligne, repli sur le cache hors-ligne */
+const CACHE = 'chantier-v14';
 const ASSETS = [
   './',
   './index.html',
@@ -26,18 +26,15 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+  // Réseau d'abord : on récupère toujours la dernière version quand on est
+  // en ligne, et on retombe sur le cache uniquement hors-ligne.
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      return (
-        cached ||
-        fetch(event.request)
-          .then((res) => {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(event.request, copy));
-            return res;
-          })
-          .catch(() => cached)
-      );
-    })
+    fetch(event.request)
+      .then((res) => {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put(event.request, copy));
+        return res;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
