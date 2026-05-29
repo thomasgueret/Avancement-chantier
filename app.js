@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.18';
+const APP_VERSION = '0.19';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -36,6 +36,7 @@ const state = {
   taskProgress: {},       // { [zoneId]: { [taskId]: percent 0..100 } }
   zoneUpdated: {},        // { [zoneId]: timestamp (ms) — dernière modif d'avancement }
   avancementZoneId: null, // zone affichée dans l'onglet Avancement
+  recapBuildingId: null,  // zone racine sélectionnée dans Avancement → Récapitulatif
   presences: {},          // { 'YYYY-MM-DD': [{ id, companyId, count }] }
   currentDate: todayISO(),
   chartHidden: {},        // { [companyId]: true } — entreprises masquées du graphique
@@ -60,6 +61,7 @@ function load() {
     if (data.taskProgress) state.taskProgress = data.taskProgress;
     if (data.zoneUpdated) state.zoneUpdated = data.zoneUpdated;
     if (data.avancementZoneId) state.avancementZoneId = data.avancementZoneId;
+    if (data.recapBuildingId) state.recapBuildingId = data.recapBuildingId;
     if (data.presences) state.presences = data.presences;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
@@ -84,6 +86,7 @@ function save() {
     taskProgress: state.taskProgress,
     zoneUpdated: state.zoneUpdated,
     avancementZoneId: state.avancementZoneId,
+    recapBuildingId: state.recapBuildingId,
     presences: state.presences,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange
@@ -1185,6 +1188,7 @@ function resolveAvancementZone() {
 }
 
 function renderAvancement() {
+  renderRecap();
   const pickers = document.getElementById('zonepickers');
   const fiche = document.getElementById('zonefiche');
   const empty = document.getElementById('avancementempty');
@@ -1357,6 +1361,140 @@ function buildProgressItem(zoneId, task) {
     renderProgressList();
   });
   return li;
+}
+
+// ---------- Avancement → Récapitulatif (par bâtiment) ----------
+// Bâtiment = zone racine (parentId === null).
+function getBuildings() {
+  return state.zones.filter(z => z.parentId === null);
+}
+// Toutes les zones descendantes (bâtiment inclus)
+function getDescendantZones(rootId) {
+  const out = [];
+  const walk = (pid) => {
+    out.push(pid);
+    for (const z of state.zones) if (z.parentId === pid) walk(z.id);
+  };
+  walk(rootId);
+  return out;
+}
+
+function renderRecap() {
+  const pickerEl = document.getElementById('recappicker');
+  const contentEl = document.getElementById('recapcontent');
+  const emptyEl = document.getElementById('recapempty');
+  if (!pickerEl || !contentEl || !emptyEl) return;
+  pickerEl.innerHTML = '';
+  contentEl.innerHTML = '';
+  emptyEl.classList.remove('show');
+
+  const buildings = getBuildings();
+  if (buildings.length === 0) {
+    emptyEl.innerHTML = '<p>Aucun bâtiment.</p><p class="hint">Crée au moins une zone racine dans <strong>Données → Zones</strong>.</p>';
+    emptyEl.classList.add('show');
+    return;
+  }
+
+  // Résolution du bâtiment sélectionné
+  let buildingId = state.recapBuildingId;
+  if (!buildings.some(b => b.id === buildingId)) buildingId = buildings[0].id;
+  if (buildingId !== state.recapBuildingId) {
+    state.recapBuildingId = buildingId;
+    save();
+  }
+
+  // Menu déroulant des bâtiments
+  const label = document.createElement('label');
+  label.className = 'recap-picker-label';
+  label.textContent = 'Bâtiment';
+  const select = document.createElement('select');
+  select.className = 'recap-picker-select';
+  select.setAttribute('aria-label', 'Bâtiment');
+  for (const b of buildings) {
+    const opt = document.createElement('option');
+    opt.value = b.id;
+    opt.textContent = b.name || '(zone sans nom)';
+    if (b.id === buildingId) opt.selected = true;
+    select.appendChild(opt);
+  }
+  select.addEventListener('change', () => {
+    state.recapBuildingId = select.value;
+    save();
+    renderRecap();
+  });
+  pickerEl.append(label, select);
+
+  // Agrégation : pour chaque (ouvrage, tâche), somme pondérée par la quantité
+  // d'ouvrage de chaque sous-zone. agg[setupId][taskId] = { num, den, count, sum }
+  const descendants = getDescendantZones(buildingId);
+  const agg = {};
+  const setupOrder = [];
+  for (const zid of descendants) {
+    for (const o of getZoneOuvrages(zid)) {
+      const sid = o.setup.id;
+      if (!agg[sid]) { agg[sid] = { setup: o.setup, tasks: {} }; setupOrder.push(sid); }
+      const q = o.quantity || 0;
+      for (const task of o.setup.tasks) {
+        const t = agg[sid].tasks[task.id] || (agg[sid].tasks[task.id] = { task, num: 0, den: 0, sum: 0, count: 0 });
+        const p = getProgress(zid, task.id);
+        t.num += p * q;
+        t.den += q;
+        t.sum += p;
+        t.count += 1;
+      }
+    }
+  }
+
+  if (setupOrder.length === 0) {
+    emptyEl.innerHTML = '<p>Ce bâtiment ne contient aucun ouvrage.</p><p class="hint">Affecte un ouvrage à au moins une de ses zones dans <strong>Données → Zones</strong>.</p>';
+    emptyEl.classList.add('show');
+    return;
+  }
+
+  // Construction du tableau
+  for (const sid of setupOrder) {
+    const group = agg[sid];
+    const section = document.createElement('div');
+    section.className = 'recap-section';
+
+    const header = document.createElement('div');
+    header.className = 'recap-section-header';
+    const name = document.createElement('span');
+    name.className = 'recap-section-name';
+    name.textContent = group.setup.name || '(ouvrage sans nom)';
+    header.appendChild(name);
+    section.appendChild(header);
+
+    const rows = document.createElement('ul');
+    rows.className = 'recap-rows';
+    for (const task of group.setup.tasks) {
+      const t = group.tasks[task.id];
+      if (!t) continue;
+      // % pondéré par la quantité ; si toutes les quantités sont 0, repli sur moyenne simple
+      const pct = t.den > 0 ? t.num / t.den : (t.count > 0 ? t.sum / t.count : 0);
+      const rounded = Math.round(pct * 10) / 10;
+      const isDone = rounded >= 100;
+      const li = document.createElement('li');
+      li.className = 'recap-row' + (isDone ? ' is-done' : '') + (task.excluded ? ' is-excluded' : '');
+      const nm = document.createElement('span');
+      nm.className = 'recap-task-name';
+      nm.textContent = task.name || '(tâche sans nom)';
+      const pc = document.createElement('span');
+      pc.className = 'recap-task-pct';
+      pc.textContent = `${formatPct(rounded)} %`;
+      li.append(nm);
+      if (task.excluded) {
+        const tag = document.createElement('span');
+        tag.className = 'recap-tag';
+        tag.textContent = 'hors ratio';
+        li.append(tag);
+      }
+      li.append(pc);
+      rows.appendChild(li);
+    }
+    section.appendChild(rows);
+    contentEl.appendChild(section);
+  }
 }
 
 // ---------- Sub-tabs ----------

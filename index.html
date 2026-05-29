@@ -146,19 +146,33 @@
 
     <!-- ============== ONGLET : AVANCEMENT ============== -->
     <section class="page" id="page-avancement">
-      <div class="zone-pickers" id="zonepickers"></div>
-
-      <div class="zone-fiche" id="zonefiche" hidden>
-        <div class="fiche-header">
-          <button class="fiche-arrow" id="ficheprev" aria-label="Zone précédente">‹</button>
-          <h2 class="fiche-title" id="fichetitle"></h2>
-          <button class="fiche-arrow" id="fichenext" aria-label="Zone suivante">›</button>
-        </div>
-        <p class="fiche-updated" id="ficheupdated" hidden></p>
-        <ul class="progress-list" id="progresslist"></ul>
+      <div class="segmented" role="tablist" data-group="avancement" style="--count:2;">
+        <span class="seg-indicator" aria-hidden="true"></span>
+        <button class="seg-btn active" data-group="avancement" data-sub="fiche" role="tab">Avancement</button>
+        <button class="seg-btn" data-group="avancement" data-sub="recap" role="tab">Récapitulatif</button>
       </div>
 
-      <div class="empty-state" id="avancementempty"></div>
+      <div class="sub-page active" id="sub-fiche" data-group="avancement">
+        <div class="zone-pickers" id="zonepickers"></div>
+
+        <div class="zone-fiche" id="zonefiche" hidden>
+          <div class="fiche-header">
+            <button class="fiche-arrow" id="ficheprev" aria-label="Zone précédente">‹</button>
+            <h2 class="fiche-title" id="fichetitle"></h2>
+            <button class="fiche-arrow" id="fichenext" aria-label="Zone suivante">›</button>
+          </div>
+          <p class="fiche-updated" id="ficheupdated" hidden></p>
+          <ul class="progress-list" id="progresslist"></ul>
+        </div>
+
+        <div class="empty-state" id="avancementempty"></div>
+      </div>
+
+      <div class="sub-page" id="sub-recap" data-group="avancement">
+        <div class="recap-picker" id="recappicker"></div>
+        <div class="recap-content" id="recapcontent"></div>
+        <div class="empty-state" id="recapempty"></div>
+      </div>
     </section>
   </main>
 
