@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.15';
+const APP_VERSION = '0.16';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -32,6 +32,7 @@ const state = {
   taskSetups: [],         // [{ id, name, tasks: [{ id, name }] }] — configurations de tâches
   currentSetupId: null,   // configuration en cours d'édition (onglet Données → Tâches)
   zoneSetup: {},          // { [zoneId]: setupId } — configuration affectée à chaque zone
+  zoneQty: {},            // { [zoneId]: { value, unit } } — quantité d'ouvrage par zone
   zoneCollapsed: {},      // { [zoneId]: true } — zones repliées dans l'arborescence
   taskProgress: {},       // { [zoneId]: { [taskId]: percent 0..100 } }
   zoneUpdated: {},        // { [zoneId]: timestamp (ms) — dernière modif d'avancement }
@@ -56,6 +57,7 @@ function load() {
     if (data.taskSetups) state.taskSetups = data.taskSetups;
     if (data.currentSetupId) state.currentSetupId = data.currentSetupId;
     if (data.zoneSetup) state.zoneSetup = data.zoneSetup;
+    if (data.zoneQty) state.zoneQty = data.zoneQty;
     if (data.zoneCollapsed) state.zoneCollapsed = data.zoneCollapsed;
     if (data.taskProgress) state.taskProgress = data.taskProgress;
     if (data.zoneUpdated) state.zoneUpdated = data.zoneUpdated;
@@ -77,6 +79,7 @@ function save() {
     taskSetups: state.taskSetups,
     currentSetupId: state.currentSetupId,
     zoneSetup: state.zoneSetup,
+    zoneQty: state.zoneQty,
     zoneCollapsed: state.zoneCollapsed,
     taskProgress: state.taskProgress,
     zoneUpdated: state.zoneUpdated,
@@ -456,15 +459,17 @@ function renderZones() {
       ? `<button class="zone-collapse" data-action="collapse" aria-label="${collapsed ? 'Déplier' : 'Replier'}">${collapsed ? '+' : '−'}</button>`
       : `<span class="zone-collapse-spacer"></span>`;
     row.innerHTML = `
-      ${collapseHtml}
-      <input class="zone-name-input" type="text" maxlength="80" placeholder="Nom de la zone" />
-      <span class="zone-task-slot"></span>
-      <button class="zone-add-sub" data-action="add-child" aria-label="Ajouter un sous-niveau">+</button>
-      <button class="icon-btn danger" data-action="delete" aria-label="Supprimer">
-        <svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z"/></svg>
-      </button>
+      <div class="zone-row-main">
+        ${collapseHtml}
+        <input class="zone-name-input" type="text" maxlength="80" placeholder="Nom de la zone" />
+        <span class="zone-task-slot"></span>
+        <button class="zone-add-sub" data-action="add-child" aria-label="Ajouter un sous-niveau">+</button>
+        <button class="icon-btn danger" data-action="delete" aria-label="Supprimer">
+          <svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z"/></svg>
+        </button>
+      </div>
     `;
-    const input = row.querySelector('input');
+    const input = row.querySelector('.zone-name-input');
     input.value = zone.name;
     input.addEventListener('input', () => renameZone(zone.id, input.value));
     if (hasChildren) {
@@ -473,6 +478,9 @@ function renderZones() {
     row.querySelector('.zone-task-slot').replaceWith(buildZoneTaskPicker(zone));
     row.querySelector('[data-action="add-child"]').addEventListener('click', () => addZone(zone.id));
     row.querySelector('[data-action="delete"]').addEventListener('click', () => deleteZone(zone.id));
+    if (state.zoneSetup[zone.id]) {
+      row.appendChild(buildZoneQtyLine(zone));
+    }
     tree.appendChild(row);
 
     if (!collapsed) {
@@ -527,6 +535,7 @@ function deleteZone(id) {
   state.zones = state.zones.filter(z => !toRemove.has(z.id));
   for (const zid of toRemove) {
     delete state.zoneSetup[zid];
+    delete state.zoneQty[zid];
     delete state.zoneCollapsed[zid];
     delete state.taskProgress[zid];
     delete state.zoneUpdated[zid];
@@ -560,10 +569,48 @@ function buildZoneTaskPicker(zone) {
   }
   select.addEventListener('change', () => {
     assignZoneSetup(zone.id, select.value);
-    picker.classList.toggle('active', !!select.value);
   });
   picker.appendChild(select);
   return picker;
+}
+
+// Ligne quantité d'ouvrage (champ + unité), affichée quand une config est affectée
+const ZONE_UNITS = ['u', 'Ens.', 'm²', 'ml'];
+function buildZoneQtyLine(zone) {
+  const data = state.zoneQty[zone.id] || { value: 0, unit: 'm²' };
+  const line = document.createElement('div');
+  line.className = 'zone-row-qty';
+
+  const qtyInput = document.createElement('input');
+  qtyInput.className = 'zone-qty-input';
+  qtyInput.type = 'text';
+  qtyInput.inputMode = 'decimal';
+  qtyInput.placeholder = "Quantité d'ouvrage";
+  qtyInput.value = data.value ? formatRatio(data.value) : '';
+  qtyInput.addEventListener('input', () => setZoneQty(zone.id, parseRatio(qtyInput.value), undefined));
+
+  const unitSelect = document.createElement('select');
+  unitSelect.className = 'zone-qty-unit';
+  unitSelect.setAttribute('aria-label', "Unité de la quantité d'ouvrage");
+  for (const u of ZONE_UNITS) {
+    const opt = document.createElement('option');
+    opt.value = u;
+    opt.textContent = u;
+    if (u === (data.unit || 'm²')) opt.selected = true;
+    unitSelect.appendChild(opt);
+  }
+  unitSelect.addEventListener('change', () => setZoneQty(zone.id, undefined, unitSelect.value));
+
+  line.append(qtyInput, unitSelect);
+  return line;
+}
+
+function setZoneQty(zoneId, value, unit) {
+  const cur = state.zoneQty[zoneId] || { value: 0, unit: 'm²' };
+  if (value !== undefined) cur.value = value;
+  if (unit !== undefined) cur.unit = unit;
+  state.zoneQty[zoneId] = cur;
+  save();
 }
 
 function assignZoneSetup(zoneId, setupId) {
@@ -571,6 +618,7 @@ function assignZoneSetup(zoneId, setupId) {
   else delete state.zoneSetup[zoneId];
   if (!setupId && state.avancementZoneId === zoneId) state.avancementZoneId = null;
   save();
+  renderZones();
   renderAvancement();
 }
 
@@ -1342,6 +1390,7 @@ function exportData() {
     zones: state.zones,
     taskSetups: state.taskSetups,
     zoneSetup: state.zoneSetup,
+    zoneQty: state.zoneQty,
     zoneCollapsed: state.zoneCollapsed,
     taskProgress: state.taskProgress,
     zoneUpdated: state.zoneUpdated,
@@ -1370,6 +1419,7 @@ function importData(file) {
       state.taskSetups = data.taskSetups || [];
       state.currentSetupId = data.currentSetupId || null;
       state.zoneSetup = data.zoneSetup || {};
+      state.zoneQty = data.zoneQty || {};
       state.zoneCollapsed = data.zoneCollapsed || {};
       state.taskProgress = data.taskProgress || {};
       state.zoneUpdated = data.zoneUpdated || {};
@@ -1396,6 +1446,7 @@ function resetAll() {
   state.taskSetups = [];
   state.currentSetupId = null;
   state.zoneSetup = {};
+  state.zoneQty = {};
   state.zoneCollapsed = {};
   state.taskProgress = {};
   state.zoneUpdated = {};

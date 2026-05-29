@@ -361,19 +361,50 @@ input, select { font: inherit; }
 /* ============ DONNÉES : ZONES (arborescence) ============ */
 .zone-tree { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
 .zone-row {
-  display: flex; align-items: center; gap: 6px;
+  display: flex; flex-direction: column;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 6px 6px 6px calc(12px + var(--depth, 0) * 20px);
   box-shadow: var(--shadow-sm);
-  min-height: 48px;
   position: relative;
+}
+.zone-row-main {
+  display: flex; align-items: center; gap: 6px;
+  min-height: 48px;
 }
 .zone-row[data-depth="0"] {
   background: var(--surface);
   border-color: var(--border-strong);
 }
+/* Ligne quantité d'ouvrage, alignée sous le nom (au-delà du carré plier) */
+.zone-row-qty {
+  display: flex; align-items: center; gap: 8px;
+  margin: 4px 0 4px 34px;
+}
+.zone-qty-input {
+  flex: 1; min-width: 0; max-width: 220px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 14px;
+  color: var(--text);
+}
+.zone-qty-input::placeholder { color: var(--text-3); font-style: italic; }
+.zone-qty-input:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+.zone-qty-unit {
+  flex-shrink: 0;
+  width: 72px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 6px;
+  padding: 8px 6px;
+  font-size: 14px; font-weight: 600;
+  color: var(--text);
+  -webkit-appearance: menulist;
+}
+.zone-qty-unit:focus { outline: none; border-color: var(--accent); }
 .zone-collapse {
   flex-shrink: 0;
   width: 28px; height: 28px;
