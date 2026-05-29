@@ -5,7 +5,7 @@
    ========================================================= */
 
 const STORAGE_KEY = 'chantier_v1';
-const APP_VERSION = '0.10.0';
+const APP_VERSION = '0.11.0';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -690,30 +690,86 @@ function renderTasks() {
   const tasks = setup ? setup.tasks : [];
   if (tasks.length === 0) {
     empty.classList.add('show');
+    updateRatioSum();
     return;
   }
   empty.classList.remove('show');
 
   for (const task of tasks) {
+    const excluded = !!task.excluded;
     const li = document.createElement('li');
-    li.className = 'task-item';
+    li.className = 'task-item' + (excluded ? ' excluded' : '');
     li.dataset.id = task.id;
     li.innerHTML = `
       <button class="drag-handle" aria-label="Maintenir et glisser pour réorganiser">
         <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4V6Zm0 5h16v2H4v-2Zm0 5h16v2H4v-2Z"/></svg>
       </button>
       <input class="task-name-input" type="text" maxlength="80" placeholder="Nom de la tâche" />
+      <span class="task-ratio-slot"></span>
+      <button class="task-exclude-btn${excluded ? ' active' : ''}" data-action="exclude" aria-label="Exclure du ratio de production">
+        <svg viewBox="0 0 24 24"><path d="M15 1H9v2h6V1Zm4.03 6.39 1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42A8.96 8.96 0 0 0 12 4a9 9 0 1 0 9 9c0-2.12-.74-4.07-1.97-5.61ZM12 20a7 7 0 1 1 0-14 7 7 0 0 1 0 14Zm-1-6h2V8h-2v6Z"/><path d="M3.5 2.1 21.9 20.5l-1.4 1.4L2.1 3.5 3.5 2.1Z"/></svg>
+      </button>
       <button class="icon-btn danger" data-action="delete" aria-label="Supprimer">
         <svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z"/></svg>
       </button>
     `;
-    const input = li.querySelector('input');
+    const input = li.querySelector('.task-name-input');
     input.value = task.name;
     input.addEventListener('input', () => renameTask(task.id, input.value));
+
+    const slot = li.querySelector('.task-ratio-slot');
+    if (excluded) {
+      const badge = document.createElement('span');
+      badge.className = 'task-hors-ratio';
+      badge.textContent = 'hors ratio';
+      slot.replaceWith(badge);
+    } else {
+      const wrap = document.createElement('span');
+      wrap.className = 'task-ratio';
+      const ri = document.createElement('input');
+      ri.className = 'task-ratio-input';
+      ri.type = 'text';
+      ri.inputMode = 'decimal';
+      ri.placeholder = '0';
+      ri.value = task.ratio ? formatRatio(task.ratio) : '';
+      ri.addEventListener('input', () => {
+        task.ratio = parseRatio(ri.value);
+        save();
+        updateRatioSum();
+      });
+      const unit = document.createElement('span');
+      unit.className = 'task-ratio-unit';
+      unit.textContent = 'h/m²';
+      wrap.append(ri, unit);
+      slot.replaceWith(wrap);
+    }
+
+    li.querySelector('[data-action="exclude"]').addEventListener('click', () => toggleTaskExcluded(task.id));
     li.querySelector('[data-action="delete"]').addEventListener('click', () => deleteTask(task.id));
     attachTaskDrag(li.querySelector('.drag-handle'), li);
     list.appendChild(li);
   }
+  updateRatioSum();
+}
+
+function updateRatioSum() {
+  const el = document.getElementById('ratiototal');
+  if (!el) return;
+  const setup = getCurrentSetup();
+  if (!setup || setup.tasks.length === 0) { el.hidden = true; return; }
+  el.hidden = false;
+  const sum = setup.tasks.filter(t => !t.excluded).reduce((s, t) => s + (t.ratio || 0), 0);
+  el.textContent = `Ratio de production total : ${formatRatio(sum)} h/m²`;
+}
+
+function toggleTaskExcluded(id) {
+  const setup = getCurrentSetup();
+  const t = setup && setup.tasks.find(t => t.id === id);
+  if (!t) return;
+  t.excluded = !t.excluded;
+  save();
+  renderTasks();
+  renderAvancement();
 }
 
 function addTask() {
@@ -903,13 +959,37 @@ function setProgress(zoneId, taskId, percent) {
   save();
 }
 
-// Moyenne des avancements des tâches de la configuration affectée à la zone (0..100)
+// Avancement global pondéré par le ratio de production des tâches (0..100)
+// Les tâches « hors ratio » (excluded) sont ignorées dans ce calcul.
 function getZoneProgress(zoneId) {
   const setup = getZoneSetup(zoneId);
-  if (!setup || setup.tasks.length === 0) return 0;
-  let sum = 0;
-  for (const task of setup.tasks) sum += getProgress(zoneId, task.id);
-  return Math.round(sum / setup.tasks.length);
+  if (!setup) return 0;
+  const tasks = setup.tasks.filter(t => !t.excluded);
+  if (tasks.length === 0) return 0;
+  const totalRatio = tasks.reduce((s, t) => s + (t.ratio || 0), 0);
+  let raw;
+  if (totalRatio > 0) {
+    let weighted = 0;
+    for (const t of tasks) weighted += (t.ratio || 0) * getProgress(zoneId, t.id);
+    raw = weighted / totalRatio;
+  } else {
+    // Aucun ratio renseigné → moyenne simple
+    let sum = 0;
+    for (const t of tasks) sum += getProgress(zoneId, t.id);
+    raw = sum / tasks.length;
+  }
+  return Math.round(raw * 10) / 10;
+}
+
+function formatPct(n) {
+  return n.toLocaleString('fr-FR', { maximumFractionDigits: 1 });
+}
+function formatRatio(n) {
+  return (n || 0).toLocaleString('fr-FR', { maximumFractionDigits: 3 });
+}
+function parseRatio(str) {
+  const n = parseFloat(String(str).replace(',', '.').replace(/\s/g, ''));
+  return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
 function formatUpdatedDate(ts) {
@@ -1036,7 +1116,7 @@ function renderFicheHeader() {
   nameSpan.textContent = zone.name || '(zone sans nom)';
   const pctSpan = document.createElement('span');
   pctSpan.className = 'fiche-pct';
-  pctSpan.textContent = `(${pct} %)`;
+  pctSpan.textContent = `(${formatPct(pct)} %)`;
   titleEl.append(nameSpan, ' ', pctSpan);
 
   const updatedEl = document.getElementById('ficheupdated');
@@ -1070,9 +1150,11 @@ function renderProgressList() {
     const percent = getProgress(zoneId, task.id);
     const isDone = percent >= 100;
     const li = document.createElement('li');
-    li.className = 'progress-item' + (isDone ? ' is-done' : '');
+    li.className = 'progress-item' + (isDone ? ' is-done' : '') + (task.excluded ? ' is-excluded' : '');
     li.innerHTML = `
-      <span class="progress-task-name"></span>
+      <div class="progress-info">
+        <span class="progress-task-name"></span>
+      </div>
       <div class="counter is-percent">
         <button class="counter-btn" data-action="dec" aria-label="−5 %">−</button>
         <span class="counter-value"></span>
@@ -1083,6 +1165,12 @@ function renderProgressList() {
       </button>
     `;
     li.querySelector('.progress-task-name').textContent = task.name || '(tâche sans nom)';
+    if (task.excluded) {
+      const tag = document.createElement('span');
+      tag.className = 'progress-tag';
+      tag.textContent = 'hors ratio';
+      li.querySelector('.progress-info').appendChild(tag);
+    }
     li.querySelector('.counter-value').textContent = `${percent} %`;
     const decBtn = li.querySelector('[data-action="dec"]');
     const incBtn = li.querySelector('[data-action="inc"]');
