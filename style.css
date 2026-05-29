@@ -393,18 +393,17 @@ input, select { font: inherit; }
 }
 .zone-qty-input::placeholder { color: var(--text-3); font-style: italic; }
 .zone-qty-input:focus { outline: none; border-color: var(--accent); background: var(--surface); }
-.zone-qty-unit {
+.zone-qty-unit-label {
   flex-shrink: 0;
-  width: 72px;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  border-radius: 6px;
-  padding: 8px 6px;
+  min-width: 36px;
+  text-align: center;
   font-size: 14px; font-weight: 600;
-  color: var(--text);
-  -webkit-appearance: menulist;
+  color: var(--text-2);
+  padding: 8px 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
 }
-.zone-qty-unit:focus { outline: none; border-color: var(--accent); }
 .zone-collapse {
   flex-shrink: 0;
   width: 28px; height: 28px;
@@ -503,6 +502,19 @@ input, select { font: inherit; }
   -webkit-appearance: menulist;
   min-height: 44px;
 }
+.setup-unit-select {
+  flex-shrink: 0;
+  width: 78px;
+  font-size: 14px; font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 10px 6px;
+  -webkit-appearance: menulist;
+  min-height: 44px;
+}
+.setup-unit-select:focus { outline: none; border-color: var(--accent); }
 .setup-select:focus { outline: none; border-color: var(--accent); }
 .setup-rename-input {
   flex: 1; min-width: 0;

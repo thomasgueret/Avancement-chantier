@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.16';
+const APP_VERSION = '0.17';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -133,11 +133,12 @@ function zoneIsTaskBearing(zoneId) {
 }
 
 // Migration : ancien modèle (liste unique state.tasks + booléen zoneHasTasks)
-// → nouveau modèle (configurations). Garantit toujours au moins une config.
+// → nouveau modèle (configurations). Garantit toujours au moins une config
+// et une unité par configuration ('m²' par défaut).
 function migrateSetups() {
   if (state.taskSetups.length === 0) {
     const setupId = uid();
-    state.taskSetups = [{ id: setupId, name: 'Configuration 1', tasks: state._legacyTasks || [] }];
+    state.taskSetups = [{ id: setupId, name: 'Configuration 1', unit: 'm²', tasks: state._legacyTasks || [] }];
     state.currentSetupId = setupId;
     if (state._legacyZoneHasTasks) {
       for (const zid of Object.keys(state._legacyZoneHasTasks)) {
@@ -150,6 +151,19 @@ function migrateSetups() {
   }
   delete state._legacyTasks;
   delete state._legacyZoneHasTasks;
+  // Garantit une unité par configuration (Phase A : l'unité passe au niveau
+  // de l'ouvrage). On reprend si possible l'unité d'une zone qui l'utilise.
+  for (const setup of state.taskSetups) {
+    if (setup.unit) continue;
+    let unit = null;
+    for (const [zid, sid] of Object.entries(state.zoneSetup)) {
+      if (sid === setup.id && state.zoneQty[zid]?.unit) {
+        unit = state.zoneQty[zid].unit;
+        break;
+      }
+    }
+    setup.unit = unit || 'm²';
+  }
 }
 
 function getCompany(id) {
@@ -589,19 +603,13 @@ function buildZoneQtyLine(zone) {
   qtyInput.value = data.value ? formatRatio(data.value) : '';
   qtyInput.addEventListener('input', () => setZoneQty(zone.id, parseRatio(qtyInput.value), undefined));
 
-  const unitSelect = document.createElement('select');
-  unitSelect.className = 'zone-qty-unit';
-  unitSelect.setAttribute('aria-label', "Unité de la quantité d'ouvrage");
-  for (const u of ZONE_UNITS) {
-    const opt = document.createElement('option');
-    opt.value = u;
-    opt.textContent = u;
-    if (u === (data.unit || 'm²')) opt.selected = true;
-    unitSelect.appendChild(opt);
-  }
-  unitSelect.addEventListener('change', () => setZoneQty(zone.id, undefined, unitSelect.value));
+  // Unité : lecture seule, héritée de la configuration affectée
+  const assignedSetup = getZoneSetup(zone.id);
+  const unitLabel = document.createElement('span');
+  unitLabel.className = 'zone-qty-unit-label';
+  unitLabel.textContent = (assignedSetup && assignedSetup.unit) || 'm²';
 
-  line.append(qtyInput, unitSelect);
+  line.append(qtyInput, unitLabel);
   return line;
 }
 
@@ -664,6 +672,28 @@ function renderSetupBar() {
   select.addEventListener('change', () => switchSetup(select.value));
   bar.appendChild(select);
 
+  // Sélecteur d'unité de l'ouvrage (Phase A : l'unité passe au niveau de
+  // l'ouvrage ; les ratios sont en h/<unité>, et les zones affichent cette
+  // unité en lecture seule)
+  const unitSelect = document.createElement('select');
+  unitSelect.className = 'setup-unit-select';
+  unitSelect.setAttribute('aria-label', 'Unité de l\'ouvrage');
+  for (const u of ZONE_UNITS) {
+    const opt = document.createElement('option');
+    opt.value = u;
+    opt.textContent = u;
+    if (u === setup.unit) opt.selected = true;
+    unitSelect.appendChild(opt);
+  }
+  unitSelect.addEventListener('change', () => {
+    setup.unit = unitSelect.value;
+    save();
+    renderTasks();
+    renderZones();
+    renderAvancement();
+  });
+  bar.appendChild(unitSelect);
+
   const mkBtn = (label, svg, danger) => {
     const b = document.createElement('button');
     b.className = 'setup-icon-btn' + (danger ? ' danger' : '');
@@ -695,7 +725,7 @@ function switchSetup(setupId) {
 }
 
 function addSetup() {
-  const setup = { id: uid(), name: `Configuration ${state.taskSetups.length + 1}`, tasks: [] };
+  const setup = { id: uid(), name: `Configuration ${state.taskSetups.length + 1}`, unit: 'm²', tasks: [] };
   state.taskSetups.push(setup);
   state.currentSetupId = setup.id;
   setupRenaming = true;
@@ -790,7 +820,7 @@ function renderTasks() {
     } else {
       const unit = document.createElement('span');
       unit.className = 'task-ratio-unit';
-      unit.textContent = 'h/m²';
+      unit.textContent = `h/${setup.unit || 'm²'}`;
       wrap.appendChild(unit);
     }
     slot.replaceWith(wrap);
@@ -810,7 +840,7 @@ function updateRatioSum() {
   if (!setup || setup.tasks.length === 0) { el.hidden = true; return; }
   el.hidden = false;
   const sum = setup.tasks.filter(t => !t.excluded).reduce((s, t) => s + (t.ratio || 0), 0);
-  el.textContent = `Ratio de production total : ${formatRatio(sum)} h/m²`;
+  el.textContent = `Ratio de production total : ${formatRatio(sum)} h/${setup.unit || 'm²'}`;
 }
 
 function toggleTaskExcluded(id) {
