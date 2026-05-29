@@ -5,7 +5,9 @@
    ========================================================= */
 
 const STORAGE_KEY = 'chantier_v1';
-const APP_VERSION = '0.11.2';
+// Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
+// dans sw.js — toujours bumper les deux ensemble.
+const APP_VERSION = '0.15';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
