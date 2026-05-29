@@ -5,7 +5,7 @@
    ========================================================= */
 
 const STORAGE_KEY = 'chantier_v1';
-const APP_VERSION = '0.9.0';
+const APP_VERSION = '0.9.1';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -29,6 +29,7 @@ const state = {
   zones: [],              // [{ id, name, parentId }] — arborescence à plat
   tasks: [],              // [{ id, name }] — liste ordonnée des tâches
   zoneHasTasks: {},       // { [zoneId]: true } — zones qui reçoivent les tâches
+  zoneCollapsed: {},      // { [zoneId]: true } — zones repliées dans l'arborescence
   taskProgress: {},       // { [zoneId]: { [taskId]: percent 0..100 } }
   zoneUpdated: {},        // { [zoneId]: timestamp (ms) — dernière modif d'avancement }
   avancementZoneId: null, // zone affichée dans l'onglet Avancement
@@ -48,6 +49,7 @@ function load() {
     if (data.zones) state.zones = data.zones;
     if (data.tasks) state.tasks = data.tasks;
     if (data.zoneHasTasks) state.zoneHasTasks = data.zoneHasTasks;
+    if (data.zoneCollapsed) state.zoneCollapsed = data.zoneCollapsed;
     if (data.taskProgress) state.taskProgress = data.taskProgress;
     if (data.zoneUpdated) state.zoneUpdated = data.zoneUpdated;
     if (data.avancementZoneId) state.avancementZoneId = data.avancementZoneId;
@@ -64,6 +66,7 @@ function save() {
     zones: state.zones,
     tasks: state.tasks,
     zoneHasTasks: state.zoneHasTasks,
+    zoneCollapsed: state.zoneCollapsed,
     taskProgress: state.taskProgress,
     zoneUpdated: state.zoneUpdated,
     avancementZoneId: state.avancementZoneId,
@@ -392,13 +395,20 @@ function renderZones() {
   empty.classList.remove('show');
 
   const renderNode = (zone, depth) => {
+    const children = getZoneChildren(zone.id);
+    const hasChildren = children.length > 0;
+    const collapsed = !!state.zoneCollapsed[zone.id];
+
     const row = document.createElement('div');
     row.className = 'zone-row';
     row.dataset.id = zone.id;
     row.dataset.depth = String(depth);
     row.style.setProperty('--depth', depth);
+    const collapseHtml = hasChildren
+      ? `<button class="zone-collapse" data-action="collapse" aria-label="${collapsed ? 'Déplier' : 'Replier'}">${collapsed ? '+' : '−'}</button>`
+      : `<span class="zone-collapse-spacer"></span>`;
     row.innerHTML = `
-      <span class="zone-depth-mark">${depth === 0 ? '' : '└'}</span>
+      ${collapseHtml}
       <input class="zone-name-input" type="text" maxlength="80" placeholder="Nom de la zone" />
       <button class="zone-task-toggle" data-action="toggle-task" aria-label="Affecter les tâches à cette zone">
         <svg viewBox="0 0 24 24"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm-7 0a1 1 0 1 1 0 2 1 1 0 0 1 0-2Zm-2 14-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8Z"/></svg>
@@ -411,6 +421,9 @@ function renderZones() {
     const input = row.querySelector('input');
     input.value = zone.name;
     input.addEventListener('input', () => renameZone(zone.id, input.value));
+    if (hasChildren) {
+      row.querySelector('[data-action="collapse"]').addEventListener('click', () => toggleCollapse(zone.id));
+    }
     const taskBtn = row.querySelector('[data-action="toggle-task"]');
     if (state.zoneHasTasks[zone.id]) taskBtn.classList.add('active');
     taskBtn.addEventListener('click', () => toggleZoneTasks(zone.id, taskBtn));
@@ -418,15 +431,26 @@ function renderZones() {
     row.querySelector('[data-action="delete"]').addEventListener('click', () => deleteZone(zone.id));
     tree.appendChild(row);
 
-    for (const child of getZoneChildren(zone.id)) renderNode(child, depth + 1);
+    if (!collapsed) {
+      for (const child of children) renderNode(child, depth + 1);
+    }
   };
 
   for (const root of getZoneChildren(null)) renderNode(root, 0);
 }
 
+function toggleCollapse(zoneId) {
+  if (state.zoneCollapsed[zoneId]) delete state.zoneCollapsed[zoneId];
+  else state.zoneCollapsed[zoneId] = true;
+  save();
+  renderZones();
+}
+
 function addZone(parentId) {
   const zone = { id: uid(), name: '', parentId: parentId || null };
   state.zones.push(zone);
+  // déplie le parent pour que la nouvelle sous-zone soit visible
+  if (parentId) delete state.zoneCollapsed[parentId];
   save();
   renderZones();
   // focus le champ de la nouvelle zone
@@ -459,6 +483,7 @@ function deleteZone(id) {
   state.zones = state.zones.filter(z => !toRemove.has(z.id));
   for (const zid of toRemove) {
     delete state.zoneHasTasks[zid];
+    delete state.zoneCollapsed[zid];
     delete state.taskProgress[zid];
     delete state.zoneUpdated[zid];
   }
@@ -1060,6 +1085,7 @@ function importData(file) {
       state.zones = data.zones || [];
       state.tasks = data.tasks || [];
       state.zoneHasTasks = data.zoneHasTasks || {};
+      state.zoneCollapsed = data.zoneCollapsed || {};
       state.taskProgress = data.taskProgress || {};
       state.zoneUpdated = data.zoneUpdated || {};
       state.avancementZoneId = null;
@@ -1080,6 +1106,7 @@ function resetAll() {
   state.zones = [];
   state.tasks = [];
   state.zoneHasTasks = {};
+  state.zoneCollapsed = {};
   state.taskProgress = {};
   state.zoneUpdated = {};
   state.avancementZoneId = null;

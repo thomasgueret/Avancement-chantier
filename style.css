@@ -374,13 +374,26 @@ input, select { font: inherit; }
   background: var(--surface);
   border-color: var(--border-strong);
 }
-.zone-depth-mark {
+.zone-collapse {
   flex-shrink: 0;
-  color: var(--text-3);
-  font-size: 12px;
-  font-weight: 600;
-  font-family: ui-monospace, Menlo, monospace;
-  min-width: 12px;
+  width: 28px; height: 28px;
+  border: 1.5px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text-2);
+  border-radius: 6px;
+  font-size: 18px; font-weight: 600; line-height: 1;
+  padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: all 0.12s;
+}
+.zone-collapse:active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.zone-collapse-spacer {
+  flex-shrink: 0;
+  width: 28px; height: 28px;
 }
 .zone-name-input {
   flex: 1; min-width: 0;
