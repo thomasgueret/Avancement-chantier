@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.17';
+const APP_VERSION = '0.18';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -29,10 +29,9 @@ const TOTAL_COLOR = '#1a1d23';
 const state = {
   companies: [],          // [{ id, name }]
   zones: [],              // [{ id, name, parentId }] — arborescence à plat
-  taskSetups: [],         // [{ id, name, tasks: [{ id, name }] }] — configurations de tâches
-  currentSetupId: null,   // configuration en cours d'édition (onglet Données → Tâches)
-  zoneSetup: {},          // { [zoneId]: setupId } — configuration affectée à chaque zone
-  zoneQty: {},            // { [zoneId]: { value, unit } } — quantité d'ouvrage par zone
+  taskSetups: [],         // [{ id, name, unit, tasks: [...] }] — ouvrages (configurations)
+  currentSetupId: null,   // ouvrage en cours d'édition (onglet Données → Tâches)
+  zoneOuvrages: {},       // { [zoneId]: [{ setupId, quantity }] } — ouvrages affectés à une zone, chacun avec sa quantité
   zoneCollapsed: {},      // { [zoneId]: true } — zones repliées dans l'arborescence
   taskProgress: {},       // { [zoneId]: { [taskId]: percent 0..100 } }
   zoneUpdated: {},        // { [zoneId]: timestamp (ms) — dernière modif d'avancement }
@@ -56,8 +55,7 @@ function load() {
     if (data.zones) state.zones = data.zones;
     if (data.taskSetups) state.taskSetups = data.taskSetups;
     if (data.currentSetupId) state.currentSetupId = data.currentSetupId;
-    if (data.zoneSetup) state.zoneSetup = data.zoneSetup;
-    if (data.zoneQty) state.zoneQty = data.zoneQty;
+    if (data.zoneOuvrages) state.zoneOuvrages = data.zoneOuvrages;
     if (data.zoneCollapsed) state.zoneCollapsed = data.zoneCollapsed;
     if (data.taskProgress) state.taskProgress = data.taskProgress;
     if (data.zoneUpdated) state.zoneUpdated = data.zoneUpdated;
@@ -68,6 +66,9 @@ function load() {
     // Champs hérités (ancien modèle à liste unique) → migrés ensuite
     if (data.tasks) state._legacyTasks = data.tasks;
     if (data.zoneHasTasks) state._legacyZoneHasTasks = data.zoneHasTasks;
+    // Champs hérités (Phase A : un ouvrage et une quantité par zone) → migrés
+    if (data.zoneSetup) state._legacyZoneSetup = data.zoneSetup;
+    if (data.zoneQty) state._legacyZoneQty = data.zoneQty;
   } catch (e) {
     console.warn('Lecture stockage impossible', e);
   }
@@ -78,8 +79,7 @@ function save() {
     zones: state.zones,
     taskSetups: state.taskSetups,
     currentSetupId: state.currentSetupId,
-    zoneSetup: state.zoneSetup,
-    zoneQty: state.zoneQty,
+    zoneOuvrages: state.zoneOuvrages,
     zoneCollapsed: state.zoneCollapsed,
     taskProgress: state.taskProgress,
     zoneUpdated: state.zoneUpdated,
@@ -124,12 +124,20 @@ function getCurrentSetup() {
 function getSetup(id) {
   return state.taskSetups.find(s => s.id === id) || null;
 }
+// Liste des ouvrages affectés à une zone, résolus en { setup, quantity }
+function getZoneOuvrages(zoneId) {
+  const list = state.zoneOuvrages[zoneId] || [];
+  return list
+    .map(o => ({ setup: getSetup(o.setupId), quantity: o.quantity || 0 }))
+    .filter(o => o.setup);
+}
+// Premier ouvrage (compat. pour le code qui n'a pas encore conscience du multi)
 function getZoneSetup(zoneId) {
-  const setupId = state.zoneSetup[zoneId];
-  return setupId ? getSetup(setupId) : null;
+  const list = getZoneOuvrages(zoneId);
+  return list.length > 0 ? list[0].setup : null;
 }
 function zoneIsTaskBearing(zoneId) {
-  return !!getZoneSetup(zoneId);
+  return getZoneOuvrages(zoneId).length > 0;
 }
 
 // Migration : ancien modèle (liste unique state.tasks + booléen zoneHasTasks)
@@ -141,29 +149,49 @@ function migrateSetups() {
     state.taskSetups = [{ id: setupId, name: 'Configuration 1', unit: 'm²', tasks: state._legacyTasks || [] }];
     state.currentSetupId = setupId;
     if (state._legacyZoneHasTasks) {
+      // Ancien modèle (v1) : on affecte ce premier ouvrage directement aux zones
+      // marquées, sans passer par le champ intermédiaire zoneSetup.
+      if (!state._legacyZoneSetup) state._legacyZoneSetup = {};
       for (const zid of Object.keys(state._legacyZoneHasTasks)) {
-        if (state._legacyZoneHasTasks[zid]) state.zoneSetup[zid] = setupId;
+        if (state._legacyZoneHasTasks[zid]) state._legacyZoneSetup[zid] = setupId;
       }
     }
   }
   if (!state.currentSetupId || !getSetup(state.currentSetupId)) {
     state.currentSetupId = state.taskSetups[0].id;
   }
-  delete state._legacyTasks;
-  delete state._legacyZoneHasTasks;
-  // Garantit une unité par configuration (Phase A : l'unité passe au niveau
-  // de l'ouvrage). On reprend si possible l'unité d'une zone qui l'utilise.
+  // Reprend si possible l'unité d'une zone héritée pour seeder setup.unit
   for (const setup of state.taskSetups) {
     if (setup.unit) continue;
     let unit = null;
-    for (const [zid, sid] of Object.entries(state.zoneSetup)) {
-      if (sid === setup.id && state.zoneQty[zid]?.unit) {
-        unit = state.zoneQty[zid].unit;
-        break;
+    if (state._legacyZoneSetup && state._legacyZoneQty) {
+      for (const [zid, sid] of Object.entries(state._legacyZoneSetup)) {
+        if (sid === setup.id && state._legacyZoneQty[zid]?.unit) {
+          unit = state._legacyZoneQty[zid].unit;
+          break;
+        }
       }
     }
     setup.unit = unit || 'm²';
   }
+  // Phase B : convertit l'ancien modèle « un ouvrage + une quantité par zone »
+  // en tableau d'ouvrages affectés à chaque zone.
+  if (state._legacyZoneSetup) {
+    for (const zid of Object.keys(state._legacyZoneSetup)) {
+      const sid = state._legacyZoneSetup[zid];
+      if (!sid || !getSetup(sid)) continue;
+      if (!state.zoneOuvrages[zid]) state.zoneOuvrages[zid] = [];
+      // Évite de dupliquer si déjà présent
+      if (!state.zoneOuvrages[zid].some(o => o.setupId === sid)) {
+        const qty = state._legacyZoneQty?.[zid]?.value || 0;
+        state.zoneOuvrages[zid].push({ setupId: sid, quantity: qty });
+      }
+    }
+  }
+  delete state._legacyTasks;
+  delete state._legacyZoneHasTasks;
+  delete state._legacyZoneSetup;
+  delete state._legacyZoneQty;
 }
 
 function getCompany(id) {
@@ -492,8 +520,9 @@ function renderZones() {
     row.querySelector('.zone-task-slot').replaceWith(buildZoneTaskPicker(zone));
     row.querySelector('[data-action="add-child"]').addEventListener('click', () => addZone(zone.id));
     row.querySelector('[data-action="delete"]').addEventListener('click', () => deleteZone(zone.id));
-    if (state.zoneSetup[zone.id]) {
-      row.appendChild(buildZoneQtyLine(zone));
+    // Liste des ouvrages affectés à la zone, chacun avec sa quantité
+    for (const ouvrage of getZoneOuvrages(zone.id)) {
+      row.appendChild(buildZoneOuvrageRow(zone, ouvrage));
     }
     tree.appendChild(row);
 
@@ -548,8 +577,7 @@ function deleteZone(id) {
   const toRemove = new Set([id, ...descendants]);
   state.zones = state.zones.filter(z => !toRemove.has(z.id));
   for (const zid of toRemove) {
-    delete state.zoneSetup[zid];
-    delete state.zoneQty[zid];
+    delete state.zoneOuvrages[zid];
     delete state.zoneCollapsed[zid];
     delete state.taskProgress[zid];
     delete state.zoneUpdated[zid];
@@ -560,74 +588,108 @@ function deleteZone(id) {
   renderAvancement();
 }
 
-// Picker (select natif iOS) pour affecter une configuration de tâches à une zone
+// Picker (select natif iOS) pour AJOUTER un ouvrage à une zone.
+// Le select ne liste que les ouvrages pas encore affectés à la zone.
+const ZONE_UNITS = ['u', 'Ens.', 'm²', 'ml'];
 function buildZoneTaskPicker(zone) {
-  const assignedId = state.zoneSetup[zone.id] || '';
+  const assigned = state.zoneOuvrages[zone.id] || [];
+  const assignedIds = new Set(assigned.map(o => o.setupId));
   const picker = document.createElement('span');
-  picker.className = 'zone-task-picker' + (assignedId ? ' active' : '');
+  picker.className = 'zone-task-picker' + (assigned.length > 0 ? ' active' : '');
   picker.innerHTML = '<svg class="zone-task-icon" viewBox="0 0 24 24"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm-7 0a1 1 0 1 1 0 2 1 1 0 0 1 0-2Zm-2 14-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8Z"/></svg>';
 
   const select = document.createElement('select');
   select.className = 'zone-task-select';
-  select.setAttribute('aria-label', 'Configuration de tâches de la zone');
-  const noneOpt = document.createElement('option');
-  noneOpt.value = '';
-  noneOpt.textContent = 'Aucune';
-  select.appendChild(noneOpt);
+  select.setAttribute('aria-label', 'Ajouter un ouvrage à la zone');
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Ajouter un ouvrage…';
+  select.appendChild(placeholder);
+  let available = 0;
   for (const s of state.taskSetups) {
+    if (assignedIds.has(s.id)) continue;
+    available++;
     const opt = document.createElement('option');
     opt.value = s.id;
     opt.textContent = s.name || '(sans nom)';
-    if (s.id === assignedId) opt.selected = true;
     select.appendChild(opt);
   }
+  if (available === 0) {
+    const none = document.createElement('option');
+    none.value = '';
+    none.disabled = true;
+    none.textContent = '(tous déjà affectés)';
+    select.appendChild(none);
+  }
   select.addEventListener('change', () => {
-    assignZoneSetup(zone.id, select.value);
+    const sid = select.value;
+    if (sid) addOuvrageToZone(zone.id, sid);
+    select.value = '';
   });
   picker.appendChild(select);
   return picker;
 }
 
-// Ligne quantité d'ouvrage (champ + unité), affichée quand une config est affectée
-const ZONE_UNITS = ['u', 'Ens.', 'm²', 'ml'];
-function buildZoneQtyLine(zone) {
-  const data = state.zoneQty[zone.id] || { value: 0, unit: 'm²' };
+// Une ligne par ouvrage affecté : nom de l'ouvrage + quantité + unité + bouton retirer
+function buildZoneOuvrageRow(zone, ouvrage) {
   const line = document.createElement('div');
-  line.className = 'zone-row-qty';
+  line.className = 'zone-row-ouvrage';
+
+  const name = document.createElement('span');
+  name.className = 'zone-ouvrage-name';
+  name.textContent = ouvrage.setup.name || '(sans nom)';
 
   const qtyInput = document.createElement('input');
   qtyInput.className = 'zone-qty-input';
   qtyInput.type = 'text';
   qtyInput.inputMode = 'decimal';
-  qtyInput.placeholder = "Quantité d'ouvrage";
-  qtyInput.value = data.value ? formatRatio(data.value) : '';
-  qtyInput.addEventListener('input', () => setZoneQty(zone.id, parseRatio(qtyInput.value), undefined));
+  qtyInput.placeholder = 'Quantité';
+  qtyInput.value = ouvrage.quantity ? formatRatio(ouvrage.quantity) : '';
+  qtyInput.addEventListener('input', () => setOuvrageQuantity(zone.id, ouvrage.setup.id, parseRatio(qtyInput.value)));
 
-  // Unité : lecture seule, héritée de la configuration affectée
-  const assignedSetup = getZoneSetup(zone.id);
   const unitLabel = document.createElement('span');
   unitLabel.className = 'zone-qty-unit-label';
-  unitLabel.textContent = (assignedSetup && assignedSetup.unit) || 'm²';
+  unitLabel.textContent = ouvrage.setup.unit || 'm²';
 
-  line.append(qtyInput, unitLabel);
+  const removeBtn = document.createElement('button');
+  removeBtn.className = 'icon-btn danger';
+  removeBtn.setAttribute('aria-label', 'Retirer cet ouvrage de la zone');
+  removeBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 13H5v-2h14v2Z"/></svg>';
+  removeBtn.addEventListener('click', () => removeOuvrageFromZone(zone.id, ouvrage.setup.id));
+
+  line.append(name, qtyInput, unitLabel, removeBtn);
   return line;
 }
 
-function setZoneQty(zoneId, value, unit) {
-  const cur = state.zoneQty[zoneId] || { value: 0, unit: 'm²' };
-  if (value !== undefined) cur.value = value;
-  if (unit !== undefined) cur.unit = unit;
-  state.zoneQty[zoneId] = cur;
-  save();
-}
-
-function assignZoneSetup(zoneId, setupId) {
-  if (setupId) state.zoneSetup[zoneId] = setupId;
-  else delete state.zoneSetup[zoneId];
-  if (!setupId && state.avancementZoneId === zoneId) state.avancementZoneId = null;
+function addOuvrageToZone(zoneId, setupId) {
+  if (!state.zoneOuvrages[zoneId]) state.zoneOuvrages[zoneId] = [];
+  if (state.zoneOuvrages[zoneId].some(o => o.setupId === setupId)) return;
+  state.zoneOuvrages[zoneId].push({ setupId, quantity: 0 });
   save();
   renderZones();
   renderAvancement();
+}
+
+function removeOuvrageFromZone(zoneId, setupId) {
+  const list = state.zoneOuvrages[zoneId];
+  if (!list) return;
+  state.zoneOuvrages[zoneId] = list.filter(o => o.setupId !== setupId);
+  if (state.zoneOuvrages[zoneId].length === 0) {
+    delete state.zoneOuvrages[zoneId];
+    if (state.avancementZoneId === zoneId) state.avancementZoneId = null;
+  }
+  save();
+  renderZones();
+  renderAvancement();
+}
+
+function setOuvrageQuantity(zoneId, setupId, quantity) {
+  const list = state.zoneOuvrages[zoneId];
+  if (!list) return;
+  const entry = list.find(o => o.setupId === setupId);
+  if (!entry) return;
+  entry.quantity = quantity;
+  save();
 }
 
 // ---------- Setups : barre de gestion des configurations ----------
@@ -740,8 +802,11 @@ function deleteSetup() {
   if (!setup) return;
   if (!confirm(`Supprimer la configuration « ${setup.name} » et ses tâches ?\nLes zones qui l'utilisaient n'auront plus de tâches affectées.`)) return;
   const taskIds = new Set(setup.tasks.map(t => t.id));
-  for (const zid of Object.keys(state.zoneSetup)) {
-    if (state.zoneSetup[zid] === setup.id) delete state.zoneSetup[zid];
+  // Retire cet ouvrage de toutes les zones qui l'utilisaient
+  for (const zid of Object.keys(state.zoneOuvrages)) {
+    const next = state.zoneOuvrages[zid].filter(o => o.setupId !== setup.id);
+    if (next.length === 0) delete state.zoneOuvrages[zid];
+    else state.zoneOuvrages[zid] = next;
   }
   for (const zid of Object.keys(state.taskProgress)) {
     for (const tid of Object.keys(state.taskProgress[zid])) {
@@ -1042,24 +1107,32 @@ function setProgress(zoneId, taskId, percent) {
 
 // Avancement global pondéré par le ratio de production des tâches (0..100)
 // Les tâches « hors ratio » (excluded) sont ignorées dans ce calcul.
-function getZoneProgress(zoneId) {
-  const setup = getZoneSetup(zoneId);
+// Avancement d'un ouvrage donné dans une zone (0..100, raw, non arrondi)
+function getOuvrageRawProgress(zoneId, setup) {
   if (!setup) return 0;
   const tasks = setup.tasks.filter(t => !t.excluded);
   if (tasks.length === 0) return 0;
   const totalRatio = tasks.reduce((s, t) => s + (t.ratio || 0), 0);
-  let raw;
   if (totalRatio > 0) {
     let weighted = 0;
     for (const t of tasks) weighted += (t.ratio || 0) * getProgress(zoneId, t.id);
-    raw = weighted / totalRatio;
-  } else {
-    // Aucun ratio renseigné → moyenne simple
-    let sum = 0;
-    for (const t of tasks) sum += getProgress(zoneId, t.id);
-    raw = sum / tasks.length;
+    return weighted / totalRatio;
   }
-  return Math.round(raw * 10) / 10;
+  let sum = 0;
+  for (const t of tasks) sum += getProgress(zoneId, t.id);
+  return sum / tasks.length;
+}
+function getOuvrageProgress(zoneId, setup) {
+  return Math.round(getOuvrageRawProgress(zoneId, setup) * 10) / 10;
+}
+// % global de la zone : moyenne simple des % par ouvrage
+// (placeholder en attendant la décision sur la pondération horaire)
+function getZoneProgress(zoneId) {
+  const ouvrages = getZoneOuvrages(zoneId);
+  if (ouvrages.length === 0) return 0;
+  let sum = 0;
+  for (const o of ouvrages) sum += getOuvrageRawProgress(zoneId, o.setup);
+  return Math.round((sum / ouvrages.length) * 10) / 10;
 }
 
 function formatPct(n) {
@@ -1217,55 +1290,73 @@ function renderProgressList() {
   const zoneId = state.avancementZoneId;
   if (!zoneId) return;
 
-  const setup = getZoneSetup(zoneId);
-  const tasks = setup ? setup.tasks : [];
-  if (tasks.length === 0) {
-    const li = document.createElement('li');
-    li.className = 'progress-empty';
-    li.textContent = 'Cette configuration ne contient aucune tâche.';
-    list.appendChild(li);
-    return;
-  }
+  const ouvrages = getZoneOuvrages(zoneId);
+  if (ouvrages.length === 0) return;
 
-  for (const task of tasks) {
-    const percent = getProgress(zoneId, task.id);
-    const isDone = percent >= 100;
-    const li = document.createElement('li');
-    li.className = 'progress-item' + (isDone ? ' is-done' : '') + (task.excluded ? ' is-excluded' : '');
-    li.innerHTML = `
-      <div class="progress-info">
-        <span class="progress-task-name"></span>
-      </div>
-      <div class="counter is-percent">
-        <button class="counter-btn" data-action="dec" aria-label="−5 %">−</button>
-        <span class="counter-value"></span>
-        <button class="counter-btn" data-action="inc" aria-label="+5 %">+</button>
-      </div>
-      <button class="progress-tick" data-action="tick" aria-label="Marquer terminé à 100 %">
-        <svg viewBox="0 0 24 24"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>
-      </button>
+  for (const { setup } of ouvrages) {
+    // En-tête de section : nom de l'ouvrage + % de l'ouvrage
+    const ouvragePct = getOuvrageProgress(zoneId, setup);
+    const header = document.createElement('li');
+    header.className = 'progress-section-header' + (ouvragePct >= 100 ? ' is-done' : '');
+    header.innerHTML = `
+      <span class="progress-section-name"></span>
+      <span class="progress-section-pct"></span>
     `;
-    li.querySelector('.progress-task-name').textContent = task.name || '(tâche sans nom)';
-    if (task.excluded) {
-      const tag = document.createElement('span');
-      tag.className = 'progress-tag';
-      tag.textContent = 'hors ratio';
-      li.querySelector('.progress-info').appendChild(tag);
+    header.querySelector('.progress-section-name').textContent = setup.name || '(ouvrage sans nom)';
+    header.querySelector('.progress-section-pct').textContent = `${formatPct(ouvragePct)} %`;
+    list.appendChild(header);
+
+    if (setup.tasks.length === 0) {
+      const empty = document.createElement('li');
+      empty.className = 'progress-empty';
+      empty.textContent = 'Cet ouvrage ne contient aucune tâche.';
+      list.appendChild(empty);
+      continue;
     }
-    li.querySelector('.counter-value').textContent = `${percent} %`;
-    const decBtn = li.querySelector('[data-action="dec"]');
-    const incBtn = li.querySelector('[data-action="inc"]');
-    if (percent <= 0) decBtn.disabled = true;
-    if (percent >= 100) incBtn.disabled = true;
-    decBtn.addEventListener('click', () => changeProgress(zoneId, task.id, -5));
-    incBtn.addEventListener('click', () => changeProgress(zoneId, task.id, +5));
-    li.querySelector('[data-action="tick"]').addEventListener('click', () => {
-      setProgress(zoneId, task.id, isDone ? 0 : 100);
-      renderFicheHeader();
-      renderProgressList();
-    });
-    list.appendChild(li);
+    for (const task of setup.tasks) {
+      list.appendChild(buildProgressItem(zoneId, task));
+    }
   }
+}
+
+function buildProgressItem(zoneId, task) {
+  const percent = getProgress(zoneId, task.id);
+  const isDone = percent >= 100;
+  const li = document.createElement('li');
+  li.className = 'progress-item' + (isDone ? ' is-done' : '') + (task.excluded ? ' is-excluded' : '');
+  li.innerHTML = `
+    <div class="progress-info">
+      <span class="progress-task-name"></span>
+    </div>
+    <div class="counter is-percent">
+      <button class="counter-btn" data-action="dec" aria-label="−5 %">−</button>
+      <span class="counter-value"></span>
+      <button class="counter-btn" data-action="inc" aria-label="+5 %">+</button>
+    </div>
+    <button class="progress-tick" data-action="tick" aria-label="Marquer terminé à 100 %">
+      <svg viewBox="0 0 24 24"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>
+    </button>
+  `;
+  li.querySelector('.progress-task-name').textContent = task.name || '(tâche sans nom)';
+  if (task.excluded) {
+    const tag = document.createElement('span');
+    tag.className = 'progress-tag';
+    tag.textContent = 'hors ratio';
+    li.querySelector('.progress-info').appendChild(tag);
+  }
+  li.querySelector('.counter-value').textContent = `${percent} %`;
+  const decBtn = li.querySelector('[data-action="dec"]');
+  const incBtn = li.querySelector('[data-action="inc"]');
+  if (percent <= 0) decBtn.disabled = true;
+  if (percent >= 100) incBtn.disabled = true;
+  decBtn.addEventListener('click', () => changeProgress(zoneId, task.id, -5));
+  incBtn.addEventListener('click', () => changeProgress(zoneId, task.id, +5));
+  li.querySelector('[data-action="tick"]').addEventListener('click', () => {
+    setProgress(zoneId, task.id, isDone ? 0 : 100);
+    renderFicheHeader();
+    renderProgressList();
+  });
+  return li;
 }
 
 // ---------- Sub-tabs ----------
@@ -1419,8 +1510,7 @@ function exportData() {
     companies: state.companies,
     zones: state.zones,
     taskSetups: state.taskSetups,
-    zoneSetup: state.zoneSetup,
-    zoneQty: state.zoneQty,
+    zoneOuvrages: state.zoneOuvrages,
     zoneCollapsed: state.zoneCollapsed,
     taskProgress: state.taskProgress,
     zoneUpdated: state.zoneUpdated,
@@ -1448,8 +1538,10 @@ function importData(file) {
       state.zones = data.zones || [];
       state.taskSetups = data.taskSetups || [];
       state.currentSetupId = data.currentSetupId || null;
-      state.zoneSetup = data.zoneSetup || {};
-      state.zoneQty = data.zoneQty || {};
+      state.zoneOuvrages = data.zoneOuvrages || {};
+      // Compat. anciens exports (un ouvrage / qty séparés par zone)
+      state._legacyZoneSetup = data.zoneSetup;
+      state._legacyZoneQty = data.zoneQty;
       state.zoneCollapsed = data.zoneCollapsed || {};
       state.taskProgress = data.taskProgress || {};
       state.zoneUpdated = data.zoneUpdated || {};
@@ -1475,8 +1567,7 @@ function resetAll() {
   state.zones = [];
   state.taskSetups = [];
   state.currentSetupId = null;
-  state.zoneSetup = {};
-  state.zoneQty = {};
+  state.zoneOuvrages = {};
   state.zoneCollapsed = {};
   state.taskProgress = {};
   state.zoneUpdated = {};
