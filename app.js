@@ -5,7 +5,7 @@
    ========================================================= */
 
 const STORAGE_KEY = 'chantier_v1';
-const APP_VERSION = '0.9.1';
+const APP_VERSION = '0.10.0';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -27,8 +27,9 @@ const TOTAL_COLOR = '#1a1d23';
 const state = {
   companies: [],          // [{ id, name }]
   zones: [],              // [{ id, name, parentId }] — arborescence à plat
-  tasks: [],              // [{ id, name }] — liste ordonnée des tâches
-  zoneHasTasks: {},       // { [zoneId]: true } — zones qui reçoivent les tâches
+  taskSetups: [],         // [{ id, name, tasks: [{ id, name }] }] — configurations de tâches
+  currentSetupId: null,   // configuration en cours d'édition (onglet Données → Tâches)
+  zoneSetup: {},          // { [zoneId]: setupId } — configuration affectée à chaque zone
   zoneCollapsed: {},      // { [zoneId]: true } — zones repliées dans l'arborescence
   taskProgress: {},       // { [zoneId]: { [taskId]: percent 0..100 } }
   zoneUpdated: {},        // { [zoneId]: timestamp (ms) — dernière modif d'avancement }
@@ -39,6 +40,9 @@ const state = {
   chartRange: 30          // 7 | 30 | 'all'
 };
 
+// État transitoire (non persisté)
+let setupRenaming = false;
+
 // ---------- Persistence ----------
 function load() {
   try {
@@ -47,8 +51,9 @@ function load() {
     const data = JSON.parse(raw);
     if (data.companies) state.companies = data.companies;
     if (data.zones) state.zones = data.zones;
-    if (data.tasks) state.tasks = data.tasks;
-    if (data.zoneHasTasks) state.zoneHasTasks = data.zoneHasTasks;
+    if (data.taskSetups) state.taskSetups = data.taskSetups;
+    if (data.currentSetupId) state.currentSetupId = data.currentSetupId;
+    if (data.zoneSetup) state.zoneSetup = data.zoneSetup;
     if (data.zoneCollapsed) state.zoneCollapsed = data.zoneCollapsed;
     if (data.taskProgress) state.taskProgress = data.taskProgress;
     if (data.zoneUpdated) state.zoneUpdated = data.zoneUpdated;
@@ -56,6 +61,9 @@ function load() {
     if (data.presences) state.presences = data.presences;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
+    // Champs hérités (ancien modèle à liste unique) → migrés ensuite
+    if (data.tasks) state._legacyTasks = data.tasks;
+    if (data.zoneHasTasks) state._legacyZoneHasTasks = data.zoneHasTasks;
   } catch (e) {
     console.warn('Lecture stockage impossible', e);
   }
@@ -64,8 +72,9 @@ function save() {
   const data = {
     companies: state.companies,
     zones: state.zones,
-    tasks: state.tasks,
-    zoneHasTasks: state.zoneHasTasks,
+    taskSetups: state.taskSetups,
+    currentSetupId: state.currentSetupId,
+    zoneSetup: state.zoneSetup,
     zoneCollapsed: state.zoneCollapsed,
     taskProgress: state.taskProgress,
     zoneUpdated: state.zoneUpdated,
@@ -102,6 +111,42 @@ function formatDateFR(iso) {
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
+
+// ---------- Setups (configurations de tâches) ----------
+function getCurrentSetup() {
+  return state.taskSetups.find(s => s.id === state.currentSetupId) || state.taskSetups[0] || null;
+}
+function getSetup(id) {
+  return state.taskSetups.find(s => s.id === id) || null;
+}
+function getZoneSetup(zoneId) {
+  const setupId = state.zoneSetup[zoneId];
+  return setupId ? getSetup(setupId) : null;
+}
+function zoneIsTaskBearing(zoneId) {
+  return !!getZoneSetup(zoneId);
+}
+
+// Migration : ancien modèle (liste unique state.tasks + booléen zoneHasTasks)
+// → nouveau modèle (configurations). Garantit toujours au moins une config.
+function migrateSetups() {
+  if (state.taskSetups.length === 0) {
+    const setupId = uid();
+    state.taskSetups = [{ id: setupId, name: 'Configuration 1', tasks: state._legacyTasks || [] }];
+    state.currentSetupId = setupId;
+    if (state._legacyZoneHasTasks) {
+      for (const zid of Object.keys(state._legacyZoneHasTasks)) {
+        if (state._legacyZoneHasTasks[zid]) state.zoneSetup[zid] = setupId;
+      }
+    }
+  }
+  if (!state.currentSetupId || !getSetup(state.currentSetupId)) {
+    state.currentSetupId = state.taskSetups[0].id;
+  }
+  delete state._legacyTasks;
+  delete state._legacyZoneHasTasks;
+}
+
 function getCompany(id) {
   return state.companies.find(c => c.id === id);
 }
@@ -126,6 +171,7 @@ function renderAll() {
   renderEntries();
   renderCompanies();
   renderZones();
+  renderSetupBar();
   renderTasks();
   renderChart();
   renderLegend();
@@ -410,9 +456,7 @@ function renderZones() {
     row.innerHTML = `
       ${collapseHtml}
       <input class="zone-name-input" type="text" maxlength="80" placeholder="Nom de la zone" />
-      <button class="zone-task-toggle" data-action="toggle-task" aria-label="Affecter les tâches à cette zone">
-        <svg viewBox="0 0 24 24"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm-7 0a1 1 0 1 1 0 2 1 1 0 0 1 0-2Zm-2 14-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8Z"/></svg>
-      </button>
+      <span class="zone-task-slot"></span>
       <button class="zone-add-sub" data-action="add-child" aria-label="Ajouter un sous-niveau">+</button>
       <button class="icon-btn danger" data-action="delete" aria-label="Supprimer">
         <svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z"/></svg>
@@ -424,9 +468,7 @@ function renderZones() {
     if (hasChildren) {
       row.querySelector('[data-action="collapse"]').addEventListener('click', () => toggleCollapse(zone.id));
     }
-    const taskBtn = row.querySelector('[data-action="toggle-task"]');
-    if (state.zoneHasTasks[zone.id]) taskBtn.classList.add('active');
-    taskBtn.addEventListener('click', () => toggleZoneTasks(zone.id, taskBtn));
+    row.querySelector('.zone-task-slot').replaceWith(buildZoneTaskPicker(zone));
     row.querySelector('[data-action="add-child"]').addEventListener('click', () => addZone(zone.id));
     row.querySelector('[data-action="delete"]').addEventListener('click', () => deleteZone(zone.id));
     tree.appendChild(row);
@@ -482,7 +524,7 @@ function deleteZone(id) {
   const toRemove = new Set([id, ...descendants]);
   state.zones = state.zones.filter(z => !toRemove.has(z.id));
   for (const zid of toRemove) {
-    delete state.zoneHasTasks[zid];
+    delete state.zoneSetup[zid];
     delete state.zoneCollapsed[zid];
     delete state.taskProgress[zid];
     delete state.zoneUpdated[zid];
@@ -493,32 +535,166 @@ function deleteZone(id) {
   renderAvancement();
 }
 
-function toggleZoneTasks(zoneId, btnEl) {
-  if (state.zoneHasTasks[zoneId]) delete state.zoneHasTasks[zoneId];
-  else state.zoneHasTasks[zoneId] = true;
-  // Si on retire le marqueur de la zone actuellement affichée, on invalide
-  if (!state.zoneHasTasks[zoneId] && state.avancementZoneId === zoneId) {
-    state.avancementZoneId = null;
+// Picker (select natif iOS) pour affecter une configuration de tâches à une zone
+function buildZoneTaskPicker(zone) {
+  const assignedId = state.zoneSetup[zone.id] || '';
+  const picker = document.createElement('span');
+  picker.className = 'zone-task-picker' + (assignedId ? ' active' : '');
+  picker.innerHTML = '<svg class="zone-task-icon" viewBox="0 0 24 24"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm-7 0a1 1 0 1 1 0 2 1 1 0 0 1 0-2Zm-2 14-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8Z"/></svg>';
+
+  const select = document.createElement('select');
+  select.className = 'zone-task-select';
+  select.setAttribute('aria-label', 'Configuration de tâches de la zone');
+  const noneOpt = document.createElement('option');
+  noneOpt.value = '';
+  noneOpt.textContent = 'Aucune';
+  select.appendChild(noneOpt);
+  for (const s of state.taskSetups) {
+    const opt = document.createElement('option');
+    opt.value = s.id;
+    opt.textContent = s.name || '(sans nom)';
+    if (s.id === assignedId) opt.selected = true;
+    select.appendChild(opt);
   }
+  select.addEventListener('change', () => {
+    assignZoneSetup(zone.id, select.value);
+    picker.classList.toggle('active', !!select.value);
+  });
+  picker.appendChild(select);
+  return picker;
+}
+
+function assignZoneSetup(zoneId, setupId) {
+  if (setupId) state.zoneSetup[zoneId] = setupId;
+  else delete state.zoneSetup[zoneId];
+  if (!setupId && state.avancementZoneId === zoneId) state.avancementZoneId = null;
   save();
-  if (btnEl) btnEl.classList.toggle('active', !!state.zoneHasTasks[zoneId]);
   renderAvancement();
 }
 
-// ---------- Tasks (tâches du chantier) ----------
+// ---------- Setups : barre de gestion des configurations ----------
+function renderSetupBar() {
+  const bar = document.getElementById('setupbar');
+  if (!bar) return;
+  bar.innerHTML = '';
+  const setup = getCurrentSetup();
+  if (!setup) return;
+
+  if (setupRenaming) {
+    const input = document.createElement('input');
+    input.className = 'setup-rename-input';
+    input.maxLength = 40;
+    input.value = setup.name;
+    input.placeholder = 'Nom de la configuration';
+    bar.appendChild(input);
+    requestAnimationFrame(() => { input.focus(); input.select(); });
+    const commit = () => {
+      if (!setupRenaming) return;
+      setupRenaming = false;
+      const name = input.value.trim();
+      if (name) { setup.name = name; save(); }
+      renderSetupBar();
+      renderAvancement();
+    };
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') input.blur(); });
+    return;
+  }
+
+  const select = document.createElement('select');
+  select.className = 'setup-select';
+  select.setAttribute('aria-label', 'Configuration de tâches');
+  for (const s of state.taskSetups) {
+    const opt = document.createElement('option');
+    opt.value = s.id;
+    opt.textContent = s.name || '(sans nom)';
+    if (s.id === state.currentSetupId) opt.selected = true;
+    select.appendChild(opt);
+  }
+  select.addEventListener('change', () => switchSetup(select.value));
+  bar.appendChild(select);
+
+  const mkBtn = (label, svg, danger) => {
+    const b = document.createElement('button');
+    b.className = 'setup-icon-btn' + (danger ? ' danger' : '');
+    b.setAttribute('aria-label', label);
+    b.innerHTML = svg;
+    bar.appendChild(b);
+    return b;
+  };
+  mkBtn('Renommer la configuration',
+    '<svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83Z"/></svg>'
+  ).addEventListener('click', () => { setupRenaming = true; renderSetupBar(); });
+  mkBtn('Nouvelle configuration',
+    '<svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>'
+  ).addEventListener('click', addSetup);
+  const delBtn = mkBtn('Supprimer la configuration',
+    '<svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z"/></svg>',
+    true
+  );
+  if (state.taskSetups.length <= 1) delBtn.disabled = true;
+  delBtn.addEventListener('click', deleteSetup);
+}
+
+function switchSetup(setupId) {
+  if (!getSetup(setupId)) return;
+  state.currentSetupId = setupId;
+  save();
+  renderSetupBar();
+  renderTasks();
+}
+
+function addSetup() {
+  const setup = { id: uid(), name: `Configuration ${state.taskSetups.length + 1}`, tasks: [] };
+  state.taskSetups.push(setup);
+  state.currentSetupId = setup.id;
+  setupRenaming = true;
+  save();
+  renderSetupBar();
+  renderTasks();
+}
+
+function deleteSetup() {
+  if (state.taskSetups.length <= 1) return;
+  const setup = getCurrentSetup();
+  if (!setup) return;
+  if (!confirm(`Supprimer la configuration « ${setup.name} » et ses tâches ?\nLes zones qui l'utilisaient n'auront plus de tâches affectées.`)) return;
+  const taskIds = new Set(setup.tasks.map(t => t.id));
+  for (const zid of Object.keys(state.zoneSetup)) {
+    if (state.zoneSetup[zid] === setup.id) delete state.zoneSetup[zid];
+  }
+  for (const zid of Object.keys(state.taskProgress)) {
+    for (const tid of Object.keys(state.taskProgress[zid])) {
+      if (taskIds.has(tid)) delete state.taskProgress[zid][tid];
+    }
+    if (Object.keys(state.taskProgress[zid]).length === 0) delete state.taskProgress[zid];
+  }
+  state.taskSetups = state.taskSetups.filter(s => s.id !== setup.id);
+  state.currentSetupId = state.taskSetups[0].id;
+  if (state.avancementZoneId && !zoneIsTaskBearing(state.avancementZoneId)) state.avancementZoneId = null;
+  save();
+  renderSetupBar();
+  renderTasks();
+  renderZones();
+  renderAvancement();
+}
+
+// ---------- Tasks (tâches d'une configuration) ----------
 function renderTasks() {
   const list = document.getElementById('tasklist');
   const empty = document.getElementById('taskempty');
   if (!list || !empty) return;
   list.innerHTML = '';
 
-  if (state.tasks.length === 0) {
+  const setup = getCurrentSetup();
+  const tasks = setup ? setup.tasks : [];
+  if (tasks.length === 0) {
     empty.classList.add('show');
     return;
   }
   empty.classList.remove('show');
 
-  for (const task of state.tasks) {
+  for (const task of tasks) {
     const li = document.createElement('li');
     li.className = 'task-item';
     li.dataset.id = task.id;
@@ -541,8 +717,10 @@ function renderTasks() {
 }
 
 function addTask() {
+  const setup = getCurrentSetup();
+  if (!setup) return;
   const task = { id: uid(), name: '' };
-  state.tasks.push(task);
+  setup.tasks.push(task);
   save();
   renderTasks();
   const input = document.querySelector(`.task-item[data-id="${task.id}"] input`);
@@ -553,18 +731,21 @@ function addTask() {
 }
 
 function renameTask(id, name) {
-  const t = state.tasks.find(t => t.id === id);
+  const setup = getCurrentSetup();
+  const t = setup && setup.tasks.find(t => t.id === id);
   if (!t) return;
   t.name = name;
   save();
 }
 
 function deleteTask(id) {
-  const t = state.tasks.find(t => t.id === id);
+  const setup = getCurrentSetup();
+  if (!setup) return;
+  const t = setup.tasks.find(t => t.id === id);
   if (!t) return;
   const label = t.name || 'cette tâche';
   if (!confirm(`Supprimer la tâche « ${label} » ?`)) return;
-  state.tasks = state.tasks.filter(t => t.id !== id);
+  setup.tasks = setup.tasks.filter(t => t.id !== id);
   // Nettoyage des avancements liés à cette tâche
   for (const zoneId of Object.keys(state.taskProgress)) {
     delete state.taskProgress[zoneId][id];
@@ -644,9 +825,12 @@ function attachTaskDrag(handle, itemEl) {
       document.removeEventListener('pointercancel', onUp);
 
       if (dragMode && currentIdx !== startIdx) {
-        const [moved] = state.tasks.splice(startIdx, 1);
-        state.tasks.splice(currentIdx, 0, moved);
-        save();
+        const setup = getCurrentSetup();
+        if (setup) {
+          const [moved] = setup.tasks.splice(startIdx, 1);
+          setup.tasks.splice(currentIdx, 0, moved);
+          save();
+        }
       }
       items.forEach(el => { el.style.transform = ''; });
       itemEl.classList.remove('dragging');
@@ -679,7 +863,7 @@ function getTaskZonesInOrder() {
   const result = [];
   const walk = (parentId) => {
     for (const z of state.zones.filter(z => z.parentId === parentId)) {
-      if (state.zoneHasTasks[z.id]) result.push(z);
+      if (zoneIsTaskBearing(z.id)) result.push(z);
       walk(z.id);
     }
   };
@@ -692,7 +876,7 @@ function drillDown(zoneId) {
   const seen = new Set();
   while (current && !seen.has(current)) {
     seen.add(current);
-    if (state.zoneHasTasks[current]) return current;
+    if (zoneIsTaskBearing(current)) return current;
     const children = state.zones.filter(z => z.parentId === current);
     if (children.length === 0) return current;
     current = children[0].id;
@@ -719,12 +903,13 @@ function setProgress(zoneId, taskId, percent) {
   save();
 }
 
-// Moyenne des avancements des tâches de la zone (0..100)
+// Moyenne des avancements des tâches de la configuration affectée à la zone (0..100)
 function getZoneProgress(zoneId) {
-  if (state.tasks.length === 0) return 0;
+  const setup = getZoneSetup(zoneId);
+  if (!setup || setup.tasks.length === 0) return 0;
   let sum = 0;
-  for (const task of state.tasks) sum += getProgress(zoneId, task.id);
-  return Math.round(sum / state.tasks.length);
+  for (const task of setup.tasks) sum += getProgress(zoneId, task.id);
+  return Math.round(sum / setup.tasks.length);
 }
 
 function formatUpdatedDate(ts) {
@@ -780,18 +965,11 @@ function renderAvancement() {
     empty.classList.add('show');
     return;
   }
-  // Cas 2 : pas de tâches définies
-  if (state.tasks.length === 0) {
-    fiche.hidden = true;
-    empty.innerHTML = '<p>Aucune tâche définie.</p><p class="hint">Définissez vos tâches dans <strong>Données → Tâches</strong>.</p>';
-    empty.classList.add('show');
-    return;
-  }
-  // Cas 3 : aucune zone marquée comme recevant les tâches
+  // Cas 2 : aucune zone n'a de configuration de tâches affectée
   const taskZones = getTaskZonesInOrder();
   if (taskZones.length === 0) {
     fiche.hidden = true;
-    empty.innerHTML = '<p>Aucune zone n\'est marquée pour recevoir les tâches.</p><p class="hint">Dans <strong>Données → Zones</strong>, activez le bouton « tâche » sur les zones où vous voulez suivre l\'avancement.</p>';
+    empty.innerHTML = '<p>Aucune zone n\'a de configuration de tâches.</p><p class="hint">Dans <strong>Données → Zones</strong>, touchez l\'icône tâche d\'une zone et choisissez une configuration.</p>';
     empty.classList.add('show');
     return;
   }
@@ -849,13 +1027,16 @@ function renderFicheHeader() {
   const zone = state.zones.find(z => z.id === state.avancementZoneId);
   if (!zone) return;
 
+  const pct = getZoneProgress(zone.id);
+  document.querySelector('.fiche-header').classList.toggle('is-complete', pct >= 100);
+
   const titleEl = document.getElementById('fichetitle');
   titleEl.textContent = '';
   const nameSpan = document.createElement('span');
   nameSpan.textContent = zone.name || '(zone sans nom)';
   const pctSpan = document.createElement('span');
   pctSpan.className = 'fiche-pct';
-  pctSpan.textContent = `(${getZoneProgress(zone.id)} %)`;
+  pctSpan.textContent = `(${pct} %)`;
   titleEl.append(nameSpan, ' ', pctSpan);
 
   const updatedEl = document.getElementById('ficheupdated');
@@ -875,7 +1056,17 @@ function renderProgressList() {
   const zoneId = state.avancementZoneId;
   if (!zoneId) return;
 
-  for (const task of state.tasks) {
+  const setup = getZoneSetup(zoneId);
+  const tasks = setup ? setup.tasks : [];
+  if (tasks.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'progress-empty';
+    li.textContent = 'Cette configuration ne contient aucune tâche.';
+    list.appendChild(li);
+    return;
+  }
+
+  for (const task of tasks) {
     const percent = getProgress(zoneId, task.id);
     const isDone = percent >= 100;
     const li = document.createElement('li');
@@ -1058,9 +1249,11 @@ function exportData() {
   const data = {
     companies: state.companies,
     zones: state.zones,
-    tasks: state.tasks,
-    zoneHasTasks: state.zoneHasTasks,
+    taskSetups: state.taskSetups,
+    zoneSetup: state.zoneSetup,
+    zoneCollapsed: state.zoneCollapsed,
     taskProgress: state.taskProgress,
+    zoneUpdated: state.zoneUpdated,
     presences: state.presences,
     exportedAt: new Date().toISOString()
   };
@@ -1083,13 +1276,18 @@ function importData(file) {
       if (!confirm('Importer ce fichier remplacera vos données actuelles. Continuer ?')) return;
       state.companies = data.companies;
       state.zones = data.zones || [];
-      state.tasks = data.tasks || [];
-      state.zoneHasTasks = data.zoneHasTasks || {};
+      state.taskSetups = data.taskSetups || [];
+      state.currentSetupId = data.currentSetupId || null;
+      state.zoneSetup = data.zoneSetup || {};
       state.zoneCollapsed = data.zoneCollapsed || {};
       state.taskProgress = data.taskProgress || {};
       state.zoneUpdated = data.zoneUpdated || {};
       state.avancementZoneId = null;
       state.presences = data.presences;
+      // Compat. anciens exports (liste de tâches unique)
+      state._legacyTasks = data.tasks;
+      state._legacyZoneHasTasks = data.zoneHasTasks;
+      migrateSetups();
       save();
       renderAll();
       showToast('Import réussi');
@@ -1104,13 +1302,15 @@ function resetAll() {
   if (!confirm('Effacer TOUTES les données (entreprises, zones, tâches, avancements et présences) ?\nCette action est irréversible.')) return;
   state.companies = [];
   state.zones = [];
-  state.tasks = [];
-  state.zoneHasTasks = {};
+  state.taskSetups = [];
+  state.currentSetupId = null;
+  state.zoneSetup = {};
   state.zoneCollapsed = {};
   state.taskProgress = {};
   state.zoneUpdated = {};
   state.avancementZoneId = null;
   state.presences = {};
+  migrateSetups();
   save();
   renderAll();
   showToast('Données effacées');
@@ -1120,6 +1320,7 @@ function resetAll() {
 function init() {
   load();
   migratePresences();
+  migrateSetups();
   document.getElementById('appversion').textContent = `Version ${APP_VERSION}`;
   renderAll();
 
