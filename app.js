@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.20';
+const APP_VERSION = '0.21';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -1184,6 +1184,7 @@ function changeProgress(zoneId, taskId, delta) {
   setProgress(zoneId, taskId, cur + delta);
   renderFicheHeader();
   renderProgressList();
+  renderRecap();
 }
 
 function navigateAvancement(delta) {
@@ -1384,6 +1385,7 @@ function buildProgressItem(zoneId, setup, task) {
     setProgress(zoneId, task.id, isDone ? 0 : 100);
     renderFicheHeader();
     renderProgressList();
+    renderRecap();
   });
   return li;
 }
@@ -1536,6 +1538,8 @@ function switchSubPage(group, name) {
     renderChart();
     renderLegend();
   }
+  // Garantit un récap toujours frais à l'ouverture du sous-onglet
+  if (group === 'avancement' && name === 'recap') renderRecap();
 }
 
 function renderCompanies() {
