@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.21';
+const APP_VERSION = '0.22';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -37,6 +37,11 @@ const state = {
   zoneUpdated: {},        // { [zoneId]: timestamp (ms) — dernière modif d'avancement }
   avancementZoneId: null, // zone affichée dans l'onglet Avancement
   recapBuildingId: null,  // zone racine sélectionnée dans Avancement → Récapitulatif
+  // Administratif → Sécurité : documents administratifs par entreprise
+  adminDocs: {},          // { [companyId]: [{ id, name, receivedAt: 'YYYY-MM-DD' | null }] }
+  // Administratif → eCheckIn : ouvriers + pièces administratives par ouvrier
+  workers: [],            // [{ id, companyId, name }]
+  workerDocs: {},         // { [workerId]: { onSite, doc1, doc2, doc3 } }
   presences: {},          // { 'YYYY-MM-DD': [{ id, companyId, count }] }
   currentDate: todayISO(),
   chartHidden: {},        // { [companyId]: true } — entreprises masquées du graphique
@@ -62,6 +67,9 @@ function load() {
     if (data.zoneUpdated) state.zoneUpdated = data.zoneUpdated;
     if (data.avancementZoneId) state.avancementZoneId = data.avancementZoneId;
     if (data.recapBuildingId) state.recapBuildingId = data.recapBuildingId;
+    if (data.adminDocs) state.adminDocs = data.adminDocs;
+    if (data.workers) state.workers = data.workers;
+    if (data.workerDocs) state.workerDocs = data.workerDocs;
     if (data.presences) state.presences = data.presences;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
@@ -87,6 +95,9 @@ function save() {
     zoneUpdated: state.zoneUpdated,
     avancementZoneId: state.avancementZoneId,
     recapBuildingId: state.recapBuildingId,
+    adminDocs: state.adminDocs,
+    workers: state.workers,
+    workerDocs: state.workerDocs,
     presences: state.presences,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange
@@ -226,6 +237,7 @@ function renderAll() {
   renderChart();
   renderLegend();
   renderAvancement();
+  renderAdministratif();
 }
 
 function renderDate() {
@@ -1525,6 +1537,255 @@ function renderRecap() {
   }
 }
 
+// ---------- Administratif → Sécurité (documents par entreprise) ----------
+function getCompanyDocs(cid) { return state.adminDocs[cid] || []; }
+function isSecurityComplete(cid) {
+  const docs = getCompanyDocs(cid);
+  if (docs.length === 0) return false;
+  return docs.every(d => !!d.receivedAt);
+}
+function addAdminDoc(companyId) {
+  if (!state.adminDocs[companyId]) state.adminDocs[companyId] = [];
+  state.adminDocs[companyId].push({ id: uid(), name: '', receivedAt: null });
+  save();
+  renderSecurite();
+}
+function removeAdminDoc(companyId, docId) {
+  const list = state.adminDocs[companyId];
+  if (!list) return;
+  state.adminDocs[companyId] = list.filter(d => d.id !== docId);
+  if (state.adminDocs[companyId].length === 0) delete state.adminDocs[companyId];
+  save();
+  renderSecurite();
+}
+function setAdminDocName(companyId, docId, name) {
+  const doc = (state.adminDocs[companyId] || []).find(d => d.id === docId);
+  if (!doc) return;
+  doc.name = name;
+  save();
+}
+function setAdminDocDate(companyId, docId, dateStr) {
+  const doc = (state.adminDocs[companyId] || []).find(d => d.id === docId);
+  if (!doc) return;
+  doc.receivedAt = dateStr || null;
+  save();
+  renderSecurite();
+}
+
+function renderSecurite() {
+  const list = document.getElementById('securitelist');
+  const empty = document.getElementById('securiteempty');
+  if (!list || !empty) return;
+  list.innerHTML = '';
+  empty.classList.remove('show');
+
+  if (state.companies.length === 0) {
+    empty.innerHTML = '<p>Aucune entreprise enregistrée.</p><p class="hint">Ajoute des entreprises dans <strong>Données → Entreprises</strong>.</p>';
+    empty.classList.add('show');
+    return;
+  }
+
+  for (const company of state.companies) {
+    const complete = isSecurityComplete(company.id);
+    const card = document.createElement('div');
+    card.className = 'admin-company' + (complete ? ' is-complete' : '');
+
+    const header = document.createElement('div');
+    header.className = 'admin-company-header';
+    const name = document.createElement('span');
+    name.className = 'admin-company-name';
+    name.textContent = company.name || '(sans nom)';
+    const addBtn = document.createElement('button');
+    addBtn.className = 'admin-add-btn';
+    addBtn.setAttribute('aria-label', 'Ajouter un document');
+    addBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>';
+    addBtn.addEventListener('click', () => addAdminDoc(company.id));
+    header.append(name, addBtn);
+    card.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'admin-company-body';
+    const docs = getCompanyDocs(company.id);
+    if (docs.length === 0) {
+      const hint = document.createElement('p');
+      hint.className = 'admin-empty';
+      hint.textContent = 'Aucun document. Appuyez sur + pour en ajouter.';
+      body.appendChild(hint);
+    } else {
+      for (const doc of docs) {
+        body.appendChild(buildAdminDocRow(company.id, doc));
+      }
+    }
+    card.appendChild(body);
+    list.appendChild(card);
+  }
+}
+
+function buildAdminDocRow(companyId, doc) {
+  const row = document.createElement('div');
+  row.className = 'admin-doc-row' + (doc.receivedAt ? ' is-received' : '');
+
+  const nameInput = document.createElement('input');
+  nameInput.className = 'admin-doc-name';
+  nameInput.type = 'text';
+  nameInput.placeholder = 'Nom du document';
+  nameInput.value = doc.name || '';
+  nameInput.addEventListener('input', () => setAdminDocName(companyId, doc.id, nameInput.value));
+
+  const dateInput = document.createElement('input');
+  dateInput.className = 'admin-doc-date';
+  dateInput.type = 'date';
+  dateInput.setAttribute('aria-label', 'Date de réception');
+  dateInput.value = doc.receivedAt || '';
+  dateInput.addEventListener('change', () => setAdminDocDate(companyId, doc.id, dateInput.value));
+
+  const delBtn = document.createElement('button');
+  delBtn.className = 'admin-doc-delete';
+  delBtn.setAttribute('aria-label', 'Supprimer le document');
+  delBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>';
+  delBtn.addEventListener('click', () => removeAdminDoc(companyId, doc.id));
+
+  row.append(nameInput, dateInput, delBtn);
+  return row;
+}
+
+// ---------- Administratif → eCheckIn (ouvriers par entreprise) ----------
+function getCompanyWorkers(cid) { return state.workers.filter(w => w.companyId === cid); }
+function getWorkerDocs(wid) {
+  return state.workerDocs[wid] || { onSite: false, doc1: false, doc2: false, doc3: false };
+}
+function isECheckInComplete(cid) {
+  const workers = getCompanyWorkers(cid);
+  if (workers.length === 0) return false;
+  return workers.every(w => {
+    const d = getWorkerDocs(w.id);
+    return d.doc1 && d.doc2 && d.doc3;
+  });
+}
+function addWorker(companyId) {
+  state.workers.push({ id: uid(), companyId, name: '' });
+  save();
+  renderECheckIn();
+}
+function removeWorker(workerId) {
+  const w = state.workers.find(w => w.id === workerId);
+  if (!w) return;
+  if (!confirm(`Supprimer l'ouvrier « ${w.name || 'sans nom'} » ?`)) return;
+  state.workers = state.workers.filter(w => w.id !== workerId);
+  delete state.workerDocs[workerId];
+  save();
+  renderECheckIn();
+}
+function setWorkerName(workerId, name) {
+  const w = state.workers.find(w => w.id === workerId);
+  if (!w) return;
+  w.name = name;
+  save();
+}
+function toggleWorkerField(workerId, field) {
+  if (!state.workerDocs[workerId]) {
+    state.workerDocs[workerId] = { onSite: false, doc1: false, doc2: false, doc3: false };
+  }
+  state.workerDocs[workerId][field] = !state.workerDocs[workerId][field];
+  save();
+  renderECheckIn();
+}
+
+function renderECheckIn() {
+  const list = document.getElementById('echeckinlist');
+  const empty = document.getElementById('echeckinempty');
+  if (!list || !empty) return;
+  list.innerHTML = '';
+  empty.classList.remove('show');
+
+  if (state.companies.length === 0) {
+    empty.innerHTML = '<p>Aucune entreprise enregistrée.</p><p class="hint">Ajoute des entreprises dans <strong>Données → Entreprises</strong>.</p>';
+    empty.classList.add('show');
+    return;
+  }
+
+  for (const company of state.companies) {
+    const complete = isECheckInComplete(company.id);
+    const card = document.createElement('div');
+    card.className = 'admin-company' + (complete ? ' is-complete' : '');
+
+    const header = document.createElement('div');
+    header.className = 'admin-company-header';
+    const name = document.createElement('span');
+    name.className = 'admin-company-name';
+    name.textContent = company.name || '(sans nom)';
+    const addBtn = document.createElement('button');
+    addBtn.className = 'admin-add-btn';
+    addBtn.setAttribute('aria-label', 'Ajouter un ouvrier');
+    addBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>';
+    addBtn.addEventListener('click', () => addWorker(company.id));
+    header.append(name, addBtn);
+    card.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'admin-company-body';
+    const workers = getCompanyWorkers(company.id);
+    if (workers.length === 0) {
+      const hint = document.createElement('p');
+      hint.className = 'admin-empty';
+      hint.textContent = 'Aucun ouvrier. Appuyez sur + pour en ajouter.';
+      body.appendChild(hint);
+    } else {
+      for (const w of workers) {
+        body.appendChild(buildWorkerCard(w));
+      }
+    }
+    card.appendChild(body);
+    list.appendChild(card);
+  }
+}
+
+function buildWorkerCard(worker) {
+  const card = document.createElement('div');
+  card.className = 'worker-card';
+  const docs = getWorkerDocs(worker.id);
+
+  const head = document.createElement('div');
+  head.className = 'worker-head';
+  const nameInput = document.createElement('input');
+  nameInput.className = 'worker-name';
+  nameInput.type = 'text';
+  nameInput.placeholder = "Nom de l'ouvrier";
+  nameInput.value = worker.name || '';
+  nameInput.addEventListener('input', () => setWorkerName(worker.id, nameInput.value));
+  const delBtn = document.createElement('button');
+  delBtn.className = 'worker-delete';
+  delBtn.setAttribute('aria-label', "Supprimer l'ouvrier");
+  delBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>';
+  delBtn.addEventListener('click', () => removeWorker(worker.id));
+  head.append(nameInput, delBtn);
+  card.appendChild(head);
+
+  const chips = document.createElement('div');
+  chips.className = 'worker-chips';
+  const mkChip = (field, label, modifier) => {
+    const b = document.createElement('button');
+    b.className = 'worker-chip' + (modifier ? ' ' + modifier : '') + (docs[field] ? ' active' : '');
+    b.textContent = label;
+    b.addEventListener('click', () => toggleWorkerField(worker.id, field));
+    return b;
+  };
+  chips.append(
+    mkChip('onSite', 'Présent', 'presence'),
+    mkChip('doc1', 'Doc 1'),
+    mkChip('doc2', 'Doc 2'),
+    mkChip('doc3', 'Doc 3')
+  );
+  card.appendChild(chips);
+
+  return card;
+}
+
+function renderAdministratif() {
+  renderSecurite();
+  renderECheckIn();
+}
+
 // ---------- Sub-tabs ----------
 function switchSubPage(group, name) {
   const buttons = Array.from(document.querySelectorAll(`.seg-btn[data-group="${group}"]`));
@@ -1590,6 +1851,11 @@ function deleteCompany(id) {
   if (!confirm(`Supprimer l'entreprise « ${company.name} » ?\nLes présences déjà enregistrées seront conservées mais affichées comme « entreprise supprimée ».`)) return;
   state.companies = state.companies.filter(c => c.id !== id);
   delete state.chartHidden[id];
+  delete state.adminDocs[id];
+  // Retire les ouvriers de l'entreprise supprimée + leurs documents
+  const removed = state.workers.filter(w => w.companyId === id);
+  state.workers = state.workers.filter(w => w.companyId !== id);
+  for (const w of removed) delete state.workerDocs[w.id];
   save();
   renderAll();
   showToast('Entreprise supprimée');
@@ -1670,6 +1936,7 @@ function switchPage(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.page === name));
   window.scrollTo({ top: 0, behavior: 'instant' });
   if (name === 'avancement') renderAvancement();
+  if (name === 'administratif') renderAdministratif();
 }
 
 // ---------- Import / Export ----------
@@ -1683,6 +1950,9 @@ function exportData() {
     taskProgress: state.taskProgress,
     zoneUpdated: state.zoneUpdated,
     presences: state.presences,
+    adminDocs: state.adminDocs,
+    workers: state.workers,
+    workerDocs: state.workerDocs,
     exportedAt: new Date().toISOString()
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -1715,6 +1985,9 @@ function importData(file) {
       state.zoneUpdated = data.zoneUpdated || {};
       state.avancementZoneId = null;
       state.presences = data.presences;
+      state.adminDocs = data.adminDocs || {};
+      state.workers = data.workers || [];
+      state.workerDocs = data.workerDocs || {};
       // Compat. anciens exports (liste de tâches unique)
       state._legacyTasks = data.tasks;
       state._legacyZoneHasTasks = data.zoneHasTasks;
@@ -1741,6 +2014,9 @@ function resetAll() {
   state.zoneUpdated = {};
   state.avancementZoneId = null;
   state.presences = {};
+  state.adminDocs = {};
+  state.workers = [];
+  state.workerDocs = {};
   migrateSetups();
   save();
   renderAll();
