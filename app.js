@@ -7,7 +7,14 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.25';
+const APP_VERSION = '0.26';
+
+// Détection iOS / iPadOS (iPadOS ≥ 13 se présente comme Macintosh, on
+// le distingue via la présence d'un écran tactile). Utilisé pour
+// adapter le comportement des inputs date dans eCheckIn.
+const IS_IOS =
+  /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+  (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -1838,8 +1845,11 @@ function buildECheckInDocChip(workerId, field, label, dateStr) {
   input.addEventListener('change', () => setWorkerDocDate(workerId, field, input.value));
   // Sur Chrome desktop, un input date masqué (opacity:0) ne déclenche pas
   // le picker au simple focus — il faut appeler showPicker() explicitement.
-  // Géré côté Safari aussi depuis iOS 16.4 (avant : focus suffisait).
+  // Sur iOS Safari, le tap ouvre déjà le picker nativement ; appeler
+  // showPicker() en plus le ferait se fermer aussitôt en validant la
+  // date du jour, donc on s'abstient.
   input.addEventListener('click', () => {
+    if (IS_IOS) return;
     if (typeof input.showPicker === 'function') {
       try { input.showPicker(); } catch (_) { /* gesture utilisateur perdu */ }
     }
