@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.23';
+const APP_VERSION = '0.24';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -41,7 +41,8 @@ const state = {
   adminDocs: {},          // { [companyId]: [{ id, name, receivedAt: 'YYYY-MM-DD' | null }] }
   // Administratif → eCheckIn : ouvriers + pièces administratives par ouvrier
   workers: [],            // [{ id, companyId, name }]
-  workerDocs: {},         // { [workerId]: { onSite, doc1, doc2, doc3 } }
+  workerDocs: {},         // { [workerId]: { onSite, doc1, doc2, doc3, doc4 } } — docN = 'YYYY-MM-DD' | null (péremption)
+  echeckinCollapsed: {},  // { [companyId]: true } — entreprises repliées dans eCheckIn
   presences: {},          // { 'YYYY-MM-DD': [{ id, companyId, count }] }
   currentDate: todayISO(),
   chartHidden: {},        // { [companyId]: true } — entreprises masquées du graphique
@@ -70,6 +71,7 @@ function load() {
     if (data.adminDocs) state.adminDocs = data.adminDocs;
     if (data.workers) state.workers = data.workers;
     if (data.workerDocs) state.workerDocs = data.workerDocs;
+    if (data.echeckinCollapsed) state.echeckinCollapsed = data.echeckinCollapsed;
     if (data.presences) state.presences = data.presences;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
@@ -98,6 +100,7 @@ function save() {
     adminDocs: state.adminDocs,
     workers: state.workers,
     workerDocs: state.workerDocs,
+    echeckinCollapsed: state.echeckinCollapsed,
     presences: state.presences,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange
@@ -1651,15 +1654,26 @@ function buildAdminDocRow(companyId, doc) {
 
 // ---------- Administratif → eCheckIn (ouvriers par entreprise) ----------
 function getCompanyWorkers(cid) { return state.workers.filter(w => w.companyId === cid); }
+const WORKER_DOC_KEYS = ['doc1', 'doc2', 'doc3', 'doc4'];
 function getWorkerDocs(wid) {
-  return state.workerDocs[wid] || { onSite: false, doc1: false, doc2: false, doc3: false };
+  const raw = state.workerDocs[wid] || {};
+  // Migration : ancien modèle (booléens) → date string ou null
+  const out = { onSite: !!raw.onSite };
+  for (const k of WORKER_DOC_KEYS) {
+    const v = raw[k];
+    out[k] = (typeof v === 'string' && v) ? v : null;
+  }
+  return out;
 }
+// Entreprise « complète » : tous ses ouvriers ont les 4 docs avec une
+// date renseignée ET aucune n'est périmée. La présence ne compte pas
+// (c'est une notion mutable au quotidien).
 function isECheckInComplete(cid) {
   const workers = getCompanyWorkers(cid);
   if (workers.length === 0) return false;
   return workers.every(w => {
     const d = getWorkerDocs(w.id);
-    return d.doc1 && d.doc2 && d.doc3;
+    return WORKER_DOC_KEYS.every(k => d[k] && expiryStatus(d[k]) !== 'expired');
   });
 }
 function addWorker(companyId) {
@@ -1682,11 +1696,27 @@ function setWorkerName(workerId, name) {
   w.name = name;
   save();
 }
-function toggleWorkerField(workerId, field) {
+function ensureWorkerDocsBag(workerId) {
   if (!state.workerDocs[workerId]) {
-    state.workerDocs[workerId] = { onSite: false, doc1: false, doc2: false, doc3: false };
+    state.workerDocs[workerId] = { onSite: false, doc1: null, doc2: null, doc3: null, doc4: null };
   }
-  state.workerDocs[workerId][field] = !state.workerDocs[workerId][field];
+  return state.workerDocs[workerId];
+}
+function toggleWorkerPresence(workerId) {
+  const bag = ensureWorkerDocsBag(workerId);
+  bag.onSite = !bag.onSite;
+  save();
+  renderECheckIn();
+}
+function setWorkerDocDate(workerId, field, dateStr) {
+  const bag = ensureWorkerDocsBag(workerId);
+  bag[field] = dateStr || null;
+  save();
+  renderECheckIn();
+}
+function toggleECheckInCollapse(companyId) {
+  if (state.echeckinCollapsed[companyId]) delete state.echeckinCollapsed[companyId];
+  else state.echeckinCollapsed[companyId] = true;
   save();
   renderECheckIn();
 }
@@ -1706,11 +1736,17 @@ function renderECheckIn() {
 
   for (const company of state.companies) {
     const complete = isECheckInComplete(company.id);
+    const collapsed = !!state.echeckinCollapsed[company.id];
     const card = document.createElement('div');
-    card.className = 'admin-company' + (complete ? ' is-complete' : '');
+    card.className = 'admin-company' + (complete ? ' is-complete' : '') + (collapsed ? ' is-collapsed' : '');
 
     const header = document.createElement('div');
     header.className = 'admin-company-header';
+    const collapseBtn = document.createElement('button');
+    collapseBtn.className = 'zone-collapse';
+    collapseBtn.setAttribute('aria-label', collapsed ? 'Déplier' : 'Replier');
+    collapseBtn.textContent = collapsed ? '+' : '−';
+    collapseBtn.addEventListener('click', () => toggleECheckInCollapse(company.id));
     const name = document.createElement('span');
     name.className = 'admin-company-name';
     name.textContent = company.name || '(sans nom)';
@@ -1719,23 +1755,25 @@ function renderECheckIn() {
     addBtn.setAttribute('aria-label', 'Ajouter un ouvrier');
     addBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>';
     addBtn.addEventListener('click', () => addWorker(company.id));
-    header.append(name, addBtn);
+    header.append(collapseBtn, name, addBtn);
     card.appendChild(header);
 
-    const body = document.createElement('div');
-    body.className = 'admin-company-body';
-    const workers = getCompanyWorkers(company.id);
-    if (workers.length === 0) {
-      const hint = document.createElement('p');
-      hint.className = 'admin-empty';
-      hint.textContent = 'Aucun ouvrier. Appuyez sur + pour en ajouter.';
-      body.appendChild(hint);
-    } else {
-      for (const w of workers) {
-        body.appendChild(buildWorkerCard(w));
+    if (!collapsed) {
+      const body = document.createElement('div');
+      body.className = 'admin-company-body';
+      const workers = getCompanyWorkers(company.id);
+      if (workers.length === 0) {
+        const hint = document.createElement('p');
+        hint.className = 'admin-empty';
+        hint.textContent = 'Aucun ouvrier. Appuyez sur + pour en ajouter.';
+        body.appendChild(hint);
+      } else {
+        for (const w of workers) {
+          body.appendChild(buildWorkerCard(w));
+        }
       }
+      card.appendChild(body);
     }
-    card.appendChild(body);
     list.appendChild(card);
   }
 }
@@ -1745,6 +1783,7 @@ function buildWorkerCard(worker) {
   card.className = 'worker-card';
   const docs = getWorkerDocs(worker.id);
 
+  // En-tête : nom de l'ouvrier + chip Présent + bouton supprimer
   const head = document.createElement('div');
   head.className = 'worker-head';
   const nameInput = document.createElement('input');
@@ -1753,32 +1792,68 @@ function buildWorkerCard(worker) {
   nameInput.placeholder = "Nom de l'ouvrier";
   nameInput.value = worker.name || '';
   nameInput.addEventListener('input', () => setWorkerName(worker.id, nameInput.value));
+  const presenceBtn = document.createElement('button');
+  presenceBtn.className = 'worker-chip presence' + (docs.onSite ? ' active' : '');
+  presenceBtn.textContent = docs.onSite ? '✓ Présent' : 'Présent';
+  presenceBtn.addEventListener('click', () => toggleWorkerPresence(worker.id));
   const delBtn = document.createElement('button');
   delBtn.className = 'worker-delete';
   delBtn.setAttribute('aria-label', "Supprimer l'ouvrier");
   delBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>';
   delBtn.addEventListener('click', () => removeWorker(worker.id));
-  head.append(nameInput, delBtn);
+  head.append(nameInput, presenceBtn, delBtn);
   card.appendChild(head);
 
-  const chips = document.createElement('div');
-  chips.className = 'worker-chips';
-  const mkChip = (field, label, modifier) => {
-    const b = document.createElement('button');
-    b.className = 'worker-chip' + (modifier ? ' ' + modifier : '') + (docs[field] ? ' active' : '');
-    b.textContent = label;
-    b.addEventListener('click', () => toggleWorkerField(worker.id, field));
-    return b;
-  };
-  chips.append(
-    mkChip('onSite', 'Présent', 'presence'),
-    mkChip('doc1', 'Doc 1'),
-    mkChip('doc2', 'Doc 2'),
-    mkChip('doc3', 'Doc 3')
-  );
-  card.appendChild(chips);
+  // Grille 2×2 de pastilles documents colorées selon la péremption
+  const grid = document.createElement('div');
+  grid.className = 'ec-doc-grid';
+  const labels = { doc1: 'Doc 1', doc2: 'Doc 2', doc3: 'Doc 3', doc4: 'Doc 4' };
+  for (const k of WORKER_DOC_KEYS) {
+    grid.appendChild(buildECheckInDocChip(worker.id, k, labels[k], docs[k]));
+  }
+  card.appendChild(grid);
 
   return card;
+}
+
+function buildECheckInDocChip(workerId, field, label, dateStr) {
+  const status = expiryStatus(dateStr);
+  const chip = document.createElement('div');
+  chip.className = `ec-doc status-${status}`;
+
+  const name = document.createElement('span');
+  name.className = 'ec-doc-name';
+  name.textContent = label;
+
+  const date = document.createElement('span');
+  date.className = 'ec-doc-date';
+  date.textContent = dateStr ? fmtFR(dateStr) : '—';
+
+  // Input date superposé en plein écran de la chip pour ouvrir le picker iOS
+  const input = document.createElement('input');
+  input.type = 'date';
+  input.className = 'ec-doc-input';
+  input.value = dateStr || '';
+  input.setAttribute('aria-label', `Date de péremption ${label}`);
+  input.addEventListener('change', () => setWorkerDocDate(workerId, field, input.value));
+
+  chip.append(name, date, input);
+
+  // Bouton effacer (visible seulement si une date est saisie)
+  if (dateStr) {
+    const clear = document.createElement('button');
+    clear.className = 'ec-doc-clear';
+    clear.setAttribute('aria-label', 'Effacer la date');
+    clear.textContent = '×';
+    clear.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      setWorkerDocDate(workerId, field, null);
+    });
+    chip.appendChild(clear);
+  }
+
+  return chip;
 }
 
 function renderAdministratif() {
@@ -1786,8 +1861,9 @@ function renderAdministratif() {
   renderECheckIn();
 }
 
-// ---------- Maquettes (temporaire, à supprimer après choix UI) ----------
-// Date système actuelle utilisée pour calculer les statuts dans les maquettes
+// ---------- eCheckIn : helpers de date de péremption ----------
+// Statut d'expiration d'un document : valid > 7 j, warning ≤ 7 j,
+// danger ≤ 3 j, expired si la date est passée, none si pas de date.
 function expiryStatus(dateStr, today = new Date()) {
   if (!dateStr) return 'none';
   const d = new Date(dateStr + 'T00:00:00');
@@ -1809,147 +1885,6 @@ function daysUntil(dateStr, today = new Date()) {
   return Math.round((d - t) / 86400000);
 }
 
-const MOCK_WORKERS = [
-  { name: 'Jean Dupont', present: true, docs: [
-    { name: 'Doc 1', expiresAt: '2026-08-28' },
-    { name: 'Doc 2', expiresAt: '2026-06-05' },
-    { name: 'Doc 3', expiresAt: '2026-06-02' },
-    { name: 'Doc 4', expiresAt: '2026-05-25' }
-  ]},
-  { name: 'Marie Martin', present: false, docs: [
-    { name: 'Doc 1', expiresAt: '2027-01-15' },
-    { name: 'Doc 2', expiresAt: '2026-12-31' },
-    { name: 'Doc 3', expiresAt: '2026-06-15' },
-    { name: 'Doc 4', expiresAt: '2026-06-04' }
-  ]}
-];
-
-function buildMockHeader(worker) {
-  const head = document.createElement('div');
-  head.className = 'worker-head';
-  const name = document.createElement('span');
-  name.className = 'mock-worker-name';
-  name.textContent = worker.name;
-  const presence = document.createElement('span');
-  presence.className = 'worker-chip presence' + (worker.present ? ' active' : '');
-  presence.textContent = worker.present ? '✓ Présent' : 'Présent';
-  head.append(name, presence);
-  return head;
-}
-
-function buildMockCompany(builder) {
-  const card = document.createElement('div');
-  card.className = 'admin-company';
-  const header = document.createElement('div');
-  header.className = 'admin-company-header';
-  const name = document.createElement('span');
-  name.className = 'admin-company-name';
-  name.textContent = 'Entreprise Démo';
-  const addBtn = document.createElement('button');
-  addBtn.className = 'admin-add-btn';
-  addBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>';
-  header.append(name, addBtn);
-  card.appendChild(header);
-  const body = document.createElement('div');
-  body.className = 'admin-company-body';
-  for (const w of MOCK_WORKERS) body.appendChild(builder(w));
-  card.appendChild(body);
-  return card;
-}
-
-// === Maquette A : grille 2×2 de tuiles colorées ===
-function renderMockA() {
-  const root = document.getElementById('mockA');
-  if (!root) return;
-  root.innerHTML = '';
-  root.appendChild(buildMockCompany((worker) => {
-    const card = document.createElement('div');
-    card.className = 'worker-card mockA-card';
-    card.appendChild(buildMockHeader(worker));
-    const grid = document.createElement('div');
-    grid.className = 'mockA-grid';
-    for (const doc of worker.docs) {
-      const status = expiryStatus(doc.expiresAt);
-      const tile = document.createElement('div');
-      tile.className = `mockA-tile status-${status}`;
-      tile.innerHTML = `
-        <span class="mockA-tile-name">${doc.name}</span>
-        <span class="mockA-tile-date">${fmtFR(doc.expiresAt)}</span>
-      `;
-      grid.appendChild(tile);
-    }
-    card.appendChild(grid);
-    return card;
-  }));
-}
-
-// === Maquette B : liste verticale avec barre de statut à gauche ===
-function renderMockB() {
-  const root = document.getElementById('mockB');
-  if (!root) return;
-  root.innerHTML = '';
-  root.appendChild(buildMockCompany((worker) => {
-    const card = document.createElement('div');
-    card.className = 'worker-card mockB-card';
-    card.appendChild(buildMockHeader(worker));
-    const list = document.createElement('div');
-    list.className = 'mockB-list';
-    for (const doc of worker.docs) {
-      const status = expiryStatus(doc.expiresAt);
-      const days = daysUntil(doc.expiresAt);
-      const subtitle =
-        status === 'expired' ? `périmé depuis ${-days} j` :
-        status === 'danger'  ? `expire dans ${days} j` :
-        status === 'warning' ? `expire dans ${days} j` :
-                               `valide jusqu'au ${fmtFR(doc.expiresAt)}`;
-      const row = document.createElement('div');
-      row.className = `mockB-row status-${status}`;
-      row.innerHTML = `
-        <span class="mockB-bar"></span>
-        <div class="mockB-info">
-          <span class="mockB-name">${doc.name}</span>
-          <span class="mockB-sub">${subtitle}</span>
-        </div>
-        <span class="mockB-date">${fmtFR(doc.expiresAt)}</span>
-      `;
-      list.appendChild(row);
-    }
-    card.appendChild(list);
-    return card;
-  }));
-}
-
-// === Maquette C : chips horizontales colorées avec date en caption ===
-function renderMockC() {
-  const root = document.getElementById('mockC');
-  if (!root) return;
-  root.innerHTML = '';
-  root.appendChild(buildMockCompany((worker) => {
-    const card = document.createElement('div');
-    card.className = 'worker-card mockC-card';
-    card.appendChild(buildMockHeader(worker));
-    const chips = document.createElement('div');
-    chips.className = 'mockC-chips';
-    for (const doc of worker.docs) {
-      const status = expiryStatus(doc.expiresAt);
-      const item = document.createElement('div');
-      item.className = `mockC-item status-${status}`;
-      item.innerHTML = `
-        <span class="mockC-chip">${doc.name}</span>
-        <span class="mockC-date">${fmtFR(doc.expiresAt)}</span>
-      `;
-      chips.appendChild(item);
-    }
-    card.appendChild(chips);
-    return card;
-  }));
-}
-
-function renderMaquettes() {
-  renderMockA();
-  renderMockB();
-  renderMockC();
-}
 
 // ---------- Sub-tabs ----------
 function switchSubPage(group, name) {
@@ -2017,6 +1952,7 @@ function deleteCompany(id) {
   state.companies = state.companies.filter(c => c.id !== id);
   delete state.chartHidden[id];
   delete state.adminDocs[id];
+  delete state.echeckinCollapsed[id];
   // Retire les ouvriers de l'entreprise supprimée + leurs documents
   const removed = state.workers.filter(w => w.companyId === id);
   state.workers = state.workers.filter(w => w.companyId !== id);
@@ -2102,7 +2038,6 @@ function switchPage(name) {
   window.scrollTo({ top: 0, behavior: 'instant' });
   if (name === 'avancement') renderAvancement();
   if (name === 'administratif') renderAdministratif();
-  if (name === 'maquettes') renderMaquettes();
 }
 
 // ---------- Import / Export ----------
@@ -2119,6 +2054,7 @@ function exportData() {
     adminDocs: state.adminDocs,
     workers: state.workers,
     workerDocs: state.workerDocs,
+    echeckinCollapsed: state.echeckinCollapsed,
     exportedAt: new Date().toISOString()
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -2154,6 +2090,7 @@ function importData(file) {
       state.adminDocs = data.adminDocs || {};
       state.workers = data.workers || [];
       state.workerDocs = data.workerDocs || {};
+      state.echeckinCollapsed = data.echeckinCollapsed || {};
       // Compat. anciens exports (liste de tâches unique)
       state._legacyTasks = data.tasks;
       state._legacyZoneHasTasks = data.zoneHasTasks;
@@ -2183,6 +2120,7 @@ function resetAll() {
   state.adminDocs = {};
   state.workers = [];
   state.workerDocs = {};
+  state.echeckinCollapsed = {};
   migrateSetups();
   save();
   renderAll();

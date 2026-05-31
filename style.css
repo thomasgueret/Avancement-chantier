@@ -1116,148 +1116,78 @@ input, select { font: inherit; }
 }
 .worker-delete svg { width: 18px; height: 18px; fill: currentColor; }
 .worker-delete:active { background: var(--surface-2); color: var(--danger); }
-.worker-chips {
-  display: flex; flex-wrap: wrap; gap: 6px;
-}
+/* Chip Présent dans l'en-tête de la carte ouvrier */
 .worker-chip {
-  flex: 1 1 0;
-  min-width: 60px;
-  height: 34px;
+  flex-shrink: 0;
+  height: 32px;
   border-radius: 999px;
   background: var(--surface-2);
   color: var(--text-2);
   border: 1px solid var(--border);
   font-size: 12px; font-weight: 700;
   letter-spacing: 0.04em;
-  padding: 0 10px;
+  padding: 0 12px;
   display: inline-flex; align-items: center; justify-content: center;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .worker-chip:active { transform: scale(0.97); }
-.worker-chip.active {
-  background: var(--accent);
-  color: white;
-  border-color: var(--accent);
-}
 .worker-chip.presence.active {
   background: #2e7d32;
   border-color: #2e7d32;
+  color: white;
 }
 
-/* ============ MAQUETTES (temporaire, à supprimer après choix UI) ============ */
-.maquette-intro {
-  font-size: 13px; color: var(--text-2);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 10px 12px;
-  margin: 0 0 14px;
-  line-height: 1.5;
-}
-.legend-dot {
-  display: inline-block;
-  width: 10px; height: 10px;
-  border-radius: 999px;
-  vertical-align: middle;
-  margin: 0 2px;
-}
-.legend-dot.is-valid   { background: #2e7d32; }
-.legend-dot.is-warning { background: #ed6c02; }
-.legend-dot.is-danger  { background: #d32f2f; }
-.legend-dot.is-expired { background: #1a1a1a; }
-
-/* Mock-data : nom d'ouvrier en simple span (pas d'input) pour ne pas
-   confondre avec le réel echeckIn. */
-.mock-worker-name {
-  flex: 1; min-width: 0;
-  font-size: 15px; font-weight: 600;
-  color: var(--text);
-  padding: 6px 2px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-
-/* === Maquette A : grille 2×2 de tuiles colorées === */
-.mockA-grid {
+/* Grille 2×2 de pastilles documents (design « C · Chips ») */
+.ec-doc-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-top: 6px;
+  gap: 6px;
+  margin-top: 4px;
 }
-.mockA-tile {
-  display: flex; flex-direction: column;
-  gap: 4px;
-  padding: 12px;
-  border-radius: var(--radius-sm);
-  border: 1px solid transparent;
-  min-height: 64px;
-}
-.mockA-tile-name { font-size: 14px; font-weight: 700; letter-spacing: 0.02em; }
-.mockA-tile-date { font-size: 13px; font-variant-numeric: tabular-nums; opacity: 0.85; }
-.mockA-tile.status-valid   { background: rgba(46, 125, 50, 0.10);  border-color: rgba(46, 125, 50, 0.45);  color: #1b5e20; }
-.mockA-tile.status-warning { background: rgba(237, 108, 2, 0.12);  border-color: rgba(237, 108, 2, 0.50);  color: #b54708; }
-.mockA-tile.status-danger  { background: rgba(211, 47, 47, 0.12);  border-color: rgba(211, 47, 47, 0.55);  color: #b71c1c; }
-.mockA-tile.status-expired { background: rgba(26, 26, 26, 0.85);   border-color: rgba(0, 0, 0, 0.85);     color: white; }
-.mockA-tile.status-expired .mockA-tile-date { opacity: 0.75; }
-
-/* === Maquette B : liste verticale, barre de statut à gauche === */
-.mockB-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
-.mockB-row {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 12px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  min-height: 48px;
-}
-.mockB-bar {
-  flex-shrink: 0;
-  width: 4px; align-self: stretch;
-  border-radius: 2px;
-}
-.mockB-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.mockB-name { font-size: 14px; font-weight: 600; color: var(--text); }
-.mockB-sub  { font-size: 12px; color: var(--text-3); }
-.mockB-date {
-  flex-shrink: 0;
-  font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums;
-  color: var(--text-2);
-}
-.mockB-row.status-valid   { background: rgba(46, 125, 50, 0.06);  border-color: rgba(46, 125, 50, 0.30); }
-.mockB-row.status-valid   .mockB-bar { background: #2e7d32; }
-.mockB-row.status-warning { background: rgba(237, 108, 2, 0.08);  border-color: rgba(237, 108, 2, 0.40); }
-.mockB-row.status-warning .mockB-bar { background: #ed6c02; }
-.mockB-row.status-warning .mockB-sub { color: #b54708; font-weight: 600; }
-.mockB-row.status-danger  { background: rgba(211, 47, 47, 0.10);  border-color: rgba(211, 47, 47, 0.45); }
-.mockB-row.status-danger  .mockB-bar { background: #d32f2f; }
-.mockB-row.status-danger  .mockB-sub { color: #b71c1c; font-weight: 700; }
-.mockB-row.status-expired { background: rgba(26, 26, 26, 0.85);   border-color: #000; color: white; }
-.mockB-row.status-expired .mockB-bar  { background: #fff; }
-.mockB-row.status-expired .mockB-name { color: white; }
-.mockB-row.status-expired .mockB-sub  { color: rgba(255, 255, 255, 0.80); font-weight: 700; }
-.mockB-row.status-expired .mockB-date { color: white; }
-
-/* === Maquette C : chips horizontales 2×2 (cartes datées) === */
-.mockC-chips {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
-  margin-top: 6px;
-}
-.mockC-item {
+.ec-doc {
+  position: relative;
   display: flex; flex-direction: column; align-items: center;
   gap: 4px;
-  padding: 8px 6px;
+  padding: 10px 8px;
   border-radius: 999px;
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
-.mockC-chip {
-  font-size: 13px; font-weight: 700; letter-spacing: 0.04em;
+.ec-doc-name { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; }
+.ec-doc-date { font-size: 11px; font-variant-numeric: tabular-nums; opacity: 0.85; }
+/* Input date superposé : invisible mais reçoit le tap pour ouvrir le picker iOS */
+.ec-doc-input {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  margin: 0; padding: 0;
+  border: none; background: transparent;
+  opacity: 0;
+  cursor: pointer;
+  -webkit-appearance: none;
+  -webkit-tap-highlight-color: transparent;
 }
-.mockC-date {
-  font-size: 11px; font-variant-numeric: tabular-nums; opacity: 0.85;
+.ec-doc-input::-webkit-date-and-time-value { display: none; }
+.ec-doc-clear {
+  position: absolute;
+  top: 2px; right: 6px;
+  width: 22px; height: 22px;
+  border: none; background: transparent;
+  color: inherit;
+  font-size: 18px; font-weight: 700; line-height: 1;
+  opacity: 0.65;
+  cursor: pointer;
+  z-index: 2;
 }
-.mockC-item.status-valid   { background: rgba(46, 125, 50, 0.12);  border-color: rgba(46, 125, 50, 0.45);  color: #1b5e20; }
-.mockC-item.status-warning { background: rgba(237, 108, 2, 0.15);  border-color: rgba(237, 108, 2, 0.50);  color: #b54708; }
-.mockC-item.status-danger  { background: rgba(211, 47, 47, 0.15);  border-color: rgba(211, 47, 47, 0.55);  color: #b71c1c; }
-.mockC-item.status-expired { background: #1a1a1a;                  border-color: #000;                    color: white; }
+.ec-doc-clear:active { opacity: 1; }
+.ec-doc.status-valid   { background: rgba(46, 125, 50, 0.12);  border-color: rgba(46, 125, 50, 0.45);  color: #1b5e20; }
+.ec-doc.status-warning { background: rgba(237, 108, 2, 0.15);  border-color: rgba(237, 108, 2, 0.50);  color: #b54708; }
+.ec-doc.status-danger  { background: rgba(211, 47, 47, 0.15);  border-color: rgba(211, 47, 47, 0.55);  color: #b71c1c; }
+.ec-doc.status-expired { background: #1a1a1a;                  border-color: #000;                    color: white; }
+
+/* Pas de bordure inférieure de l'en-tête quand l'entreprise est repliée */
+.admin-company.is-collapsed .admin-company-header { border-bottom: none; }
 
 /* ============ ANIMATIONS ============ */
 @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
