@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.24';
+const APP_VERSION = '0.25';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -1836,6 +1836,14 @@ function buildECheckInDocChip(workerId, field, label, dateStr) {
   input.value = dateStr || '';
   input.setAttribute('aria-label', `Date de péremption ${label}`);
   input.addEventListener('change', () => setWorkerDocDate(workerId, field, input.value));
+  // Sur Chrome desktop, un input date masqué (opacity:0) ne déclenche pas
+  // le picker au simple focus — il faut appeler showPicker() explicitement.
+  // Géré côté Safari aussi depuis iOS 16.4 (avant : focus suffisait).
+  input.addEventListener('click', () => {
+    if (typeof input.showPicker === 'function') {
+      try { input.showPicker(); } catch (_) { /* gesture utilisateur perdu */ }
+    }
+  });
 
   chip.append(name, date, input);
 
