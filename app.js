@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.22';
+const APP_VERSION = '0.23';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -1786,6 +1786,171 @@ function renderAdministratif() {
   renderECheckIn();
 }
 
+// ---------- Maquettes (temporaire, à supprimer après choix UI) ----------
+// Date système actuelle utilisée pour calculer les statuts dans les maquettes
+function expiryStatus(dateStr, today = new Date()) {
+  if (!dateStr) return 'none';
+  const d = new Date(dateStr + 'T00:00:00');
+  const t = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const diff = Math.round((d - t) / 86400000);
+  if (diff < 0) return 'expired';
+  if (diff <= 3) return 'danger';
+  if (diff <= 7) return 'warning';
+  return 'valid';
+}
+function fmtFR(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr + 'T00:00:00');
+  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+}
+function daysUntil(dateStr, today = new Date()) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const t = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  return Math.round((d - t) / 86400000);
+}
+
+const MOCK_WORKERS = [
+  { name: 'Jean Dupont', present: true, docs: [
+    { name: 'Doc 1', expiresAt: '2026-08-28' },
+    { name: 'Doc 2', expiresAt: '2026-06-05' },
+    { name: 'Doc 3', expiresAt: '2026-06-02' },
+    { name: 'Doc 4', expiresAt: '2026-05-25' }
+  ]},
+  { name: 'Marie Martin', present: false, docs: [
+    { name: 'Doc 1', expiresAt: '2027-01-15' },
+    { name: 'Doc 2', expiresAt: '2026-12-31' },
+    { name: 'Doc 3', expiresAt: '2026-06-15' },
+    { name: 'Doc 4', expiresAt: '2026-06-04' }
+  ]}
+];
+
+function buildMockHeader(worker) {
+  const head = document.createElement('div');
+  head.className = 'worker-head';
+  const name = document.createElement('span');
+  name.className = 'mock-worker-name';
+  name.textContent = worker.name;
+  const presence = document.createElement('span');
+  presence.className = 'worker-chip presence' + (worker.present ? ' active' : '');
+  presence.textContent = worker.present ? '✓ Présent' : 'Présent';
+  head.append(name, presence);
+  return head;
+}
+
+function buildMockCompany(builder) {
+  const card = document.createElement('div');
+  card.className = 'admin-company';
+  const header = document.createElement('div');
+  header.className = 'admin-company-header';
+  const name = document.createElement('span');
+  name.className = 'admin-company-name';
+  name.textContent = 'Entreprise Démo';
+  const addBtn = document.createElement('button');
+  addBtn.className = 'admin-add-btn';
+  addBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>';
+  header.append(name, addBtn);
+  card.appendChild(header);
+  const body = document.createElement('div');
+  body.className = 'admin-company-body';
+  for (const w of MOCK_WORKERS) body.appendChild(builder(w));
+  card.appendChild(body);
+  return card;
+}
+
+// === Maquette A : grille 2×2 de tuiles colorées ===
+function renderMockA() {
+  const root = document.getElementById('mockA');
+  if (!root) return;
+  root.innerHTML = '';
+  root.appendChild(buildMockCompany((worker) => {
+    const card = document.createElement('div');
+    card.className = 'worker-card mockA-card';
+    card.appendChild(buildMockHeader(worker));
+    const grid = document.createElement('div');
+    grid.className = 'mockA-grid';
+    for (const doc of worker.docs) {
+      const status = expiryStatus(doc.expiresAt);
+      const tile = document.createElement('div');
+      tile.className = `mockA-tile status-${status}`;
+      tile.innerHTML = `
+        <span class="mockA-tile-name">${doc.name}</span>
+        <span class="mockA-tile-date">${fmtFR(doc.expiresAt)}</span>
+      `;
+      grid.appendChild(tile);
+    }
+    card.appendChild(grid);
+    return card;
+  }));
+}
+
+// === Maquette B : liste verticale avec barre de statut à gauche ===
+function renderMockB() {
+  const root = document.getElementById('mockB');
+  if (!root) return;
+  root.innerHTML = '';
+  root.appendChild(buildMockCompany((worker) => {
+    const card = document.createElement('div');
+    card.className = 'worker-card mockB-card';
+    card.appendChild(buildMockHeader(worker));
+    const list = document.createElement('div');
+    list.className = 'mockB-list';
+    for (const doc of worker.docs) {
+      const status = expiryStatus(doc.expiresAt);
+      const days = daysUntil(doc.expiresAt);
+      const subtitle =
+        status === 'expired' ? `périmé depuis ${-days} j` :
+        status === 'danger'  ? `expire dans ${days} j` :
+        status === 'warning' ? `expire dans ${days} j` :
+                               `valide jusqu'au ${fmtFR(doc.expiresAt)}`;
+      const row = document.createElement('div');
+      row.className = `mockB-row status-${status}`;
+      row.innerHTML = `
+        <span class="mockB-bar"></span>
+        <div class="mockB-info">
+          <span class="mockB-name">${doc.name}</span>
+          <span class="mockB-sub">${subtitle}</span>
+        </div>
+        <span class="mockB-date">${fmtFR(doc.expiresAt)}</span>
+      `;
+      list.appendChild(row);
+    }
+    card.appendChild(list);
+    return card;
+  }));
+}
+
+// === Maquette C : chips horizontales colorées avec date en caption ===
+function renderMockC() {
+  const root = document.getElementById('mockC');
+  if (!root) return;
+  root.innerHTML = '';
+  root.appendChild(buildMockCompany((worker) => {
+    const card = document.createElement('div');
+    card.className = 'worker-card mockC-card';
+    card.appendChild(buildMockHeader(worker));
+    const chips = document.createElement('div');
+    chips.className = 'mockC-chips';
+    for (const doc of worker.docs) {
+      const status = expiryStatus(doc.expiresAt);
+      const item = document.createElement('div');
+      item.className = `mockC-item status-${status}`;
+      item.innerHTML = `
+        <span class="mockC-chip">${doc.name}</span>
+        <span class="mockC-date">${fmtFR(doc.expiresAt)}</span>
+      `;
+      chips.appendChild(item);
+    }
+    card.appendChild(chips);
+    return card;
+  }));
+}
+
+function renderMaquettes() {
+  renderMockA();
+  renderMockB();
+  renderMockC();
+}
+
 // ---------- Sub-tabs ----------
 function switchSubPage(group, name) {
   const buttons = Array.from(document.querySelectorAll(`.seg-btn[data-group="${group}"]`));
@@ -1937,6 +2102,7 @@ function switchPage(name) {
   window.scrollTo({ top: 0, behavior: 'instant' });
   if (name === 'avancement') renderAvancement();
   if (name === 'administratif') renderAdministratif();
+  if (name === 'maquettes') renderMaquettes();
 }
 
 // ---------- Import / Export ----------

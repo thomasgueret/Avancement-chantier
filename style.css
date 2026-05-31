@@ -1144,6 +1144,121 @@ input, select { font: inherit; }
   border-color: #2e7d32;
 }
 
+/* ============ MAQUETTES (temporaire, à supprimer après choix UI) ============ */
+.maquette-intro {
+  font-size: 13px; color: var(--text-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin: 0 0 14px;
+  line-height: 1.5;
+}
+.legend-dot {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border-radius: 999px;
+  vertical-align: middle;
+  margin: 0 2px;
+}
+.legend-dot.is-valid   { background: #2e7d32; }
+.legend-dot.is-warning { background: #ed6c02; }
+.legend-dot.is-danger  { background: #d32f2f; }
+.legend-dot.is-expired { background: #1a1a1a; }
+
+/* Mock-data : nom d'ouvrier en simple span (pas d'input) pour ne pas
+   confondre avec le réel echeckIn. */
+.mock-worker-name {
+  flex: 1; min-width: 0;
+  font-size: 15px; font-weight: 600;
+  color: var(--text);
+  padding: 6px 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* === Maquette A : grille 2×2 de tuiles colorées === */
+.mockA-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 6px;
+}
+.mockA-tile {
+  display: flex; flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  min-height: 64px;
+}
+.mockA-tile-name { font-size: 14px; font-weight: 700; letter-spacing: 0.02em; }
+.mockA-tile-date { font-size: 13px; font-variant-numeric: tabular-nums; opacity: 0.85; }
+.mockA-tile.status-valid   { background: rgba(46, 125, 50, 0.10);  border-color: rgba(46, 125, 50, 0.45);  color: #1b5e20; }
+.mockA-tile.status-warning { background: rgba(237, 108, 2, 0.12);  border-color: rgba(237, 108, 2, 0.50);  color: #b54708; }
+.mockA-tile.status-danger  { background: rgba(211, 47, 47, 0.12);  border-color: rgba(211, 47, 47, 0.55);  color: #b71c1c; }
+.mockA-tile.status-expired { background: rgba(26, 26, 26, 0.85);   border-color: rgba(0, 0, 0, 0.85);     color: white; }
+.mockA-tile.status-expired .mockA-tile-date { opacity: 0.75; }
+
+/* === Maquette B : liste verticale, barre de statut à gauche === */
+.mockB-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.mockB-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  min-height: 48px;
+}
+.mockB-bar {
+  flex-shrink: 0;
+  width: 4px; align-self: stretch;
+  border-radius: 2px;
+}
+.mockB-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.mockB-name { font-size: 14px; font-weight: 600; color: var(--text); }
+.mockB-sub  { font-size: 12px; color: var(--text-3); }
+.mockB-date {
+  flex-shrink: 0;
+  font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+.mockB-row.status-valid   { background: rgba(46, 125, 50, 0.06);  border-color: rgba(46, 125, 50, 0.30); }
+.mockB-row.status-valid   .mockB-bar { background: #2e7d32; }
+.mockB-row.status-warning { background: rgba(237, 108, 2, 0.08);  border-color: rgba(237, 108, 2, 0.40); }
+.mockB-row.status-warning .mockB-bar { background: #ed6c02; }
+.mockB-row.status-warning .mockB-sub { color: #b54708; font-weight: 600; }
+.mockB-row.status-danger  { background: rgba(211, 47, 47, 0.10);  border-color: rgba(211, 47, 47, 0.45); }
+.mockB-row.status-danger  .mockB-bar { background: #d32f2f; }
+.mockB-row.status-danger  .mockB-sub { color: #b71c1c; font-weight: 700; }
+.mockB-row.status-expired { background: rgba(26, 26, 26, 0.85);   border-color: #000; color: white; }
+.mockB-row.status-expired .mockB-bar  { background: #fff; }
+.mockB-row.status-expired .mockB-name { color: white; }
+.mockB-row.status-expired .mockB-sub  { color: rgba(255, 255, 255, 0.80); font-weight: 700; }
+.mockB-row.status-expired .mockB-date { color: white; }
+
+/* === Maquette C : chips horizontales 2×2 (cartes datées) === */
+.mockC-chips {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+  margin-top: 6px;
+}
+.mockC-item {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 4px;
+  padding: 8px 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+.mockC-chip {
+  font-size: 13px; font-weight: 700; letter-spacing: 0.04em;
+}
+.mockC-date {
+  font-size: 11px; font-variant-numeric: tabular-nums; opacity: 0.85;
+}
+.mockC-item.status-valid   { background: rgba(46, 125, 50, 0.12);  border-color: rgba(46, 125, 50, 0.45);  color: #1b5e20; }
+.mockC-item.status-warning { background: rgba(237, 108, 2, 0.15);  border-color: rgba(237, 108, 2, 0.50);  color: #b54708; }
+.mockC-item.status-danger  { background: rgba(211, 47, 47, 0.15);  border-color: rgba(211, 47, 47, 0.55);  color: #b71c1c; }
+.mockC-item.status-expired { background: #1a1a1a;                  border-color: #000;                    color: white; }
+
 /* ============ ANIMATIONS ============ */
 @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slideup { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }

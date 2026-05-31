@@ -193,6 +193,35 @@
         <div class="empty-state" id="echeckinempty"></div>
       </div>
     </section>
+
+    <!-- ============== ONGLET TEMPORAIRE : MAQUETTES (à supprimer après choix) ============== -->
+    <section class="page" id="page-maquettes">
+      <p class="maquette-intro">
+        Trois designs possibles pour intégrer la <strong>date de péremption</strong> par document
+        et passer de 3 à <strong>4 documents</strong>. Non fonctionnels : c'est juste pour valider le rendu.
+        <br>Codes couleur : <span class="legend-dot is-valid"></span> valide ·
+        <span class="legend-dot is-warning"></span> ≤ 7 jours ·
+        <span class="legend-dot is-danger"></span> ≤ 3 jours ·
+        <span class="legend-dot is-expired"></span> périmé.
+      </p>
+
+      <div class="segmented" role="tablist" data-group="maquettes" data-position="0" style="--count:3;">
+        <div class="segmented-thumb"></div>
+        <button class="seg-btn active" data-group="maquettes" data-sub="mockA" role="tab">A · Grille</button>
+        <button class="seg-btn" data-group="maquettes" data-sub="mockB" role="tab">B · Liste</button>
+        <button class="seg-btn" data-group="maquettes" data-sub="mockC" role="tab">C · Chips</button>
+      </div>
+
+      <div class="sub-page active" id="sub-mockA" data-group="maquettes">
+        <div id="mockA"></div>
+      </div>
+      <div class="sub-page" id="sub-mockB" data-group="maquettes">
+        <div id="mockB"></div>
+      </div>
+      <div class="sub-page" id="sub-mockC" data-group="maquettes">
+        <div id="mockC"></div>
+      </div>
+    </section>
   </main>
 
   <!-- ============== TAB BAR ============== -->
@@ -208,6 +237,10 @@
     <button class="tab-btn" data-page="administratif" role="tab">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2Zm-2 14H6v-2h2v2Zm0-4H6v-2h2v2Zm10 4h-8v-2h8v2Zm0-4h-8v-2h8v2Z"/></svg>
       <span>Administratif</span>
+    </button>
+    <button class="tab-btn" data-page="maquettes" role="tab">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 3H3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm-7 14H4v-4h10v4Zm0-6H4V7h10v4Zm6 6h-4V7h4v10Z"/></svg>
+      <span>Maquettes</span>
     </button>
     <button class="tab-btn" data-page="donnees" role="tab">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94a7.07 7.07 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.14.55-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.65 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.39 1.04.7 1.63.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54c.59-.24 1.14-.55 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z"/></svg>
