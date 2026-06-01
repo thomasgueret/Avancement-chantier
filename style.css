@@ -1157,18 +1157,23 @@ input, select { font: inherit; }
 }
 .ec-doc-name { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; }
 .ec-doc-date { font-size: 11px; font-variant-numeric: tabular-nums; opacity: 0.85; }
-/* Input date superposé : invisible mais reçoit le tap pour ouvrir le picker iOS */
+/* Input date positionné sous la chip pour servir d'ancre au picker
+   natif (showPicker l'utilise pour positionner sa popup) mais retiré
+   du chemin des clics — c'est la chip qui les capte. */
 .ec-doc-input {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
   margin: 0; padding: 0;
   border: none; background: transparent;
   opacity: 0;
-  cursor: pointer;
+  pointer-events: none;
   -webkit-appearance: none;
   -webkit-tap-highlight-color: transparent;
 }
 .ec-doc-input::-webkit-date-and-time-value { display: none; }
+/* Indication visuelle que la chip est cliquable */
+.ec-doc { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.ec-doc:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ec-doc-clear {
   position: absolute;
   top: 2px; right: 6px;

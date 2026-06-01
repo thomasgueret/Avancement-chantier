@@ -7,14 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.26';
-
-// Détection iOS / iPadOS (iPadOS ≥ 13 se présente comme Macintosh, on
-// le distingue via la présence d'un écran tactile). Utilisé pour
-// adapter le comportement des inputs date dans eCheckIn.
-const IS_IOS =
-  /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-  (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
+const APP_VERSION = '0.27';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -1827,6 +1820,10 @@ function buildECheckInDocChip(workerId, field, label, dateStr) {
   const status = expiryStatus(dateStr);
   const chip = document.createElement('div');
   chip.className = `ec-doc status-${status}`;
+  chip.setAttribute('role', 'button');
+  chip.setAttribute('tabindex', '0');
+  chip.setAttribute('aria-label',
+    `Date de péremption ${label}${dateStr ? ' : ' + fmtFR(dateStr) : ''}`);
 
   const name = document.createElement('span');
   name.className = 'ec-doc-name';
@@ -1836,26 +1833,32 @@ function buildECheckInDocChip(workerId, field, label, dateStr) {
   date.className = 'ec-doc-date';
   date.textContent = dateStr ? fmtFR(dateStr) : '—';
 
-  // Input date superposé en plein écran de la chip pour ouvrir le picker iOS
+  // Input date présent pour porter la valeur et émettre le `change`,
+  // mais hors du chemin des clics (pointer-events: none côté CSS).
+  // C'est le chip qui reçoit les taps et déclenche le picker via
+  // showPicker() — comportement unifié Safari iOS / Chrome desktop,
+  // sans détection de navigateur.
   const input = document.createElement('input');
   input.type = 'date';
   input.className = 'ec-doc-input';
   input.value = dateStr || '';
-  input.setAttribute('aria-label', `Date de péremption ${label}`);
+  input.tabIndex = -1;
+  input.setAttribute('aria-hidden', 'true');
   input.addEventListener('change', () => setWorkerDocDate(workerId, field, input.value));
-  // Sur Chrome desktop, un input date masqué (opacity:0) ne déclenche pas
-  // le picker au simple focus — il faut appeler showPicker() explicitement.
-  // Sur iOS Safari, le tap ouvre déjà le picker nativement ; appeler
-  // showPicker() en plus le ferait se fermer aussitôt en validant la
-  // date du jour, donc on s'abstient.
-  input.addEventListener('click', () => {
-    if (IS_IOS) return;
+
+  chip.append(name, date, input);
+
+  const openPicker = (e) => {
+    // Ne pas ouvrir le picker si le clic vient du bouton ×.
+    if (e && e.target && e.target.closest('.ec-doc-clear')) return;
     if (typeof input.showPicker === 'function') {
       try { input.showPicker(); } catch (_) { /* gesture utilisateur perdu */ }
     }
+  };
+  chip.addEventListener('click', openPicker);
+  chip.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPicker(); }
   });
-
-  chip.append(name, date, input);
 
   // Bouton effacer (visible seulement si une date est saisie)
   if (dateStr) {
