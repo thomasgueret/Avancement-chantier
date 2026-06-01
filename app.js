@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.35';
+const APP_VERSION = '0.36';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -2348,7 +2348,7 @@ function buildDocConfigRow(doc) {
   reqCheck.addEventListener('change', () => setDocRequired(doc.id, reqCheck.checked));
   const reqText = document.createElement('span');
   reqText.className = 'doc-required-text';
-  reqText.textContent = 'Obligatoire (entre dans la couleur de l\'ouvrier et de l\'entreprise)';
+  reqText.textContent = 'Obligatoire';
   reqRow.append(reqCheck, reqText);
 
   li.append(main, scopeBar, reqRow);
