@@ -94,6 +94,7 @@ input, select { font: inherit; }
 }
 .segmented[data-position="1"] .segmented-thumb { transform: translateX(100%); }
 .segmented[data-position="2"] .segmented-thumb { transform: translateX(200%); }
+.segmented[data-position="3"] .segmented-thumb { transform: translateX(300%); }
 .seg-btn {
   position: relative; z-index: 1;
   flex: 1; min-width: 0;
@@ -1090,10 +1091,27 @@ input, select { font: inherit; }
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 10px 10px 10px 12px;
+  transition: background 0.2s, border-color 0.2s;
 }
 .worker-head {
   display: flex; align-items: center; gap: 6px;
-  margin-bottom: 8px;
+  margin: -10px -10px 8px -12px;
+  padding: 8px 10px 8px 12px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  border-bottom: 1px solid transparent;
+  transition: background 0.2s, color 0.2s;
+}
+/* Étiquette ouvrier colorée selon la pire couleur des 4 chips ;
+   uniquement quand l'ouvrier est marqué Présent. */
+.worker-card.worst-valid   .worker-head { background: rgba(46, 125, 50, 0.12);  border-bottom-color: rgba(46, 125, 50, 0.30); }
+.worker-card.worst-warning .worker-head { background: rgba(237, 108, 2, 0.16);  border-bottom-color: rgba(237, 108, 2, 0.40); }
+.worker-card.worst-danger  .worker-head { background: rgba(211, 47, 47, 0.16);  border-bottom-color: rgba(211, 47, 47, 0.45); }
+.worker-card.worst-expired .worker-head { background: #1a1a1a;                  border-bottom-color: #000; color: white; }
+.worker-card.worst-expired .worker-name        { color: white; border-bottom-color: rgba(255, 255, 255, 0.30); }
+.worker-card.worst-expired .worker-name::placeholder { color: rgba(255, 255, 255, 0.55); }
+.worker-card.worst-expired .worker-delete      { color: rgba(255, 255, 255, 0.75); }
+.worker-card.worst-expired .worker-chip.presence.active {
+  background: white; color: #1a1a1a; border-color: white;
 }
 .worker-name {
   flex: 1; min-width: 0;
@@ -1214,6 +1232,39 @@ input, select { font: inherit; }
 
 /* Pas de bordure inférieure de l'en-tête quand l'entreprise est repliée */
 .admin-company.is-collapsed .admin-company-header { border-bottom: none; }
+
+/* ============ DONNÉES → ADMINISTRATIF (libellés docs) ============ */
+.doc-labels-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.doc-label-item {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.doc-label-tag {
+  flex-shrink: 0;
+  min-width: 52px;
+  text-align: center;
+  font-size: 12px; font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+.doc-label-input {
+  flex: 1; min-width: 0;
+  border: none;
+  background: transparent;
+  border-bottom: 1px solid var(--border);
+  font-size: 15px; font-weight: 600;
+  color: var(--text);
+  padding: 6px 2px;
+}
+.doc-label-input::placeholder { color: var(--text-3); font-style: italic; font-weight: 500; }
+.doc-label-input:focus { outline: none; border-bottom-color: var(--accent); }
 
 /* ============ ANIMATIONS ============ */
 @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }

@@ -85,11 +85,12 @@
 
     <!-- ============== ONGLET : DONNÉES ============== -->
     <section class="page" id="page-donnees">
-      <div class="segmented" role="tablist" data-group="donnees" style="--count:3;">
+      <div class="segmented" role="tablist" data-group="donnees" style="--count:4;">
         <div class="segmented-thumb"></div>
         <button class="seg-btn active" data-group="donnees" data-sub="entreprises" role="tab">Entreprises</button>
         <button class="seg-btn" data-group="donnees" data-sub="zones" role="tab">Zones</button>
         <button class="seg-btn" data-group="donnees" data-sub="taches" role="tab">Tâches</button>
+        <button class="seg-btn" data-group="donnees" data-sub="adminconfig" role="tab">Admin.</button>
       </div>
 
       <!-- Sous-page : Entreprises -->
@@ -130,6 +131,14 @@
           </div>
         </div>
         <button class="fab" id="taskfab" aria-label="Ajouter une tâche">+</button>
+      </div>
+
+      <!-- Sous-page : Administratif (libellés des 4 docs eCheckIn) -->
+      <div class="sub-page" id="sub-adminconfig" data-group="donnees">
+        <div class="list-section">
+          <p class="section-help">Personnalisez le libellé des quatre pièces administratives suivies dans Administratif → eCheckIn.</p>
+          <ul class="doc-labels-list" id="doclabelslist"></ul>
+        </div>
       </div>
 
       <div class="list-section danger-zone">

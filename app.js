@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.29';
+const APP_VERSION = '0.30';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -42,6 +42,7 @@ const state = {
   // Administratif → eCheckIn : ouvriers + pièces administratives par ouvrier
   workers: [],            // [{ id, companyId, name }]
   workerDocs: {},         // { [workerId]: { onSite, doc1, doc2, doc3, doc4 } } — docN = 'YYYY-MM-DD' | null (péremption)
+  docLabels: { doc1: 'Doc 1', doc2: 'Doc 2', doc3: 'Doc 3', doc4: 'Doc 4' }, // libellés paramétrables des 4 pièces
   echeckinCollapsed: {},  // { [companyId]: true } — entreprises repliées dans eCheckIn
   presences: {},          // { 'YYYY-MM-DD': [{ id, companyId, count }] }
   currentDate: todayISO(),
@@ -71,6 +72,7 @@ function load() {
     if (data.adminDocs) state.adminDocs = data.adminDocs;
     if (data.workers) state.workers = data.workers;
     if (data.workerDocs) state.workerDocs = data.workerDocs;
+    if (data.docLabels) state.docLabels = Object.assign({ doc1: 'Doc 1', doc2: 'Doc 2', doc3: 'Doc 3', doc4: 'Doc 4' }, data.docLabels);
     if (data.echeckinCollapsed) state.echeckinCollapsed = data.echeckinCollapsed;
     if (data.presences) state.presences = data.presences;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
@@ -100,6 +102,7 @@ function save() {
     adminDocs: state.adminDocs,
     workers: state.workers,
     workerDocs: state.workerDocs,
+    docLabels: state.docLabels,
     echeckinCollapsed: state.echeckinCollapsed,
     presences: state.presences,
     chartHidden: state.chartHidden,
@@ -241,6 +244,7 @@ function renderAll() {
   renderLegend();
   renderAvancement();
   renderAdministratif();
+  renderDocLabelsConfig();
 }
 
 function renderDate() {
@@ -1655,6 +1659,25 @@ function buildAdminDocRow(companyId, doc) {
 // ---------- Administratif → eCheckIn (ouvriers par entreprise) ----------
 function getCompanyWorkers(cid) { return state.workers.filter(w => w.companyId === cid); }
 const WORKER_DOC_KEYS = ['doc1', 'doc2', 'doc3', 'doc4'];
+const DOC_LABEL_DEFAULTS = { doc1: 'Doc 1', doc2: 'Doc 2', doc3: 'Doc 3', doc4: 'Doc 4' };
+function getDocLabel(field) {
+  const v = state.docLabels?.[field];
+  return (v && v.trim()) ? v : DOC_LABEL_DEFAULTS[field];
+}
+// Pire statut parmi les 4 documents d'un ouvrier (expired > danger > warning > valid).
+// Renvoie null si aucun document n'est daté (tous "none").
+const STATUS_WORST_ORDER = ['valid', 'warning', 'danger', 'expired'];
+function getWorkerWorstStatus(workerId) {
+  const docs = getWorkerDocs(workerId);
+  let worstIdx = -1;
+  for (const k of WORKER_DOC_KEYS) {
+    const s = expiryStatus(docs[k]);
+    const idx = STATUS_WORST_ORDER.indexOf(s);
+    if (idx > worstIdx) worstIdx = idx;
+  }
+  return worstIdx >= 0 ? STATUS_WORST_ORDER[worstIdx] : null;
+}
+
 function getWorkerDocs(wid) {
   const raw = state.workerDocs[wid] || {};
   // Migration : ancien modèle (booléens) → date string ou null
@@ -1706,7 +1729,8 @@ function toggleWorkerPresence(workerId) {
   const bag = ensureWorkerDocsBag(workerId);
   bag.onSite = !bag.onSite;
   save();
-  renderECheckIn();
+  refreshWorkerPresenceChip(workerId);
+  refreshWorkerWorstStatus(workerId);
 }
 function setWorkerDocDate(workerId, field, dateStr) {
   const bag = ensureWorkerDocsBag(workerId);
@@ -1717,6 +1741,7 @@ function setWorkerDocDate(workerId, field, dateStr) {
   // d'ouvrir le picker (avec la date du jour comme défaut), et un
   // re-render synchrone détruirait l'input pendant que le picker est
   // encore en cours d'utilisation, le faisant se fermer aussitôt.
+  refreshWorkerWorstStatus(workerId);
   refreshDocChip(workerId, field);
   refreshCompanyComplete(workerId);
 }
@@ -1751,6 +1776,27 @@ function refreshCompanyComplete(workerId) {
   if (companyCard) {
     companyCard.classList.toggle('is-complete', isECheckInComplete(worker.companyId));
   }
+}
+
+function refreshWorkerPresenceChip(workerId) {
+  const card = document.querySelector(`.worker-card[data-worker-id="${workerId}"]`);
+  if (!card) return;
+  const chip = card.querySelector('.worker-chip.presence');
+  if (!chip) return;
+  const onSite = getWorkerDocs(workerId).onSite;
+  chip.classList.toggle('active', onSite);
+  chip.textContent = onSite ? '✓ Présent' : 'Présent';
+}
+
+// Applique sur la carte ouvrier une classe worst-X correspondant au
+// pire statut de ses 4 documents — uniquement si la présence est cochée.
+function refreshWorkerWorstStatus(workerId) {
+  const card = document.querySelector(`.worker-card[data-worker-id="${workerId}"]`);
+  if (!card) return;
+  card.classList.remove('worst-valid', 'worst-warning', 'worst-danger', 'worst-expired');
+  if (!getWorkerDocs(workerId).onSite) return;
+  const worst = getWorkerWorstStatus(workerId);
+  if (worst) card.classList.add('worst-' + worst);
 }
 
 function buildECheckInClearButton(workerId, field) {
@@ -1836,6 +1882,12 @@ function buildWorkerCard(worker) {
   card.className = 'worker-card';
   card.setAttribute('data-worker-id', worker.id);
   const docs = getWorkerDocs(worker.id);
+  // L'étiquette ouvrier se colore avec la pire couleur des 4 chips,
+  // mais uniquement si la présence est cochée.
+  if (docs.onSite) {
+    const worst = getWorkerWorstStatus(worker.id);
+    if (worst) card.classList.add('worst-' + worst);
+  }
 
   // En-tête : nom de l'ouvrier + chip Présent + bouton supprimer
   const head = document.createElement('div');
@@ -1861,9 +1913,8 @@ function buildWorkerCard(worker) {
   // Grille 2×2 de pastilles documents colorées selon la péremption
   const grid = document.createElement('div');
   grid.className = 'ec-doc-grid';
-  const labels = { doc1: 'Doc 1', doc2: 'Doc 2', doc3: 'Doc 3', doc4: 'Doc 4' };
   for (const k of WORKER_DOC_KEYS) {
-    grid.appendChild(buildECheckInDocChip(worker.id, k, labels[k], docs[k]));
+    grid.appendChild(buildECheckInDocChip(worker.id, k, getDocLabel(k), docs[k]));
   }
   card.appendChild(grid);
 
@@ -1908,6 +1959,45 @@ function buildECheckInDocChip(workerId, field, label, dateStr) {
 function renderAdministratif() {
   renderSecurite();
   renderECheckIn();
+}
+
+// ---------- Données → Administratif : libellés paramétrables des 4 docs ----------
+function setDocLabel(field, value) {
+  if (!state.docLabels) state.docLabels = Object.assign({}, DOC_LABEL_DEFAULTS);
+  state.docLabels[field] = value;
+  save();
+  // Met à jour en place les noms affichés dans toutes les chips eCheckIn
+  // déjà rendues, sans détruire les inputs date.
+  refreshDocLabelsInChips();
+}
+function refreshDocLabelsInChips() {
+  for (const field of WORKER_DOC_KEYS) {
+    const label = getDocLabel(field);
+    document.querySelectorAll(`.ec-doc[data-doc-field="${field}"] .ec-doc-name`)
+      .forEach(el => { el.textContent = label; });
+  }
+}
+function renderDocLabelsConfig() {
+  const list = document.getElementById('doclabelslist');
+  if (!list) return;
+  list.innerHTML = '';
+  for (const field of WORKER_DOC_KEYS) {
+    const li = document.createElement('li');
+    li.className = 'doc-label-item';
+    const tag = document.createElement('span');
+    tag.className = 'doc-label-tag';
+    tag.textContent = DOC_LABEL_DEFAULTS[field];
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'doc-label-input';
+    input.maxLength = 30;
+    input.placeholder = DOC_LABEL_DEFAULTS[field];
+    input.value = state.docLabels?.[field] || '';
+    input.setAttribute('aria-label', `Libellé du document ${field}`);
+    input.addEventListener('input', () => setDocLabel(field, input.value));
+    li.append(tag, input);
+    list.appendChild(li);
+  }
 }
 
 // ---------- eCheckIn : helpers de date de péremption ----------
@@ -2103,6 +2193,7 @@ function exportData() {
     adminDocs: state.adminDocs,
     workers: state.workers,
     workerDocs: state.workerDocs,
+    docLabels: state.docLabels,
     echeckinCollapsed: state.echeckinCollapsed,
     exportedAt: new Date().toISOString()
   };
@@ -2139,6 +2230,7 @@ function importData(file) {
       state.adminDocs = data.adminDocs || {};
       state.workers = data.workers || [];
       state.workerDocs = data.workerDocs || {};
+      state.docLabels = Object.assign({ doc1: 'Doc 1', doc2: 'Doc 2', doc3: 'Doc 3', doc4: 'Doc 4' }, data.docLabels || {});
       state.echeckinCollapsed = data.echeckinCollapsed || {};
       // Compat. anciens exports (liste de tâches unique)
       state._legacyTasks = data.tasks;
@@ -2169,6 +2261,7 @@ function resetAll() {
   state.adminDocs = {};
   state.workers = [];
   state.workerDocs = {};
+  state.docLabels = { doc1: 'Doc 1', doc2: 'Doc 2', doc3: 'Doc 3', doc4: 'Doc 4' };
   state.echeckinCollapsed = {};
   migrateSetups();
   save();
