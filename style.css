@@ -1337,6 +1337,21 @@ input, select { font: inherit; }
   min-height: 24px;
 }
 
+.doc-required-row {
+  display: flex; align-items: center; gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-2);
+  -webkit-tap-highlight-color: transparent;
+}
+.doc-required-check {
+  flex-shrink: 0;
+  width: 18px; height: 18px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.doc-required-text { line-height: 1.3; }
+
 .doc-add-btn { margin-top: 6px; }
 
 /* eCheckIn : chips spécifiques aux types Validation et CACES (Échéance

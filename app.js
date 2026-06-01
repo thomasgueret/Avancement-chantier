@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.34';
+const APP_VERSION = '0.35';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -43,10 +43,10 @@ const state = {
   workers: [],            // [{ id, companyId, name }]
   workerDocs: {},         // { [workerId]: { onSite, employmentType, [docId]: valeur } } — valeur dépend du type du doc
   docs: [                  // liste ordonnée des documents administratifs paramétrés
-    { id: 'doc1', label: 'Doc 1', type: 'echeance', scope: 'both' },
-    { id: 'doc2', label: 'Doc 2', type: 'echeance', scope: 'both' },
-    { id: 'doc3', label: 'Doc 3', type: 'echeance', scope: 'both' },
-    { id: 'doc4', label: 'Doc 4', type: 'echeance', scope: 'both' }
+    { id: 'doc1', label: 'Doc 1', type: 'echeance', scope: 'both', required: true },
+    { id: 'doc2', label: 'Doc 2', type: 'echeance', scope: 'both', required: true },
+    { id: 'doc3', label: 'Doc 3', type: 'echeance', scope: 'both', required: true },
+    { id: 'doc4', label: 'Doc 4', type: 'echeance', scope: 'both', required: true }
   ],
   echeckinCollapsed: {},  // { [companyId]: true } — entreprises repliées dans eCheckIn
   presences: {},          // { 'YYYY-MM-DD': [{ id, companyId, count }] }
@@ -85,9 +85,13 @@ function load() {
         id,
         label: data.docLabels?.[id] || ('Doc ' + id.replace('doc', '')),
         type: data.docTypes?.[id] || 'echeance',
-        scope: 'both'
+        scope: 'both',
+        required: true
       }));
     }
+    // Garantit que chaque doc a un champ `required` (défaut true) pour
+    // les sauvegardes antérieures à l'ajout du flag d'obligation.
+    for (const d of state.docs) if (typeof d.required !== 'boolean') d.required = true;
     if (data.echeckinCollapsed) state.echeckinCollapsed = data.echeckinCollapsed;
     if (data.presences) state.presences = data.presences;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
@@ -1705,6 +1709,13 @@ function getDocScope(id) {
   const s = getDoc(id)?.scope;
   return DOC_SCOPES.includes(s) ? s : 'both';
 }
+function isDocRequired(id) {
+  // Défaut : obligatoire (le doc compte pour le pire-statut de l'ouvrier
+  // et de l'entreprise). Mettre `required: false` dans state.docs pour
+  // afficher la couleur de la chip sans qu'elle influence l'agrégation.
+  const d = getDoc(id);
+  return d ? d.required !== false : true;
+}
 // Récupère la valeur d'un document en l'adaptant au type courant.
 // Évite que le passage d'un type à l'autre n'affiche une valeur incohérente.
 function getDocValue(workerId, field) {
@@ -1742,7 +1753,11 @@ const STATUS_WORST_ORDER = ['valid', 'warning', 'danger', 'expired'];
 function getWorkerWorstStatus(workerId) {
   const empType = getWorkerDocs(workerId).employmentType;
   let worstIdx = -1;
+  // Seuls les documents marqués « obligatoires » entrent dans le pire
+  // statut. Un doc non obligatoire garde sa couleur sur sa chip mais
+  // n'influe ni sur l'étiquette ouvrier ni sur l'étiquette entreprise.
   for (const k of getApplicableDocIds(empType)) {
+    if (!isDocRequired(k)) continue;
     const s = getDocStatus(workerId, k);
     const idx = STATUS_WORST_ORDER.indexOf(s);
     if (idx > worstIdx) worstIdx = idx;
@@ -2204,6 +2219,15 @@ function setDocScope(id, scope) {
   // Le scope filtre les chips visibles par ouvrier — re-render eCheckIn
   renderECheckIn();
 }
+function setDocRequired(id, required) {
+  const d = getDoc(id);
+  if (!d) return;
+  d.required = !!required;
+  save();
+  // Re-render eCheckIn pour recalculer le pire-statut ouvrier + entreprise
+  // (les chips elles-mêmes ne changent pas, mais l'agrégation oui).
+  renderECheckIn();
+}
 function refreshScopeSlider(docId) {
   const item = document.querySelector(`.doc-label-item[data-doc-id="${docId}"]`);
   if (!item) return;
@@ -2220,7 +2244,7 @@ function addDoc() {
   const id = 'doc_' + uid();
   const n = getDocs().length + 1;
   if (!Array.isArray(state.docs)) state.docs = [];
-  state.docs.push({ id, label: `Doc ${n}`, type: 'echeance', scope: 'both' });
+  state.docs.push({ id, label: `Doc ${n}`, type: 'echeance', scope: 'both', required: true });
   save();
   renderDocLabelsConfig();
   renderECheckIn();
@@ -2313,7 +2337,21 @@ function buildDocConfigRow(doc) {
   }
   scopeBar.appendChild(seg);
 
-  li.append(main, scopeBar);
+  // Ligne 3 : case Obligatoire (case cochée → le doc compte pour le
+  // pire-statut ouvrier/entreprise ; décochée → couleur du chip seule)
+  const reqRow = document.createElement('label');
+  reqRow.className = 'doc-required-row';
+  const reqCheck = document.createElement('input');
+  reqCheck.type = 'checkbox';
+  reqCheck.className = 'doc-required-check';
+  reqCheck.checked = isDocRequired(doc.id);
+  reqCheck.addEventListener('change', () => setDocRequired(doc.id, reqCheck.checked));
+  const reqText = document.createElement('span');
+  reqText.className = 'doc-required-text';
+  reqText.textContent = 'Obligatoire (entre dans la couleur de l\'ouvrier et de l\'entreprise)';
+  reqRow.append(reqCheck, reqText);
+
+  li.append(main, scopeBar, reqRow);
   return li;
 }
 
@@ -2661,8 +2699,10 @@ function importData(file) {
             id,
             label: data.docLabels?.[id] || ('Doc ' + id.replace('doc', '')),
             type: data.docTypes?.[id] || 'echeance',
-            scope: 'both'
+            scope: 'both',
+            required: true
           }));
+      for (const d of state.docs) if (typeof d.required !== 'boolean') d.required = true;
       state.echeckinCollapsed = data.echeckinCollapsed || {};
       // Compat. anciens exports (liste de tâches unique)
       state._legacyTasks = data.tasks;
@@ -2694,10 +2734,10 @@ function resetAll() {
   state.workers = [];
   state.workerDocs = {};
   state.docs = [
-    { id: 'doc1', label: 'Doc 1', type: 'echeance', scope: 'both' },
-    { id: 'doc2', label: 'Doc 2', type: 'echeance', scope: 'both' },
-    { id: 'doc3', label: 'Doc 3', type: 'echeance', scope: 'both' },
-    { id: 'doc4', label: 'Doc 4', type: 'echeance', scope: 'both' }
+    { id: 'doc1', label: 'Doc 1', type: 'echeance', scope: 'both', required: true },
+    { id: 'doc2', label: 'Doc 2', type: 'echeance', scope: 'both', required: true },
+    { id: 'doc3', label: 'Doc 3', type: 'echeance', scope: 'both', required: true },
+    { id: 'doc4', label: 'Doc 4', type: 'echeance', scope: 'both', required: true }
   ];
   state.echeckinCollapsed = {};
   migrateSetups();
