@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.32';
+const APP_VERSION = '0.33';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -41,9 +41,13 @@ const state = {
   adminDocs: {},          // { [companyId]: [{ id, name, receivedAt: 'YYYY-MM-DD' | null }] }
   // Administratif → eCheckIn : ouvriers + pièces administratives par ouvrier
   workers: [],            // [{ id, companyId, name }]
-  workerDocs: {},         // { [workerId]: { onSite, doc1, doc2, doc3, doc4 } } — docN = 'YYYY-MM-DD' | null (péremption)
-  docLabels: { doc1: 'Doc 1', doc2: 'Doc 2', doc3: 'Doc 3', doc4: 'Doc 4' }, // libellés paramétrables des 4 pièces
-  docTypes:  { doc1: 'echeance', doc2: 'echeance', doc3: 'echeance', doc4: 'echeance' }, // type de validation : 'echeance' | 'validation' | 'caces'
+  workerDocs: {},         // { [workerId]: { onSite, employmentType, [docId]: valeur } } — valeur dépend du type du doc
+  docs: [                  // liste ordonnée des documents administratifs paramétrés
+    { id: 'doc1', label: 'Doc 1', type: 'echeance', scope: 'both' },
+    { id: 'doc2', label: 'Doc 2', type: 'echeance', scope: 'both' },
+    { id: 'doc3', label: 'Doc 3', type: 'echeance', scope: 'both' },
+    { id: 'doc4', label: 'Doc 4', type: 'echeance', scope: 'both' }
+  ],
   echeckinCollapsed: {},  // { [companyId]: true } — entreprises repliées dans eCheckIn
   presences: {},          // { 'YYYY-MM-DD': [{ id, companyId, count }] }
   currentDate: todayISO(),
@@ -73,8 +77,17 @@ function load() {
     if (data.adminDocs) state.adminDocs = data.adminDocs;
     if (data.workers) state.workers = data.workers;
     if (data.workerDocs) state.workerDocs = data.workerDocs;
-    if (data.docLabels) state.docLabels = Object.assign({ doc1: 'Doc 1', doc2: 'Doc 2', doc3: 'Doc 3', doc4: 'Doc 4' }, data.docLabels);
-    if (data.docTypes)  state.docTypes  = Object.assign({ doc1: 'echeance', doc2: 'echeance', doc3: 'echeance', doc4: 'echeance' }, data.docTypes);
+    if (data.docs && data.docs.length > 0) {
+      state.docs = data.docs;
+    } else if (data.docLabels || data.docTypes) {
+      // Migration v0.32 → docs[] : on reconstruit à partir des anciens maps
+      state.docs = ['doc1', 'doc2', 'doc3', 'doc4'].map(id => ({
+        id,
+        label: data.docLabels?.[id] || ('Doc ' + id.replace('doc', '')),
+        type: data.docTypes?.[id] || 'echeance',
+        scope: 'both'
+      }));
+    }
     if (data.echeckinCollapsed) state.echeckinCollapsed = data.echeckinCollapsed;
     if (data.presences) state.presences = data.presences;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
@@ -104,8 +117,7 @@ function save() {
     adminDocs: state.adminDocs,
     workers: state.workers,
     workerDocs: state.workerDocs,
-    docLabels: state.docLabels,
-    docTypes: state.docTypes,
+    docs: state.docs,
     echeckinCollapsed: state.echeckinCollapsed,
     presences: state.presences,
     chartHidden: state.chartHidden,
@@ -1661,18 +1673,37 @@ function buildAdminDocRow(companyId, doc) {
 
 // ---------- Administratif → eCheckIn (ouvriers par entreprise) ----------
 function getCompanyWorkers(cid) { return state.workers.filter(w => w.companyId === cid); }
-const WORKER_DOC_KEYS = ['doc1', 'doc2', 'doc3', 'doc4'];
-const DOC_LABEL_DEFAULTS = { doc1: 'Doc 1', doc2: 'Doc 2', doc3: 'Doc 3', doc4: 'Doc 4' };
 const DOC_TYPES = ['validation', 'echeance', 'caces'];
 const DOC_TYPE_LABELS = { validation: 'Validation', echeance: 'Échéance', caces: 'CACES' };
-const DOC_TYPE_DEFAULTS = { doc1: 'echeance', doc2: 'echeance', doc3: 'echeance', doc4: 'echeance' };
-function getDocLabel(field) {
-  const v = state.docLabels?.[field];
-  return (v && v.trim()) ? v : DOC_LABEL_DEFAULTS[field];
+const DOC_SCOPES = ['salarie', 'interim', 'both'];
+const DOC_SCOPE_LABELS = { salarie: 'Salarié', interim: 'Intérim', both: 'Tous' };
+
+function getDocs() { return Array.isArray(state.docs) ? state.docs : []; }
+function getDocIds() { return getDocs().map(d => d.id); }
+function getDoc(id) { return getDocs().find(d => d.id === id) || null; }
+// IDs des docs qui s'appliquent à un ouvrier selon son type d'emploi
+function getApplicableDocIds(employmentType) {
+  return getDocs()
+    .filter(d => !d.scope || d.scope === 'both' || d.scope === employmentType)
+    .map(d => d.id);
 }
-function getDocType(field) {
-  const t = state.docTypes?.[field];
+function defaultDocLabel(id) {
+  // Pour les anciens IDs « docN », on renvoie « Doc N »
+  const m = /^doc(\d+)$/.exec(id);
+  return m ? `Doc ${m[1]}` : id;
+}
+function getDocLabel(id) {
+  const d = getDoc(id);
+  const v = d?.label;
+  return (v && v.trim()) ? v : defaultDocLabel(id);
+}
+function getDocType(id) {
+  const t = getDoc(id)?.type;
   return DOC_TYPES.includes(t) ? t : 'echeance';
+}
+function getDocScope(id) {
+  const s = getDoc(id)?.scope;
+  return DOC_SCOPES.includes(s) ? s : 'both';
 }
 // Récupère la valeur d'un document en l'adaptant au type courant.
 // Évite que le passage d'un type à l'autre n'affiche une valeur incohérente.
@@ -1709,8 +1740,9 @@ function getDocStatus(workerId, field) {
 // Renvoie null si aucun document n'est documenté (tous "none").
 const STATUS_WORST_ORDER = ['valid', 'warning', 'danger', 'expired'];
 function getWorkerWorstStatus(workerId) {
+  const empType = getWorkerDocs(workerId).employmentType;
   let worstIdx = -1;
-  for (const k of WORKER_DOC_KEYS) {
+  for (const k of getApplicableDocIds(empType)) {
     const s = getDocStatus(workerId, k);
     const idx = STATUS_WORST_ORDER.indexOf(s);
     if (idx > worstIdx) worstIdx = idx;
@@ -1728,7 +1760,7 @@ function getWorkerDocs(wid) {
     onSite: !!raw.onSite,
     employmentType: raw.employmentType === 'interim' ? 'interim' : 'salarie'
   };
-  for (const k of WORKER_DOC_KEYS) out[k] = raw[k] ?? null;
+  for (const k of getDocIds()) out[k] = raw[k] ?? null;
   return out;
 }
 // Pire statut parmi les ouvriers PRÉSENTS d'une entreprise (même règle
@@ -1792,6 +1824,23 @@ function toggleEmploymentType(workerId) {
   bag.employmentType = bag.employmentType === 'interim' ? 'salarie' : 'interim';
   save();
   refreshWorkerTypeButton(workerId);
+  // Les chips visibles dépendent du type d'emploi (scope) → reconstruire
+  // la grille de chips de l'ouvrier (sans toucher au reste de la carte).
+  refreshWorkerDocGrid(workerId);
+  refreshWorkerWorstStatus(workerId);
+  refreshCompanyWorstStatus(workerId);
+}
+// Reconstruit en place uniquement la grille de chips d'un ouvrier
+function refreshWorkerDocGrid(workerId) {
+  const card = document.querySelector(`.worker-card[data-worker-id="${workerId}"]`);
+  if (!card) return;
+  const grid = card.querySelector('.ec-doc-grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  const empType = getWorkerDocs(workerId).employmentType;
+  for (const k of getApplicableDocIds(empType)) {
+    grid.appendChild(buildECheckInDocChip(workerId, k, getDocLabel(k)));
+  }
 }
 // Met à jour la valeur d'un doc (toutes types confondus) puis rafraîchit
 // uniquement les éléments concernés — surtout pas le DOM entier : sur
@@ -2020,10 +2069,10 @@ function buildWorkerCard(worker) {
   head.append(nameInput, presenceBtn, typeBtn, delBtn);
   card.appendChild(head);
 
-  // Grille 2×2 de pastilles documents colorées selon la péremption
+  // Grille de pastilles documents colorées (filtrée par scope vs type d'emploi)
   const grid = document.createElement('div');
   grid.className = 'ec-doc-grid';
-  for (const k of WORKER_DOC_KEYS) {
+  for (const k of getApplicableDocIds(docs.employmentType)) {
     grid.appendChild(buildECheckInDocChip(worker.id, k, getDocLabel(k)));
   }
   card.appendChild(grid);
@@ -2116,30 +2165,65 @@ function renderAdministratif() {
   renderECheckIn();
 }
 
-// ---------- Données → Administratif : libellés paramétrables des 4 docs ----------
-function setDocLabel(field, value) {
-  if (!state.docLabels) state.docLabels = Object.assign({}, DOC_LABEL_DEFAULTS);
-  state.docLabels[field] = value;
+// ---------- Données → Administratif : configuration des documents ----------
+function setDocLabel(id, value) {
+  const d = getDoc(id);
+  if (!d) return;
+  d.label = value;
   save();
   // Met à jour en place les noms affichés dans toutes les chips eCheckIn
   // déjà rendues, sans détruire les inputs date.
   refreshDocLabelsInChips();
 }
 function refreshDocLabelsInChips() {
-  for (const field of WORKER_DOC_KEYS) {
-    const label = getDocLabel(field);
-    document.querySelectorAll(`.ec-doc[data-doc-field="${field}"] .ec-doc-name`)
+  for (const id of getDocIds()) {
+    const label = getDocLabel(id);
+    document.querySelectorAll(`.ec-doc[data-doc-field="${id}"] .ec-doc-name`)
       .forEach(el => { el.textContent = label; });
   }
 }
-function setDocType(field, type) {
+function setDocType(id, type) {
   if (!DOC_TYPES.includes(type)) return;
-  if (!state.docTypes) state.docTypes = Object.assign({}, DOC_TYPE_DEFAULTS);
-  state.docTypes[field] = type;
+  const d = getDoc(id);
+  if (!d) return;
+  d.type = type;
   save();
   // Le type change la structure et l'interaction du chip — on re-render
   // entièrement l'onglet eCheckIn (les ouvriers ne sont pas en train
   // d'interagir avec un picker quand on change le paramétrage).
+  renderECheckIn();
+}
+function setDocScope(id, scope) {
+  if (!DOC_SCOPES.includes(scope)) return;
+  const d = getDoc(id);
+  if (!d) return;
+  d.scope = scope;
+  save();
+  // Le scope filtre les chips visibles par ouvrier — re-render eCheckIn
+  renderECheckIn();
+}
+function addDoc() {
+  // Nouveau doc avec id unique et libellé par défaut « Doc N » basé
+  // sur le nombre courant de documents.
+  const id = 'doc_' + uid();
+  const n = getDocs().length + 1;
+  if (!Array.isArray(state.docs)) state.docs = [];
+  state.docs.push({ id, label: `Doc ${n}`, type: 'echeance', scope: 'both' });
+  save();
+  renderDocLabelsConfig();
+  renderECheckIn();
+}
+function removeDoc(id) {
+  const d = getDoc(id);
+  if (!d) return;
+  if (!confirm(`Supprimer « ${d.label || 'ce document'} » ?\nLes valeurs saisies pour ce document chez tous les ouvriers seront perdues.`)) return;
+  state.docs = getDocs().filter(x => x.id !== id);
+  // Nettoie les valeurs stockées sur chaque ouvrier
+  for (const wid of Object.keys(state.workerDocs)) {
+    if (state.workerDocs[wid]) delete state.workerDocs[wid][id];
+  }
+  save();
+  renderDocLabelsConfig();
   renderECheckIn();
 }
 
@@ -2147,34 +2231,78 @@ function renderDocLabelsConfig() {
   const list = document.getElementById('doclabelslist');
   if (!list) return;
   list.innerHTML = '';
-  for (const field of WORKER_DOC_KEYS) {
-    const li = document.createElement('li');
-    li.className = 'doc-label-item';
-    const tag = document.createElement('span');
-    tag.className = 'doc-label-tag';
-    tag.textContent = DOC_LABEL_DEFAULTS[field];
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'doc-label-input';
-    input.maxLength = 30;
-    input.placeholder = DOC_LABEL_DEFAULTS[field];
-    input.value = state.docLabels?.[field] || '';
-    input.setAttribute('aria-label', `Libellé du document ${field}`);
-    input.addEventListener('input', () => setDocLabel(field, input.value));
-    const typeSelect = document.createElement('select');
-    typeSelect.className = 'doc-type-select';
-    typeSelect.setAttribute('aria-label', `Type de validation pour ${field}`);
-    for (const t of DOC_TYPES) {
-      const opt = document.createElement('option');
-      opt.value = t;
-      opt.textContent = DOC_TYPE_LABELS[t];
-      if (t === getDocType(field)) opt.selected = true;
-      typeSelect.appendChild(opt);
-    }
-    typeSelect.addEventListener('change', () => setDocType(field, typeSelect.value));
-    li.append(tag, input, typeSelect);
-    list.appendChild(li);
+  for (const doc of getDocs()) {
+    list.appendChild(buildDocConfigRow(doc));
   }
+  const addBtn = document.createElement('button');
+  addBtn.className = 'btn-primary doc-add-btn';
+  addBtn.textContent = '+ Ajouter un document';
+  addBtn.addEventListener('click', addDoc);
+  list.appendChild(addBtn);
+}
+
+function buildDocConfigRow(doc) {
+  const li = document.createElement('li');
+  li.className = 'doc-label-item';
+  li.dataset.docId = doc.id;
+
+  // Ligne 1 : libellé + type + supprimer
+  const main = document.createElement('div');
+  main.className = 'doc-label-main';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'doc-label-input';
+  input.maxLength = 30;
+  input.placeholder = defaultDocLabel(doc.id);
+  input.value = doc.label || '';
+  input.setAttribute('aria-label', `Libellé du document ${doc.id}`);
+  input.addEventListener('input', () => setDocLabel(doc.id, input.value));
+  const typeSelect = document.createElement('select');
+  typeSelect.className = 'doc-type-select';
+  typeSelect.setAttribute('aria-label', `Type de validation pour ${doc.label}`);
+  for (const t of DOC_TYPES) {
+    const opt = document.createElement('option');
+    opt.value = t;
+    opt.textContent = DOC_TYPE_LABELS[t];
+    if (t === getDocType(doc.id)) opt.selected = true;
+    typeSelect.appendChild(opt);
+  }
+  typeSelect.addEventListener('change', () => setDocType(doc.id, typeSelect.value));
+  const delBtn = document.createElement('button');
+  delBtn.className = 'doc-remove-btn';
+  delBtn.setAttribute('aria-label', `Supprimer le document ${doc.label}`);
+  delBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>';
+  delBtn.addEventListener('click', () => removeDoc(doc.id));
+  main.append(input, typeSelect, delBtn);
+
+  // Ligne 2 : scope (salarié / tous / intérim) sous forme de slider
+  const scopeBar = document.createElement('div');
+  scopeBar.className = 'doc-scope-bar';
+  const scopeLabel = document.createElement('span');
+  scopeLabel.className = 'doc-scope-label';
+  scopeLabel.textContent = 'Pour :';
+  scopeBar.appendChild(scopeLabel);
+  const seg = document.createElement('div');
+  const idx = DOC_SCOPES.indexOf(getDocScope(doc.id));
+  seg.className = 'segmented doc-scope-seg';
+  seg.style.setProperty('--count', String(DOC_SCOPES.length));
+  seg.dataset.position = String(idx >= 0 ? idx : 0);
+  const thumb = document.createElement('div');
+  thumb.className = 'segmented-thumb';
+  seg.appendChild(thumb);
+  for (let i = 0; i < DOC_SCOPES.length; i++) {
+    const s = DOC_SCOPES[i];
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'seg-btn' + (i === idx ? ' active' : '');
+    btn.textContent = DOC_SCOPE_LABELS[s];
+    btn.addEventListener('click', () => setDocScope(doc.id, s));
+    seg.appendChild(btn);
+  }
+  scopeBar.appendChild(seg);
+
+  li.append(main, scopeBar);
+  return li;
 }
 
 // ---------- Modale CACES ----------
@@ -2474,8 +2602,7 @@ function exportData() {
     adminDocs: state.adminDocs,
     workers: state.workers,
     workerDocs: state.workerDocs,
-    docLabels: state.docLabels,
-    docTypes: state.docTypes,
+    docs: state.docs,
     echeckinCollapsed: state.echeckinCollapsed,
     exportedAt: new Date().toISOString()
   };
@@ -2512,8 +2639,13 @@ function importData(file) {
       state.adminDocs = data.adminDocs || {};
       state.workers = data.workers || [];
       state.workerDocs = data.workerDocs || {};
-      state.docLabels = Object.assign({ doc1: 'Doc 1', doc2: 'Doc 2', doc3: 'Doc 3', doc4: 'Doc 4' }, data.docLabels || {});
-      state.docTypes  = Object.assign({ doc1: 'echeance', doc2: 'echeance', doc3: 'echeance', doc4: 'echeance' }, data.docTypes || {});
+      state.docs = (data.docs && data.docs.length > 0) ? data.docs
+        : ['doc1', 'doc2', 'doc3', 'doc4'].map(id => ({
+            id,
+            label: data.docLabels?.[id] || ('Doc ' + id.replace('doc', '')),
+            type: data.docTypes?.[id] || 'echeance',
+            scope: 'both'
+          }));
       state.echeckinCollapsed = data.echeckinCollapsed || {};
       // Compat. anciens exports (liste de tâches unique)
       state._legacyTasks = data.tasks;
@@ -2544,8 +2676,12 @@ function resetAll() {
   state.adminDocs = {};
   state.workers = [];
   state.workerDocs = {};
-  state.docLabels = { doc1: 'Doc 1', doc2: 'Doc 2', doc3: 'Doc 3', doc4: 'Doc 4' };
-  state.docTypes  = { doc1: 'echeance', doc2: 'echeance', doc3: 'echeance', doc4: 'echeance' };
+  state.docs = [
+    { id: 'doc1', label: 'Doc 1', type: 'echeance', scope: 'both' },
+    { id: 'doc2', label: 'Doc 2', type: 'echeance', scope: 'both' },
+    { id: 'doc3', label: 'Doc 3', type: 'echeance', scope: 'both' },
+    { id: 'doc4', label: 'Doc 4', type: 'echeance', scope: 'both' }
+  ];
   state.echeckinCollapsed = {};
   migrateSetups();
   save();

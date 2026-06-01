@@ -1268,26 +1268,17 @@ input, select { font: inherit; }
 /* Pas de bordure inférieure de l'en-tête quand l'entreprise est repliée */
 .admin-company.is-collapsed .admin-company-header { border-bottom: none; }
 
-/* ============ DONNÉES → ADMINISTRATIF (libellés docs) ============ */
-.doc-labels-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+/* ============ DONNÉES → ADMINISTRATIF (configuration des docs) ============ */
+.doc-labels-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
 .doc-label-item {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; flex-direction: column; gap: 8px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 10px 12px;
 }
-.doc-label-tag {
-  flex-shrink: 0;
-  min-width: 52px;
-  text-align: center;
-  font-size: 12px; font-weight: 700;
-  letter-spacing: 0.04em;
-  color: var(--text-3);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 4px 10px;
+.doc-label-main {
+  display: flex; align-items: center; gap: 10px;
 }
 .doc-label-input {
   flex: 1; min-width: 0;
@@ -1313,6 +1304,40 @@ input, select { font: inherit; }
   min-height: 34px;
 }
 .doc-type-select:focus { outline: none; border-color: var(--accent); }
+.doc-remove-btn {
+  flex-shrink: 0;
+  width: 30px; height: 30px;
+  border: none; background: transparent;
+  color: var(--text-3);
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px;
+}
+.doc-remove-btn svg { width: 16px; height: 16px; fill: currentColor; }
+.doc-remove-btn:active { background: var(--surface-2); color: var(--danger); }
+
+/* Slider de scope (Salarié / Tous / Intérim) sous chaque doc */
+.doc-scope-bar {
+  display: flex; align-items: center; gap: 10px;
+}
+.doc-scope-label {
+  flex-shrink: 0;
+  font-size: 12px; font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: 0.02em;
+}
+.segmented.doc-scope-seg {
+  flex: 1;
+  margin-bottom: 0;
+  padding: 3px;
+  min-height: 30px;
+}
+.segmented.doc-scope-seg .seg-btn {
+  padding: 6px 8px;
+  font-size: 12px;
+  min-height: 24px;
+}
+
+.doc-add-btn { margin-top: 6px; }
 
 /* eCheckIn : chips spécifiques aux types Validation et CACES (Échéance
    utilise déjà l'input date superposé). Les statuts gardent les mêmes
