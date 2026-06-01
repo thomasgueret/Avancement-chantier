@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.28';
+const APP_VERSION = '0.29';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -1712,8 +1712,60 @@ function setWorkerDocDate(workerId, field, dateStr) {
   const bag = ensureWorkerDocsBag(workerId);
   bag[field] = dateStr || null;
   save();
-  renderECheckIn();
+  // Mise à jour ciblée et en place de la chip concernée — surtout pas
+  // un re-render global : iOS Safari peut émettre un `change` au moment
+  // d'ouvrir le picker (avec la date du jour comme défaut), et un
+  // re-render synchrone détruirait l'input pendant que le picker est
+  // encore en cours d'utilisation, le faisant se fermer aussitôt.
+  refreshDocChip(workerId, field);
+  refreshCompanyComplete(workerId);
 }
+
+function refreshDocChip(workerId, field) {
+  const chip = document.querySelector(
+    `.worker-card[data-worker-id="${workerId}"] .ec-doc[data-doc-field="${field}"]`
+  );
+  if (!chip) return;
+  const dateStr = getWorkerDocs(workerId)[field];
+  const status = expiryStatus(dateStr);
+  chip.className = `ec-doc status-${status}`;
+  chip.setAttribute('data-doc-field', field);
+  const dateEl = chip.querySelector('.ec-doc-date');
+  if (dateEl) dateEl.textContent = dateStr ? fmtFR(dateStr) : '—';
+  const input = chip.querySelector('.ec-doc-input');
+  if (input && input.value !== (dateStr || '')) input.value = dateStr || '';
+  let clear = chip.querySelector('.ec-doc-clear');
+  if (dateStr && !clear) {
+    chip.appendChild(buildECheckInClearButton(workerId, field));
+  } else if (!dateStr && clear) {
+    clear.remove();
+  }
+}
+
+function refreshCompanyComplete(workerId) {
+  const worker = state.workers.find(w => w.id === workerId);
+  if (!worker) return;
+  const companyCard = document.querySelector(
+    `.admin-company[data-company-id="${worker.companyId}"]`
+  );
+  if (companyCard) {
+    companyCard.classList.toggle('is-complete', isECheckInComplete(worker.companyId));
+  }
+}
+
+function buildECheckInClearButton(workerId, field) {
+  const clear = document.createElement('button');
+  clear.className = 'ec-doc-clear';
+  clear.setAttribute('aria-label', 'Effacer la date');
+  clear.textContent = '×';
+  clear.addEventListener('click', (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setWorkerDocDate(workerId, field, null);
+  });
+  return clear;
+}
+
 function toggleECheckInCollapse(companyId) {
   if (state.echeckinCollapsed[companyId]) delete state.echeckinCollapsed[companyId];
   else state.echeckinCollapsed[companyId] = true;
@@ -1739,6 +1791,7 @@ function renderECheckIn() {
     const collapsed = !!state.echeckinCollapsed[company.id];
     const card = document.createElement('div');
     card.className = 'admin-company' + (complete ? ' is-complete' : '') + (collapsed ? ' is-collapsed' : '');
+    card.setAttribute('data-company-id', company.id);
 
     const header = document.createElement('div');
     header.className = 'admin-company-header';
@@ -1781,6 +1834,7 @@ function renderECheckIn() {
 function buildWorkerCard(worker) {
   const card = document.createElement('div');
   card.className = 'worker-card';
+  card.setAttribute('data-worker-id', worker.id);
   const docs = getWorkerDocs(worker.id);
 
   // En-tête : nom de l'ouvrier + chip Présent + bouton supprimer
@@ -1820,6 +1874,7 @@ function buildECheckInDocChip(workerId, field, label, dateStr) {
   const status = expiryStatus(dateStr);
   const chip = document.createElement('div');
   chip.className = `ec-doc status-${status}`;
+  chip.setAttribute('data-doc-field', field);
 
   // Libellé et date affichés au-dessus, en pointer-events: none côté CSS
   // pour que le tap traverse vers l'input.
@@ -1845,20 +1900,7 @@ function buildECheckInDocChip(workerId, field, label, dateStr) {
   input.addEventListener('change', () => setWorkerDocDate(workerId, field, input.value));
 
   chip.append(name, date, input);
-
-  // Bouton effacer (visible seulement si une date est saisie)
-  if (dateStr) {
-    const clear = document.createElement('button');
-    clear.className = 'ec-doc-clear';
-    clear.setAttribute('aria-label', 'Effacer la date');
-    clear.textContent = '×';
-    clear.addEventListener('click', (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      setWorkerDocDate(workerId, field, null);
-    });
-    chip.appendChild(clear);
-  }
+  if (dateStr) chip.appendChild(buildECheckInClearButton(workerId, field));
 
   return chip;
 }
