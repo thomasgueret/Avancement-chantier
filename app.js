@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.33';
+const APP_VERSION = '0.34';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -2199,8 +2199,20 @@ function setDocScope(id, scope) {
   if (!d) return;
   d.scope = scope;
   save();
+  // Met à jour le slider de scope en place (curseur orange + classe active)
+  refreshScopeSlider(id);
   // Le scope filtre les chips visibles par ouvrier — re-render eCheckIn
   renderECheckIn();
+}
+function refreshScopeSlider(docId) {
+  const item = document.querySelector(`.doc-label-item[data-doc-id="${docId}"]`);
+  if (!item) return;
+  const seg = item.querySelector('.doc-scope-seg');
+  if (!seg) return;
+  const idx = DOC_SCOPES.indexOf(getDocScope(docId));
+  seg.dataset.position = String(idx >= 0 ? idx : 0);
+  const buttons = seg.querySelectorAll('.seg-btn');
+  buttons.forEach((b, i) => b.classList.toggle('active', i === idx));
 }
 function addDoc() {
   // Nouveau doc avec id unique et libellé par défaut « Doc N » basé
@@ -2364,8 +2376,13 @@ function buildCacesRow(caces) {
   dateInput.value = caces.expiresAt || '';
   dateInput.setAttribute('aria-label', 'Date de péremption');
   dateInput.addEventListener('change', () => {
-    updateCaces(caces.id, { expiresAt: dateInput.value || null });
-    renderCacesModalList();
+    const val = dateInput.value || null;
+    updateCaces(caces.id, { expiresAt: val });
+    // Mise à jour en place : surtout pas un re-render de la liste,
+    // qui détruirait l'input pendant que iOS Safari l'utilise encore
+    // (même problème que pour les chips eCheckIn — picker se ferme
+    // sinon en validant la date du jour).
+    row.className = `caces-row status-${expiryStatus(val)}`;
   });
 
   const delBtn = document.createElement('button');
