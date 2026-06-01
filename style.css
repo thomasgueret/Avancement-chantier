@@ -1035,6 +1035,7 @@ input, select { font: inherit; }
   margin: 4px 0; padding: 6px 4px;
   font-size: 13px; color: var(--text-3); font-style: italic;
 }
+/* Sécurité : carte verte quand tous les documents ont une date de réception */
 .admin-company.is-complete {
   background: rgba(46, 125, 50, 0.06);
   border-color: rgba(46, 125, 50, 0.35);
@@ -1044,6 +1045,23 @@ input, select { font: inherit; }
   border-bottom-color: rgba(46, 125, 50, 0.30);
 }
 .admin-company.is-complete .admin-company-name { color: #2e7d32; }
+
+/* eCheckIn : étiquette entreprise colorée selon la pire couleur de ses
+   ouvriers PRÉSENTS (même règle que pour l'étiquette ouvrier). */
+.admin-company.worst-valid   .admin-company-header { background: rgba(46, 125, 50, 0.12);  border-bottom-color: rgba(46, 125, 50, 0.30); }
+.admin-company.worst-valid   .admin-company-name   { color: #1b5e20; }
+.admin-company.worst-warning .admin-company-header { background: rgba(237, 108, 2, 0.16);  border-bottom-color: rgba(237, 108, 2, 0.40); }
+.admin-company.worst-warning .admin-company-name   { color: #b54708; }
+.admin-company.worst-danger  .admin-company-header { background: rgba(211, 47, 47, 0.16);  border-bottom-color: rgba(211, 47, 47, 0.45); }
+.admin-company.worst-danger  .admin-company-name   { color: #b71c1c; }
+.admin-company.worst-expired .admin-company-header { background: #1a1a1a; border-bottom-color: #000; }
+.admin-company.worst-expired .admin-company-name   { color: white; }
+.admin-company.worst-expired .admin-add-btn,
+.admin-company.worst-expired .zone-collapse {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.30);
+  color: rgba(255, 255, 255, 0.85);
+}
 
 /* ============ ADMINISTRATIF → Sécurité (lignes documents) ============ */
 .admin-doc-row {
@@ -1110,8 +1128,14 @@ input, select { font: inherit; }
 .worker-card.worst-expired .worker-name        { color: white; border-bottom-color: rgba(255, 255, 255, 0.30); }
 .worker-card.worst-expired .worker-name::placeholder { color: rgba(255, 255, 255, 0.55); }
 .worker-card.worst-expired .worker-delete      { color: rgba(255, 255, 255, 0.75); }
-.worker-card.worst-expired .worker-chip.presence.active {
+.worker-card.worst-expired .worker-presence.active {
   background: white; color: #1a1a1a; border-color: white;
+}
+.worker-card.worst-expired .worker-presence:not(.active) {
+  background: transparent; color: rgba(255, 255, 255, 0.7); border-color: rgba(255, 255, 255, 0.3);
+}
+.worker-card.worst-expired .worker-type {
+  filter: brightness(1.1);
 }
 .worker-name {
   flex: 1; min-width: 0;
@@ -1134,24 +1158,35 @@ input, select { font: inherit; }
 }
 .worker-delete svg { width: 18px; height: 18px; fill: currentColor; }
 .worker-delete:active { background: var(--surface-2); color: var(--danger); }
-/* Chip Présent dans l'en-tête de la carte ouvrier */
-.worker-chip {
+/* Bouton Présent (icône tick) dans l'en-tête de la carte ouvrier */
+.worker-presence, .worker-type {
   flex-shrink: 0;
-  height: 32px;
+  width: 34px; height: 34px;
   border-radius: 999px;
-  background: var(--surface-2);
-  color: var(--text-2);
-  border: 1px solid var(--border);
-  font-size: 12px; font-weight: 700;
-  letter-spacing: 0.04em;
-  padding: 0 12px;
   display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.worker-chip:active { transform: scale(0.97); }
-.worker-chip.presence.active {
+.worker-presence svg, .worker-type svg { width: 17px; height: 17px; fill: currentColor; }
+.worker-presence:active, .worker-type:active { transform: scale(0.94); }
+.worker-presence.active {
   background: #2e7d32;
   border-color: #2e7d32;
+  color: white;
+}
+/* Bouton type d'emploi : orange = salarié, bleu = intérim */
+.worker-type.type-salarie {
+  background: #ed6c02;
+  border-color: #ed6c02;
+  color: white;
+}
+.worker-type.type-interim {
+  background: #1976d2;
+  border-color: #1976d2;
   color: white;
 }
 

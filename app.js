@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.30';
+const APP_VERSION = '0.31';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -1680,24 +1680,33 @@ function getWorkerWorstStatus(workerId) {
 
 function getWorkerDocs(wid) {
   const raw = state.workerDocs[wid] || {};
-  // Migration : ancien modèle (booléens) → date string ou null
-  const out = { onSite: !!raw.onSite };
+  // Migration : ancien modèle (booléens) → date string ou null,
+  // + champ employmentType ajouté ultérieurement.
+  const out = {
+    onSite: !!raw.onSite,
+    employmentType: raw.employmentType === 'interim' ? 'interim' : 'salarie'
+  };
   for (const k of WORKER_DOC_KEYS) {
     const v = raw[k];
     out[k] = (typeof v === 'string' && v) ? v : null;
   }
   return out;
 }
-// Entreprise « complète » : tous ses ouvriers ont les 4 docs avec une
-// date renseignée ET aucune n'est périmée. La présence ne compte pas
-// (c'est une notion mutable au quotidien).
-function isECheckInComplete(cid) {
-  const workers = getCompanyWorkers(cid);
-  if (workers.length === 0) return false;
-  return workers.every(w => {
-    const d = getWorkerDocs(w.id);
-    return WORKER_DOC_KEYS.every(k => d[k] && expiryStatus(d[k]) !== 'expired');
-  });
+// Pire statut parmi les ouvriers PRÉSENTS d'une entreprise (même règle
+// que pour la coloration de l'ouvrier : expired > danger > warning >
+// valid, et 'none' ne contribue pas). null si aucun ouvrier présent
+// ou si aucun n'a de date saisie.
+function getCompanyWorstStatus(cid) {
+  const presentWorkers = getCompanyWorkers(cid)
+    .filter(w => getWorkerDocs(w.id).onSite);
+  if (presentWorkers.length === 0) return null;
+  let worstIdx = -1;
+  for (const w of presentWorkers) {
+    const s = getWorkerWorstStatus(w.id);
+    const idx = STATUS_WORST_ORDER.indexOf(s);
+    if (idx > worstIdx) worstIdx = idx;
+  }
+  return worstIdx >= 0 ? STATUS_WORST_ORDER[worstIdx] : null;
 }
 function addWorker(companyId) {
   state.workers.push({ id: uid(), companyId, name: '' });
@@ -1721,7 +1730,13 @@ function setWorkerName(workerId, name) {
 }
 function ensureWorkerDocsBag(workerId) {
   if (!state.workerDocs[workerId]) {
-    state.workerDocs[workerId] = { onSite: false, doc1: null, doc2: null, doc3: null, doc4: null };
+    state.workerDocs[workerId] = {
+      onSite: false, employmentType: 'salarie',
+      doc1: null, doc2: null, doc3: null, doc4: null
+    };
+  }
+  if (!state.workerDocs[workerId].employmentType) {
+    state.workerDocs[workerId].employmentType = 'salarie';
   }
   return state.workerDocs[workerId];
 }
@@ -1731,6 +1746,13 @@ function toggleWorkerPresence(workerId) {
   save();
   refreshWorkerPresenceChip(workerId);
   refreshWorkerWorstStatus(workerId);
+  refreshCompanyWorstStatus(workerId);
+}
+function toggleEmploymentType(workerId) {
+  const bag = ensureWorkerDocsBag(workerId);
+  bag.employmentType = bag.employmentType === 'interim' ? 'salarie' : 'interim';
+  save();
+  refreshWorkerTypeButton(workerId);
 }
 function setWorkerDocDate(workerId, field, dateStr) {
   const bag = ensureWorkerDocsBag(workerId);
@@ -1743,7 +1765,7 @@ function setWorkerDocDate(workerId, field, dateStr) {
   // encore en cours d'utilisation, le faisant se fermer aussitôt.
   refreshWorkerWorstStatus(workerId);
   refreshDocChip(workerId, field);
-  refreshCompanyComplete(workerId);
+  refreshCompanyWorstStatus(workerId);
 }
 
 function refreshDocChip(workerId, field) {
@@ -1767,25 +1789,42 @@ function refreshDocChip(workerId, field) {
   }
 }
 
-function refreshCompanyComplete(workerId) {
+// Met à jour en place la classe worst-X de la carte entreprise selon
+// la pire couleur parmi ses ouvriers présents.
+function refreshCompanyWorstStatus(workerId) {
   const worker = state.workers.find(w => w.id === workerId);
   if (!worker) return;
   const companyCard = document.querySelector(
     `.admin-company[data-company-id="${worker.companyId}"]`
   );
-  if (companyCard) {
-    companyCard.classList.toggle('is-complete', isECheckInComplete(worker.companyId));
-  }
+  if (!companyCard) return;
+  companyCard.classList.remove('worst-valid', 'worst-warning', 'worst-danger', 'worst-expired');
+  const worst = getCompanyWorstStatus(worker.companyId);
+  if (worst) companyCard.classList.add('worst-' + worst);
 }
 
 function refreshWorkerPresenceChip(workerId) {
   const card = document.querySelector(`.worker-card[data-worker-id="${workerId}"]`);
   if (!card) return;
-  const chip = card.querySelector('.worker-chip.presence');
+  const chip = card.querySelector('.worker-presence');
   if (!chip) return;
   const onSite = getWorkerDocs(workerId).onSite;
   chip.classList.toggle('active', onSite);
-  chip.textContent = onSite ? '✓ Présent' : 'Présent';
+  chip.setAttribute('aria-label', onSite ? 'Présent (toucher pour désactiver)' : 'Absent (toucher pour activer)');
+  chip.setAttribute('aria-pressed', String(onSite));
+}
+
+function refreshWorkerTypeButton(workerId) {
+  const card = document.querySelector(`.worker-card[data-worker-id="${workerId}"]`);
+  if (!card) return;
+  const btn = card.querySelector('.worker-type');
+  if (!btn) return;
+  const type = getWorkerDocs(workerId).employmentType;
+  btn.classList.toggle('type-salarie', type === 'salarie');
+  btn.classList.toggle('type-interim', type === 'interim');
+  btn.setAttribute('aria-label', type === 'salarie'
+    ? 'Salarié (toucher pour passer en intérim)'
+    : 'Intérim (toucher pour passer en salarié)');
 }
 
 // Applique sur la carte ouvrier une classe worst-X correspondant au
@@ -1833,10 +1872,10 @@ function renderECheckIn() {
   }
 
   for (const company of state.companies) {
-    const complete = isECheckInComplete(company.id);
+    const worst = getCompanyWorstStatus(company.id);
     const collapsed = !!state.echeckinCollapsed[company.id];
     const card = document.createElement('div');
-    card.className = 'admin-company' + (complete ? ' is-complete' : '') + (collapsed ? ' is-collapsed' : '');
+    card.className = 'admin-company' + (worst ? ' worst-' + worst : '') + (collapsed ? ' is-collapsed' : '');
     card.setAttribute('data-company-id', company.id);
 
     const header = document.createElement('div');
@@ -1889,7 +1928,7 @@ function buildWorkerCard(worker) {
     if (worst) card.classList.add('worst-' + worst);
   }
 
-  // En-tête : nom de l'ouvrier + chip Présent + bouton supprimer
+  // En-tête : nom + bouton Présent (tick) + bouton type (salarié/intérim) + supprimer
   const head = document.createElement('div');
   head.className = 'worker-head';
   const nameInput = document.createElement('input');
@@ -1898,16 +1937,31 @@ function buildWorkerCard(worker) {
   nameInput.placeholder = "Nom de l'ouvrier";
   nameInput.value = worker.name || '';
   nameInput.addEventListener('input', () => setWorkerName(worker.id, nameInput.value));
+
   const presenceBtn = document.createElement('button');
-  presenceBtn.className = 'worker-chip presence' + (docs.onSite ? ' active' : '');
-  presenceBtn.textContent = docs.onSite ? '✓ Présent' : 'Présent';
+  presenceBtn.className = 'worker-presence' + (docs.onSite ? ' active' : '');
+  presenceBtn.setAttribute('aria-pressed', String(!!docs.onSite));
+  presenceBtn.setAttribute('aria-label', docs.onSite
+    ? 'Présent (toucher pour désactiver)'
+    : 'Absent (toucher pour activer)');
+  presenceBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>';
   presenceBtn.addEventListener('click', () => toggleWorkerPresence(worker.id));
+
+  const typeBtn = document.createElement('button');
+  typeBtn.className = 'worker-type type-' + docs.employmentType;
+  typeBtn.setAttribute('aria-label', docs.employmentType === 'salarie'
+    ? 'Salarié (toucher pour passer en intérim)'
+    : 'Intérim (toucher pour passer en salarié)');
+  typeBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M20 6h-3V4a2 2 0 0 0-2-2H9a2 2 0 0 0-2 2v2H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2Zm-5 0H9V4h6v2Z"/></svg>';
+  typeBtn.addEventListener('click', () => toggleEmploymentType(worker.id));
+
   const delBtn = document.createElement('button');
   delBtn.className = 'worker-delete';
   delBtn.setAttribute('aria-label', "Supprimer l'ouvrier");
   delBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>';
   delBtn.addEventListener('click', () => removeWorker(worker.id));
-  head.append(nameInput, presenceBtn, delBtn);
+
+  head.append(nameInput, presenceBtn, typeBtn, delBtn);
   card.appendChild(head);
 
   // Grille 2×2 de pastilles documents colorées selon la péremption
