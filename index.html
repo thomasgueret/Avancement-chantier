@@ -227,6 +227,20 @@
   <!-- ============== Toast ============== -->
   <div class="toast" id="toast" hidden></div>
 
+  <!-- ============== Modale CACES ============== -->
+  <div class="modal-overlay" id="cacesmodal" hidden>
+    <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="cacesmodaltitle">
+      <div class="modal-header">
+        <h3 class="modal-title" id="cacesmodaltitle">CACES</h3>
+        <button class="modal-close" id="cacesmodalclose" aria-label="Fermer">×</button>
+      </div>
+      <div class="modal-body">
+        <ul class="caces-list" id="caceslist"></ul>
+        <button class="btn-primary caces-add" id="cacesadd">+ Ajouter un CACES</button>
+      </div>
+    </div>
+  </div>
+
   <script src="app.js"></script>
 </body>
 </html>

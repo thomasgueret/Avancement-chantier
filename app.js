@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.31';
+const APP_VERSION = '0.32';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -43,6 +43,7 @@ const state = {
   workers: [],            // [{ id, companyId, name }]
   workerDocs: {},         // { [workerId]: { onSite, doc1, doc2, doc3, doc4 } } — docN = 'YYYY-MM-DD' | null (péremption)
   docLabels: { doc1: 'Doc 1', doc2: 'Doc 2', doc3: 'Doc 3', doc4: 'Doc 4' }, // libellés paramétrables des 4 pièces
+  docTypes:  { doc1: 'echeance', doc2: 'echeance', doc3: 'echeance', doc4: 'echeance' }, // type de validation : 'echeance' | 'validation' | 'caces'
   echeckinCollapsed: {},  // { [companyId]: true } — entreprises repliées dans eCheckIn
   presences: {},          // { 'YYYY-MM-DD': [{ id, companyId, count }] }
   currentDate: todayISO(),
@@ -73,6 +74,7 @@ function load() {
     if (data.workers) state.workers = data.workers;
     if (data.workerDocs) state.workerDocs = data.workerDocs;
     if (data.docLabels) state.docLabels = Object.assign({ doc1: 'Doc 1', doc2: 'Doc 2', doc3: 'Doc 3', doc4: 'Doc 4' }, data.docLabels);
+    if (data.docTypes)  state.docTypes  = Object.assign({ doc1: 'echeance', doc2: 'echeance', doc3: 'echeance', doc4: 'echeance' }, data.docTypes);
     if (data.echeckinCollapsed) state.echeckinCollapsed = data.echeckinCollapsed;
     if (data.presences) state.presences = data.presences;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
@@ -103,6 +105,7 @@ function save() {
     workers: state.workers,
     workerDocs: state.workerDocs,
     docLabels: state.docLabels,
+    docTypes: state.docTypes,
     echeckinCollapsed: state.echeckinCollapsed,
     presences: state.presences,
     chartHidden: state.chartHidden,
@@ -1660,18 +1663,55 @@ function buildAdminDocRow(companyId, doc) {
 function getCompanyWorkers(cid) { return state.workers.filter(w => w.companyId === cid); }
 const WORKER_DOC_KEYS = ['doc1', 'doc2', 'doc3', 'doc4'];
 const DOC_LABEL_DEFAULTS = { doc1: 'Doc 1', doc2: 'Doc 2', doc3: 'Doc 3', doc4: 'Doc 4' };
+const DOC_TYPES = ['validation', 'echeance', 'caces'];
+const DOC_TYPE_LABELS = { validation: 'Validation', echeance: 'Échéance', caces: 'CACES' };
+const DOC_TYPE_DEFAULTS = { doc1: 'echeance', doc2: 'echeance', doc3: 'echeance', doc4: 'echeance' };
 function getDocLabel(field) {
   const v = state.docLabels?.[field];
   return (v && v.trim()) ? v : DOC_LABEL_DEFAULTS[field];
 }
+function getDocType(field) {
+  const t = state.docTypes?.[field];
+  return DOC_TYPES.includes(t) ? t : 'echeance';
+}
+// Récupère la valeur d'un document en l'adaptant au type courant.
+// Évite que le passage d'un type à l'autre n'affiche une valeur incohérente.
+function getDocValue(workerId, field) {
+  const raw = state.workerDocs[workerId]?.[field];
+  const type = getDocType(field);
+  if (type === 'validation') return (raw === 'conforme' || raw === 'non-conforme') ? raw : null;
+  if (type === 'caces') return Array.isArray(raw) ? raw : [];
+  // echeance (défaut)
+  return (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw)) ? raw : null;
+}
+// Statut d'un document, normalisé à 'valid' | 'warning' | 'danger' | 'expired' | 'none'
+function getDocStatus(workerId, field) {
+  const type = getDocType(field);
+  const value = getDocValue(workerId, field);
+  if (type === 'validation') {
+    if (value === 'conforme')     return 'valid';
+    if (value === 'non-conforme') return 'expired';
+    return 'none';
+  }
+  if (type === 'caces') {
+    if (!value || value.length === 0) return 'none';
+    let worstIdx = -1;
+    for (const c of value) {
+      const s = expiryStatus(c.expiresAt);
+      const idx = STATUS_WORST_ORDER.indexOf(s);
+      if (idx > worstIdx) worstIdx = idx;
+    }
+    return worstIdx >= 0 ? STATUS_WORST_ORDER[worstIdx] : 'none';
+  }
+  return expiryStatus(value);
+}
 // Pire statut parmi les 4 documents d'un ouvrier (expired > danger > warning > valid).
-// Renvoie null si aucun document n'est daté (tous "none").
+// Renvoie null si aucun document n'est documenté (tous "none").
 const STATUS_WORST_ORDER = ['valid', 'warning', 'danger', 'expired'];
 function getWorkerWorstStatus(workerId) {
-  const docs = getWorkerDocs(workerId);
   let worstIdx = -1;
   for (const k of WORKER_DOC_KEYS) {
-    const s = expiryStatus(docs[k]);
+    const s = getDocStatus(workerId, k);
     const idx = STATUS_WORST_ORDER.indexOf(s);
     if (idx > worstIdx) worstIdx = idx;
   }
@@ -1680,16 +1720,15 @@ function getWorkerWorstStatus(workerId) {
 
 function getWorkerDocs(wid) {
   const raw = state.workerDocs[wid] || {};
-  // Migration : ancien modèle (booléens) → date string ou null,
-  // + champ employmentType ajouté ultérieurement.
+  // Migration : ancien modèle (booléens) ignoré, + champ employmentType
+  // ajouté ultérieurement. Les valeurs des 4 docs sont laissées brutes
+  // (peuvent être : string YYYY-MM-DD pour échéance, 'conforme' ou
+  // 'non-conforme' pour validation, array pour CACES).
   const out = {
     onSite: !!raw.onSite,
     employmentType: raw.employmentType === 'interim' ? 'interim' : 'salarie'
   };
-  for (const k of WORKER_DOC_KEYS) {
-    const v = raw[k];
-    out[k] = (typeof v === 'string' && v) ? v : null;
-  }
+  for (const k of WORKER_DOC_KEYS) out[k] = raw[k] ?? null;
   return out;
 }
 // Pire statut parmi les ouvriers PRÉSENTS d'une entreprise (même règle
@@ -1754,18 +1793,21 @@ function toggleEmploymentType(workerId) {
   save();
   refreshWorkerTypeButton(workerId);
 }
-function setWorkerDocDate(workerId, field, dateStr) {
+// Met à jour la valeur d'un doc (toutes types confondus) puis rafraîchit
+// uniquement les éléments concernés — surtout pas le DOM entier : sur
+// Safari iOS, un re-render synchrone détruirait l'input date pendant
+// que le picker l'utilise, le faisant se fermer aussitôt.
+function setWorkerDocValue(workerId, field, value) {
   const bag = ensureWorkerDocsBag(workerId);
-  bag[field] = dateStr || null;
+  bag[field] = value;
   save();
-  // Mise à jour ciblée et en place de la chip concernée — surtout pas
-  // un re-render global : iOS Safari peut émettre un `change` au moment
-  // d'ouvrir le picker (avec la date du jour comme défaut), et un
-  // re-render synchrone détruirait l'input pendant que le picker est
-  // encore en cours d'utilisation, le faisant se fermer aussitôt.
-  refreshWorkerWorstStatus(workerId);
   refreshDocChip(workerId, field);
+  refreshWorkerWorstStatus(workerId);
   refreshCompanyWorstStatus(workerId);
+}
+// Alias historique (échéance) pour ne pas casser les callers existants
+function setWorkerDocDate(workerId, field, dateStr) {
+  setWorkerDocValue(workerId, field, dateStr || null);
 }
 
 function refreshDocChip(workerId, field) {
@@ -1773,19 +1815,33 @@ function refreshDocChip(workerId, field) {
     `.worker-card[data-worker-id="${workerId}"] .ec-doc[data-doc-field="${field}"]`
   );
   if (!chip) return;
-  const dateStr = getWorkerDocs(workerId)[field];
-  const status = expiryStatus(dateStr);
-  chip.className = `ec-doc status-${status}`;
-  chip.setAttribute('data-doc-field', field);
+  const type = getDocType(field);
+  const status = getDocStatus(workerId, field);
+  const value = getDocValue(workerId, field);
+
+  // Classe de statut + de type (le sélecteur data-doc-field reste stable)
+  chip.className = `ec-doc status-${status} doctype-${type}`;
+  chip.setAttribute('data-doc-type', type);
+
   const dateEl = chip.querySelector('.ec-doc-date');
-  if (dateEl) dateEl.textContent = dateStr ? fmtFR(dateStr) : '—';
-  const input = chip.querySelector('.ec-doc-input');
-  if (input && input.value !== (dateStr || '')) input.value = dateStr || '';
-  let clear = chip.querySelector('.ec-doc-clear');
-  if (dateStr && !clear) {
-    chip.appendChild(buildECheckInClearButton(workerId, field));
-  } else if (!dateStr && clear) {
-    clear.remove();
+  if (dateEl) dateEl.textContent = formatDocChipValue(workerId, field);
+
+  if (type === 'echeance') {
+    // Synchronise la valeur de l'input sans le détruire (l'input survit
+    // au refresh pour ne pas casser le picker iOS en cours d'utilisation)
+    const input = chip.querySelector('.ec-doc-input');
+    if (input && input.value !== (value || '')) input.value = value || '';
+    let clear = chip.querySelector('.ec-doc-clear');
+    if (value && !clear) {
+      chip.appendChild(buildECheckInClearButton(workerId, field));
+    } else if (!value && clear) {
+      clear.remove();
+    }
+  } else {
+    // Pour les types 'validation' et 'caces' : aucun input date ni ×.
+    // S'ils existent (transition de type), on les retire.
+    const stale = chip.querySelectorAll('.ec-doc-input, .ec-doc-clear');
+    stale.forEach(el => el.remove());
   }
 }
 
@@ -1968,44 +2024,89 @@ function buildWorkerCard(worker) {
   const grid = document.createElement('div');
   grid.className = 'ec-doc-grid';
   for (const k of WORKER_DOC_KEYS) {
-    grid.appendChild(buildECheckInDocChip(worker.id, k, getDocLabel(k), docs[k]));
+    grid.appendChild(buildECheckInDocChip(worker.id, k, getDocLabel(k)));
   }
   card.appendChild(grid);
 
   return card;
 }
 
-function buildECheckInDocChip(workerId, field, label, dateStr) {
-  const status = expiryStatus(dateStr);
-  const chip = document.createElement('div');
-  chip.className = `ec-doc status-${status}`;
-  chip.setAttribute('data-doc-field', field);
-
-  // Libellé et date affichés au-dessus, en pointer-events: none côté CSS
-  // pour que le tap traverse vers l'input.
+// Construit le contenu visible du chip (libellé du doc + valeur formatée).
+// Renvoie l'élément span "value" pour pouvoir le mettre à jour en place.
+function buildECheckInDocChipBody(label, valueText) {
+  const frag = document.createDocumentFragment();
   const name = document.createElement('span');
   name.className = 'ec-doc-name';
   name.textContent = label;
+  const value = document.createElement('span');
+  value.className = 'ec-doc-date';
+  value.textContent = valueText;
+  frag.append(name, value);
+  return { frag, value };
+}
 
-  const date = document.createElement('span');
-  date.className = 'ec-doc-date';
-  date.textContent = dateStr ? fmtFR(dateStr) : '—';
+// Texte affiché dans le chip selon le type
+function formatDocChipValue(workerId, field) {
+  const type = getDocType(field);
+  const value = getDocValue(workerId, field);
+  if (type === 'validation') {
+    if (value === 'conforme')     return '✓ Conforme';
+    if (value === 'non-conforme') return '✗ Non conf.';
+    return '—';
+  }
+  if (type === 'caces') {
+    const n = value.length;
+    return n === 0 ? '—' : (n === 1 ? '1 CACES' : `${n} CACES`);
+  }
+  return value ? fmtFR(value) : '—';
+}
 
-  // L'input est étalé sur toute la chip (inset: 0, opacité 0). Le
-  // navigateur ouvre le picker via son pseudo-élément
-  // ::-webkit-calendar-picker-indicator (étiré sur tout l'input côté CSS) sur
-  // Chrome, et nativement au tap de l'input sur Safari/iOS. Aucun JS
-  // pour ouvrir le picker → pas de double déclenchement, pas de
-  // détection de navigateur.
-  const input = document.createElement('input');
-  input.type = 'date';
-  input.className = 'ec-doc-input';
-  input.value = dateStr || '';
-  input.setAttribute('aria-label', `Date de péremption ${label}`);
-  input.addEventListener('change', () => setWorkerDocDate(workerId, field, input.value));
+function buildECheckInDocChip(workerId, field, label) {
+  const type = getDocType(field);
+  const status = getDocStatus(workerId, field);
+  const chip = document.createElement('div');
+  chip.className = `ec-doc status-${status} doctype-${type}`;
+  chip.setAttribute('data-doc-field', field);
+  chip.setAttribute('data-doc-type', type);
 
-  chip.append(name, date, input);
-  if (dateStr) chip.appendChild(buildECheckInClearButton(workerId, field));
+  const { frag } = buildECheckInDocChipBody(label, formatDocChipValue(workerId, field));
+  chip.append(frag);
+
+  if (type === 'echeance') {
+    // L'input est étalé sur toute la chip (inset: 0, opacité 0). Le navigateur
+    // ouvre le picker via ::-webkit-calendar-picker-indicator (étiré sur tout
+    // l'input côté CSS) sur Chrome, et nativement au tap sur Safari/iOS.
+    // Aucun JS pour ouvrir le picker → pas de double déclenchement.
+    const dateStr = getDocValue(workerId, field);
+    const input = document.createElement('input');
+    input.type = 'date';
+    input.className = 'ec-doc-input';
+    input.value = dateStr || '';
+    input.setAttribute('aria-label', `Date de péremption ${label}`);
+    input.addEventListener('change', () => setWorkerDocValue(workerId, field, input.value || null));
+    chip.appendChild(input);
+    if (dateStr) chip.appendChild(buildECheckInClearButton(workerId, field));
+  } else if (type === 'validation') {
+    chip.setAttribute('role', 'button');
+    chip.setAttribute('tabindex', '0');
+    const cycle = () => {
+      const cur = getDocValue(workerId, field);
+      const next = cur === null ? 'conforme' : cur === 'conforme' ? 'non-conforme' : null;
+      setWorkerDocValue(workerId, field, next);
+    };
+    chip.addEventListener('click', cycle);
+    chip.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); cycle(); }
+    });
+  } else if (type === 'caces') {
+    chip.setAttribute('role', 'button');
+    chip.setAttribute('tabindex', '0');
+    const open = () => openCacesModal(workerId, field, label);
+    chip.addEventListener('click', open);
+    chip.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+    });
+  }
 
   return chip;
 }
@@ -2031,6 +2132,17 @@ function refreshDocLabelsInChips() {
       .forEach(el => { el.textContent = label; });
   }
 }
+function setDocType(field, type) {
+  if (!DOC_TYPES.includes(type)) return;
+  if (!state.docTypes) state.docTypes = Object.assign({}, DOC_TYPE_DEFAULTS);
+  state.docTypes[field] = type;
+  save();
+  // Le type change la structure et l'interaction du chip — on re-render
+  // entièrement l'onglet eCheckIn (les ouvriers ne sont pas en train
+  // d'interagir avec un picker quand on change le paramétrage).
+  renderECheckIn();
+}
+
 function renderDocLabelsConfig() {
   const list = document.getElementById('doclabelslist');
   if (!list) return;
@@ -2049,9 +2161,124 @@ function renderDocLabelsConfig() {
     input.value = state.docLabels?.[field] || '';
     input.setAttribute('aria-label', `Libellé du document ${field}`);
     input.addEventListener('input', () => setDocLabel(field, input.value));
-    li.append(tag, input);
+    const typeSelect = document.createElement('select');
+    typeSelect.className = 'doc-type-select';
+    typeSelect.setAttribute('aria-label', `Type de validation pour ${field}`);
+    for (const t of DOC_TYPES) {
+      const opt = document.createElement('option');
+      opt.value = t;
+      opt.textContent = DOC_TYPE_LABELS[t];
+      if (t === getDocType(field)) opt.selected = true;
+      typeSelect.appendChild(opt);
+    }
+    typeSelect.addEventListener('change', () => setDocType(field, typeSelect.value));
+    li.append(tag, input, typeSelect);
     list.appendChild(li);
   }
+}
+
+// ---------- Modale CACES ----------
+let cacesModalCtx = null; // { workerId, field, label } pendant l'ouverture
+function openCacesModal(workerId, field, label) {
+  cacesModalCtx = { workerId, field, label };
+  const modal = document.getElementById('cacesmodal');
+  const title = document.getElementById('cacesmodaltitle');
+  if (!modal || !title) return;
+  const workerName = state.workers.find(w => w.id === workerId)?.name || '';
+  title.textContent = `${label}${workerName ? ' — ' + workerName : ''}`;
+  renderCacesModalList();
+  modal.hidden = false;
+  document.body.style.overflow = 'hidden';
+}
+function closeCacesModal() {
+  const modal = document.getElementById('cacesmodal');
+  if (modal) modal.hidden = true;
+  document.body.style.overflow = '';
+  // Met à jour le chip + les pires statuts après modification
+  if (cacesModalCtx) {
+    const { workerId, field } = cacesModalCtx;
+    cacesModalCtx = null;
+    refreshDocChip(workerId, field);
+    refreshWorkerWorstStatus(workerId);
+    refreshCompanyWorstStatus(workerId);
+  }
+}
+function renderCacesModalList() {
+  if (!cacesModalCtx) return;
+  const list = document.getElementById('caceslist');
+  if (!list) return;
+  list.innerHTML = '';
+  const items = getDocValue(cacesModalCtx.workerId, cacesModalCtx.field);
+  if (items.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'caces-empty';
+    li.textContent = 'Aucun CACES. Appuyez sur « + » pour en ajouter.';
+    list.appendChild(li);
+    return;
+  }
+  for (const c of items) list.appendChild(buildCacesRow(c));
+}
+function buildCacesRow(caces) {
+  const status = expiryStatus(caces.expiresAt);
+  const row = document.createElement('li');
+  row.className = `caces-row status-${status}`;
+
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.className = 'caces-name';
+  nameInput.placeholder = 'Nom du CACES';
+  nameInput.value = caces.name || '';
+  nameInput.addEventListener('input', () => updateCaces(caces.id, { name: nameInput.value }));
+
+  const dateInput = document.createElement('input');
+  dateInput.type = 'date';
+  dateInput.className = 'caces-date';
+  dateInput.value = caces.expiresAt || '';
+  dateInput.setAttribute('aria-label', 'Date de péremption');
+  dateInput.addEventListener('change', () => {
+    updateCaces(caces.id, { expiresAt: dateInput.value || null });
+    renderCacesModalList();
+  });
+
+  const delBtn = document.createElement('button');
+  delBtn.className = 'caces-delete';
+  delBtn.setAttribute('aria-label', 'Supprimer ce CACES');
+  delBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>';
+  delBtn.addEventListener('click', () => {
+    removeCaces(caces.id);
+    renderCacesModalList();
+  });
+
+  row.append(nameInput, dateInput, delBtn);
+  return row;
+}
+function addCaces() {
+  if (!cacesModalCtx) return;
+  const { workerId, field } = cacesModalCtx;
+  const bag = ensureWorkerDocsBag(workerId);
+  const current = Array.isArray(bag[field]) ? bag[field].slice() : [];
+  current.push({ id: uid(), name: '', expiresAt: null });
+  bag[field] = current;
+  save();
+  renderCacesModalList();
+}
+function updateCaces(cacesId, patch) {
+  if (!cacesModalCtx) return;
+  const { workerId, field } = cacesModalCtx;
+  const bag = ensureWorkerDocsBag(workerId);
+  const list = Array.isArray(bag[field]) ? bag[field] : [];
+  const entry = list.find(c => c.id === cacesId);
+  if (!entry) return;
+  Object.assign(entry, patch);
+  save();
+}
+function removeCaces(cacesId) {
+  if (!cacesModalCtx) return;
+  const { workerId, field } = cacesModalCtx;
+  const bag = ensureWorkerDocsBag(workerId);
+  const list = Array.isArray(bag[field]) ? bag[field] : [];
+  bag[field] = list.filter(c => c.id !== cacesId);
+  save();
 }
 
 // ---------- eCheckIn : helpers de date de péremption ----------
@@ -2248,6 +2475,7 @@ function exportData() {
     workers: state.workers,
     workerDocs: state.workerDocs,
     docLabels: state.docLabels,
+    docTypes: state.docTypes,
     echeckinCollapsed: state.echeckinCollapsed,
     exportedAt: new Date().toISOString()
   };
@@ -2285,6 +2513,7 @@ function importData(file) {
       state.workers = data.workers || [];
       state.workerDocs = data.workerDocs || {};
       state.docLabels = Object.assign({ doc1: 'Doc 1', doc2: 'Doc 2', doc3: 'Doc 3', doc4: 'Doc 4' }, data.docLabels || {});
+      state.docTypes  = Object.assign({ doc1: 'echeance', doc2: 'echeance', doc3: 'echeance', doc4: 'echeance' }, data.docTypes || {});
       state.echeckinCollapsed = data.echeckinCollapsed || {};
       // Compat. anciens exports (liste de tâches unique)
       state._legacyTasks = data.tasks;
@@ -2316,6 +2545,7 @@ function resetAll() {
   state.workers = [];
   state.workerDocs = {};
   state.docLabels = { doc1: 'Doc 1', doc2: 'Doc 2', doc3: 'Doc 3', doc4: 'Doc 4' };
+  state.docTypes  = { doc1: 'echeance', doc2: 'echeance', doc3: 'echeance', doc4: 'echeance' };
   state.echeckinCollapsed = {};
   migrateSetups();
   save();
@@ -2391,6 +2621,16 @@ function init() {
     e.target.value = '';
   });
   document.getElementById('resetbtn').addEventListener('click', resetAll);
+
+  // Modale CACES : fermeture (×, clic sur l'overlay) + ajout
+  const cacesModal = document.getElementById('cacesmodal');
+  if (cacesModal) {
+    document.getElementById('cacesmodalclose').addEventListener('click', closeCacesModal);
+    cacesModal.addEventListener('click', (e) => {
+      if (e.target === cacesModal) closeCacesModal();
+    });
+    document.getElementById('cacesadd').addEventListener('click', addCaces);
+  }
 
   // Service worker : enregistrement + rechargement auto à chaque mise à jour
   if ('serviceWorker' in navigator) {

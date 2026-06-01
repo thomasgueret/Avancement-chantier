@@ -1300,6 +1300,137 @@ input, select { font: inherit; }
 }
 .doc-label-input::placeholder { color: var(--text-3); font-style: italic; font-weight: 500; }
 .doc-label-input:focus { outline: none; border-bottom-color: var(--accent); }
+.doc-type-select {
+  flex-shrink: 0;
+  width: 108px;
+  font-size: 13px; font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 6px;
+  -webkit-appearance: menulist;
+  min-height: 34px;
+}
+.doc-type-select:focus { outline: none; border-color: var(--accent); }
+
+/* eCheckIn : chips spécifiques aux types Validation et CACES (Échéance
+   utilise déjà l'input date superposé). Les statuts gardent les mêmes
+   couleurs de fond (status-valid / warning / danger / expired). */
+.ec-doc.doctype-validation,
+.ec-doc.doctype-caces {
+  cursor: pointer;
+}
+/* Une chip Validation Non conforme renvoie le statut 'expired' (noir),
+   mais visuellement on préfère un rouge soutenu plutôt que le fond noir
+   réservé aux échéances vraiment dépassées. */
+.ec-doc.doctype-validation.status-expired {
+  background: rgba(211, 47, 47, 0.16);
+  border-color: rgba(211, 47, 47, 0.55);
+  color: #b71c1c;
+}
+
+/* ============ Modale CACES (et future modales génériques) ============ */
+.modal-overlay {
+  position: fixed; inset: 0;
+  z-index: 100;
+  background: rgba(20, 24, 33, 0.55);
+  display: flex; align-items: flex-end; justify-content: center;
+  padding: 0;
+  animation: fadein 0.18s ease-out;
+}
+.modal-overlay[hidden] { display: none; }
+.modal-content {
+  width: 100%;
+  max-width: 600px;
+  background: var(--surface);
+  border-radius: var(--radius) var(--radius) 0 0;
+  box-shadow: 0 -8px 32px rgba(20, 24, 33, 0.18);
+  max-height: 80vh;
+  display: flex; flex-direction: column;
+  animation: slideup 0.22s ease-out;
+  padding-bottom: var(--safe-bottom);
+}
+.modal-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-title {
+  flex: 1; min-width: 0;
+  margin: 0;
+  font-size: 16px; font-weight: 700;
+  color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.modal-close {
+  flex-shrink: 0;
+  width: 32px; height: 32px;
+  border: none; background: transparent;
+  color: var(--text-2);
+  font-size: 22px; font-weight: 600; line-height: 1;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.modal-close:active { background: var(--surface-2); }
+.modal-body {
+  padding: 14px 16px 16px;
+  overflow-y: auto;
+}
+
+.caces-list { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 8px; }
+.caces-empty {
+  padding: 12px 4px;
+  font-size: 14px; color: var(--text-3); font-style: italic;
+  text-align: center;
+}
+.caces-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.caces-row.status-valid   { background: rgba(46, 125, 50, 0.08);  border-color: rgba(46, 125, 50, 0.35); }
+.caces-row.status-warning { background: rgba(237, 108, 2, 0.10);  border-color: rgba(237, 108, 2, 0.40); }
+.caces-row.status-danger  { background: rgba(211, 47, 47, 0.10);  border-color: rgba(211, 47, 47, 0.45); }
+.caces-row.status-expired { background: #1a1a1a;                  border-color: #000; color: white; }
+.caces-row.status-expired .caces-name,
+.caces-row.status-expired .caces-date { color: white; border-bottom-color: rgba(255,255,255,0.3); }
+.caces-name {
+  flex: 1; min-width: 0;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.caces-name::placeholder { color: var(--text-3); font-style: italic; }
+.caces-name:focus { outline: none; border-color: var(--accent); }
+.caces-date {
+  flex-shrink: 0;
+  width: 138px;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 8px;
+  font-family: inherit;
+}
+.caces-date:focus { outline: none; border-color: var(--accent); }
+.caces-delete {
+  flex-shrink: 0;
+  width: 32px; height: 32px;
+  border: none; background: transparent;
+  color: var(--text-3);
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px;
+}
+.caces-delete svg { width: 18px; height: 18px; fill: currentColor; }
+.caces-delete:active { background: var(--surface-2); color: var(--danger); }
+.caces-add { width: 100%; }
 
 /* ============ ANIMATIONS ============ */
 @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
