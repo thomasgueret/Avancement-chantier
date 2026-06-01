@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.27';
+const APP_VERSION = '0.28';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -1820,11 +1820,9 @@ function buildECheckInDocChip(workerId, field, label, dateStr) {
   const status = expiryStatus(dateStr);
   const chip = document.createElement('div');
   chip.className = `ec-doc status-${status}`;
-  chip.setAttribute('role', 'button');
-  chip.setAttribute('tabindex', '0');
-  chip.setAttribute('aria-label',
-    `Date de péremption ${label}${dateStr ? ' : ' + fmtFR(dateStr) : ''}`);
 
+  // Libellé et date affichés au-dessus, en pointer-events: none côté CSS
+  // pour que le tap traverse vers l'input.
   const name = document.createElement('span');
   name.className = 'ec-doc-name';
   name.textContent = label;
@@ -1833,32 +1831,20 @@ function buildECheckInDocChip(workerId, field, label, dateStr) {
   date.className = 'ec-doc-date';
   date.textContent = dateStr ? fmtFR(dateStr) : '—';
 
-  // Input date présent pour porter la valeur et émettre le `change`,
-  // mais hors du chemin des clics (pointer-events: none côté CSS).
-  // C'est le chip qui reçoit les taps et déclenche le picker via
-  // showPicker() — comportement unifié Safari iOS / Chrome desktop,
-  // sans détection de navigateur.
+  // L'input est étalé sur toute la chip (inset: 0, opacité 0). Le
+  // navigateur ouvre le picker via son pseudo-élément
+  // ::-webkit-calendar-picker-indicator (étiré sur tout l'input côté CSS) sur
+  // Chrome, et nativement au tap de l'input sur Safari/iOS. Aucun JS
+  // pour ouvrir le picker → pas de double déclenchement, pas de
+  // détection de navigateur.
   const input = document.createElement('input');
   input.type = 'date';
   input.className = 'ec-doc-input';
   input.value = dateStr || '';
-  input.tabIndex = -1;
-  input.setAttribute('aria-hidden', 'true');
+  input.setAttribute('aria-label', `Date de péremption ${label}`);
   input.addEventListener('change', () => setWorkerDocDate(workerId, field, input.value));
 
   chip.append(name, date, input);
-
-  const openPicker = (e) => {
-    // Ne pas ouvrir le picker si le clic vient du bouton ×.
-    if (e && e.target && e.target.closest('.ec-doc-clear')) return;
-    if (typeof input.showPicker === 'function') {
-      try { input.showPicker(); } catch (_) { /* gesture utilisateur perdu */ }
-    }
-  };
-  chip.addEventListener('click', openPicker);
-  chip.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPicker(); }
-  });
 
   // Bouton effacer (visible seulement si une date est saisie)
   if (dateStr) {

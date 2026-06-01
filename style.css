@@ -1153,27 +1153,48 @@ input, select { font: inherit; }
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text-3);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
   transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+/* Le libellé et la date sont peints au-dessus de l'input via z-index,
+   mais ignorent les taps pour qu'ils atteignent l'input → c'est le
+   navigateur qui ouvre alors son picker natif. */
+.ec-doc-name, .ec-doc-date {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
 }
 .ec-doc-name { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; }
 .ec-doc-date { font-size: 11px; font-variant-numeric: tabular-nums; opacity: 0.85; }
-/* Input date positionné sous la chip pour servir d'ancre au picker
-   natif (showPicker l'utilise pour positionner sa popup) mais retiré
-   du chemin des clics — c'est la chip qui les capte. */
+/* Input date étalé sur toute la chip, totalement transparent.
+   Reçoit les taps : sur Safari/iOS le picker s'ouvre nativement ; sur
+   Chrome/Edge desktop, le pseudo-élément ::-webkit-calendar-picker-indicator
+   (étiré sur tout l'input) fait l'ouverture pour nous. Aucun JS, aucun
+   showPicker, aucune détection. */
 .ec-doc-input {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
   margin: 0; padding: 0;
   border: none; background: transparent;
+  color: transparent;
   opacity: 0;
-  pointer-events: none;
   -webkit-appearance: none;
+  appearance: none;
   -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
 }
 .ec-doc-input::-webkit-date-and-time-value { display: none; }
-/* Indication visuelle que la chip est cliquable */
-.ec-doc { cursor: pointer; -webkit-tap-highlight-color: transparent; }
-.ec-doc:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ec-doc-input::-webkit-calendar-picker-indicator {
+  position: absolute;
+  inset: 0;
+  width: 100%; height: 100%;
+  margin: 0; padding: 0;
+  background: transparent;
+  color: transparent;
+  opacity: 0;
+  cursor: pointer;
+}
 .ec-doc-clear {
   position: absolute;
   top: 2px; right: 6px;
