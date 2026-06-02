@@ -244,6 +244,30 @@ input, select { font: inherit; }
 .entry-item.is-zero .counter-value { color: var(--text-3); font-weight: 600; }
 .entry-item.is-zero .entry-company { color: var(--text-2); }
 
+/* Bouton intempéries entre le nom et le compteur */
+.weather-toggle {
+  flex-shrink: 0;
+  width: 38px; height: 38px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-3);
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.weather-toggle svg { width: 22px; height: 22px; fill: currentColor; }
+.weather-toggle:active { transform: scale(0.94); }
+.weather-toggle.active {
+  background: #1976d2;
+  border-color: #1976d2;
+  color: white;
+}
+.entry-item.is-weather { border-color: rgba(25, 118, 210, 0.4); background: rgba(25, 118, 210, 0.06); }
+.entry-item.is-weather .entry-company { color: #1565c0; }
+
 .icon-btn {
   width: 36px; height: 36px;
   border: none; background: transparent;
@@ -358,6 +382,67 @@ input, select { font: inherit; }
   margin-bottom: 4px;
 }
 .legend-item-total .legend-name { font-weight: 700; }
+
+/* ============ EFFECTIFS → Tableau récap ============ */
+.recap-table-wrap {
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  -webkit-overflow-scrolling: touch;
+}
+.recap-empty {
+  margin: 0; padding: 14px;
+  font-size: 13px; font-style: italic;
+  color: var(--text-3);
+  text-align: center;
+}
+.recap-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 100%;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.recap-table th, .recap-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+  white-space: nowrap;
+}
+.recap-table thead th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--surface-2);
+  font-weight: 700;
+  color: var(--text-2);
+  border-bottom: 1px solid var(--border-strong);
+}
+.recap-table .recap-date-col {
+  position: sticky; left: 0; z-index: 1;
+  background: var(--surface-2);
+  text-align: left;
+  font-weight: 700;
+  color: var(--text);
+  min-width: 86px;
+}
+.recap-table thead .recap-date-col { z-index: 3; }
+.recap-table tbody tr:last-child th,
+.recap-table tbody tr:last-child td { border-bottom: none; }
+.recap-table .recap-total-col {
+  font-weight: 700;
+  color: var(--text);
+  border-left: 1px solid var(--border);
+}
+.recap-table td .recap-count { display: inline-block; }
+.recap-table td.is-weather {
+  background: rgba(25, 118, 210, 0.08);
+}
+.recap-table td .recap-weather {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 12px;
+}
 
 /* ============ DONNÉES : ZONES (arborescence) ============ */
 .zone-tree { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }

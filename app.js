@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.36';
+const APP_VERSION = '0.37';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -50,6 +50,7 @@ const state = {
   ],
   echeckinCollapsed: {},  // { [companyId]: true } — entreprises repliées dans eCheckIn
   presences: {},          // { 'YYYY-MM-DD': [{ id, companyId, count }] }
+  weather:   {},          // { 'YYYY-MM-DD': { [companyId]: true } } — entreprises en intempéries ce jour-là
   currentDate: todayISO(),
   chartHidden: {},        // { [companyId]: true } — entreprises masquées du graphique
   chartRange: 30          // 7 | 30 | 'all'
@@ -94,6 +95,7 @@ function load() {
     for (const d of state.docs) if (typeof d.required !== 'boolean') d.required = true;
     if (data.echeckinCollapsed) state.echeckinCollapsed = data.echeckinCollapsed;
     if (data.presences) state.presences = data.presences;
+    if (data.weather)   state.weather   = data.weather;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
     // Champs hérités (ancien modèle à liste unique) → migrés ensuite
@@ -124,6 +126,7 @@ function save() {
     docs: state.docs,
     echeckinCollapsed: state.echeckinCollapsed,
     presences: state.presences,
+    weather: state.weather,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange
   };
@@ -261,6 +264,7 @@ function renderAll() {
   renderTasks();
   renderChart();
   renderLegend();
+  renderRecapTable();
   renderAvancement();
   renderAdministratif();
   renderDocLabelsConfig();
@@ -294,10 +298,19 @@ function renderEntries() {
     const count = entry ? entry.count : 0;
     total += count;
 
+    const onWeather = isCompanyOnWeather(state.currentDate, company.id);
     const li = document.createElement('li');
-    li.className = 'entry-item' + (count === 0 ? ' is-zero' : '');
+    li.className = 'entry-item' + (count === 0 ? ' is-zero' : '') + (onWeather ? ' is-weather' : '');
     li.innerHTML = `
       <div class="entry-company"></div>
+      <button class="weather-toggle" data-action="weather" aria-label="Marquer en intempéries">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M17.5 14a4 4 0 0 0 0-8 7 7 0 0 0-13.16-1A4.5 4.5 0 0 0 4 14h13.5Z"/>
+          <rect x="6" y="16" width="2" height="4" rx="1"/>
+          <rect x="11" y="16" width="2" height="4" rx="1"/>
+          <rect x="16" y="16" width="2" height="4" rx="1"/>
+        </svg>
+      </button>
       <div class="counter">
         <button class="counter-btn" data-action="dec" aria-label="Diminuer">−</button>
         <span class="counter-value"></span>
@@ -306,6 +319,12 @@ function renderEntries() {
     `;
     li.querySelector('.entry-company').textContent = company.name;
     li.querySelector('.counter-value').textContent = count;
+    const weatherBtn = li.querySelector('[data-action="weather"]');
+    if (onWeather) {
+      weatherBtn.classList.add('active');
+      weatherBtn.setAttribute('aria-label', 'Retirer le statut intempéries');
+    }
+    weatherBtn.addEventListener('click', () => toggleCompanyWeather(company.id));
     const decBtn = li.querySelector('[data-action="dec"]');
     if (count === 0) decBtn.disabled = true;
     decBtn.addEventListener('click', () => decrementCount(company.id));
@@ -494,6 +513,90 @@ function setChartRange(range) {
     b.classList.toggle('active', String(b.dataset.range) === String(range));
   });
   renderChart();
+  renderRecapTable();
+}
+
+// ---------- Tableau récap effectifs (Effectifs → Graphique) ----------
+// Lignes = dates (les plus récentes en haut), colonnes = entreprises +
+// total. Une cellule signalée d'une goutte quand l'entreprise était en
+// intempéries ce jour-là. Suit la même plage que le graphique.
+function renderRecapTable() {
+  const wrap = document.getElementById('recaptablewrap');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+
+  const dates = getChartDates().slice().reverse();
+  if (dates.length === 0 || state.companies.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'recap-empty';
+    empty.textContent = state.companies.length === 0
+      ? 'Aucune entreprise enregistrée.'
+      : 'Aucune présence saisie.';
+    wrap.appendChild(empty);
+    return;
+  }
+
+  const table = document.createElement('table');
+  table.className = 'recap-table';
+
+  const thead = document.createElement('thead');
+  const headerRow = document.createElement('tr');
+  const dateTh = document.createElement('th');
+  dateTh.className = 'recap-date-col';
+  dateTh.scope = 'col';
+  dateTh.textContent = 'Date';
+  headerRow.appendChild(dateTh);
+  for (const company of state.companies) {
+    const th = document.createElement('th');
+    th.scope = 'col';
+    th.textContent = company.name;
+    headerRow.appendChild(th);
+  }
+  const totalTh = document.createElement('th');
+  totalTh.className = 'recap-total-col';
+  totalTh.scope = 'col';
+  totalTh.textContent = 'Total';
+  headerRow.appendChild(totalTh);
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  for (const date of dates) {
+    const tr = document.createElement('tr');
+    const dateCell = document.createElement('th');
+    dateCell.className = 'recap-date-col';
+    dateCell.scope = 'row';
+    dateCell.textContent = formatDateShortFR(date);
+    tr.appendChild(dateCell);
+    const entries = state.presences[date] || [];
+    let total = 0;
+    for (const company of state.companies) {
+      const entry = entries.find(e => e.companyId === company.id);
+      const count = entry ? entry.count : 0;
+      total += count;
+      const td = document.createElement('td');
+      const onWeather = isCompanyOnWeather(date, company.id);
+      if (onWeather) td.classList.add('is-weather');
+      td.innerHTML = onWeather
+        ? `<span class="recap-count">${count}</span><span class="recap-weather" aria-label="intempéries">🌧</span>`
+        : `<span class="recap-count">${count}</span>`;
+      tr.appendChild(td);
+    }
+    const totalTd = document.createElement('td');
+    totalTd.className = 'recap-total-col';
+    totalTd.textContent = total;
+    tr.appendChild(totalTd);
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+
+  wrap.appendChild(table);
+}
+
+// Format JJ/MM/AA pour le récap (compact pour les colonnes étroites)
+function formatDateShortFR(iso) {
+  const d = fromISO(iso);
+  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
 }
 
 // ---------- Zones (arborescence) ----------
@@ -2556,6 +2659,13 @@ function deleteCompany(id) {
   delete state.chartHidden[id];
   delete state.adminDocs[id];
   delete state.echeckinCollapsed[id];
+  // Nettoie les intempéries marquées pour cette entreprise
+  for (const date of Object.keys(state.weather)) {
+    if (state.weather[date]) {
+      delete state.weather[date][id];
+      if (Object.keys(state.weather[date]).length === 0) delete state.weather[date];
+    }
+  }
   // Retire les ouvriers de l'entreprise supprimée + leurs documents
   const removed = state.workers.filter(w => w.companyId === id);
   state.workers = state.workers.filter(w => w.companyId !== id);
@@ -2566,6 +2676,25 @@ function deleteCompany(id) {
 }
 
 // ---------- Entries (presences) ----------
+// ---------- Intempéries (statut par date × entreprise) ----------
+function isCompanyOnWeather(date, companyId) {
+  return !!state.weather?.[date]?.[companyId];
+}
+function toggleCompanyWeather(companyId) {
+  const date = state.currentDate;
+  if (!state.weather) state.weather = {};
+  if (!state.weather[date]) state.weather[date] = {};
+  if (state.weather[date][companyId]) {
+    delete state.weather[date][companyId];
+    if (Object.keys(state.weather[date]).length === 0) delete state.weather[date];
+  } else {
+    state.weather[date][companyId] = true;
+  }
+  save();
+  renderEntries();
+  renderRecapTable();
+}
+
 function incrementCount(companyId) {
   const date = state.currentDate;
   if (!state.presences[date]) state.presences[date] = [];
@@ -2579,6 +2708,7 @@ function incrementCount(companyId) {
   save();
   renderEntries();
   renderChart();
+  renderRecapTable();
 }
 
 function decrementCount(companyId) {
@@ -2595,6 +2725,7 @@ function decrementCount(companyId) {
   save();
   renderEntries();
   renderChart();
+  renderRecapTable();
 }
 
 // Migration : fusionne les doublons éventuels (d'anciennes données pouvaient
@@ -2691,6 +2822,7 @@ function importData(file) {
       state.zoneUpdated = data.zoneUpdated || {};
       state.avancementZoneId = null;
       state.presences = data.presences;
+      state.weather = data.weather || {};
       state.adminDocs = data.adminDocs || {};
       state.workers = data.workers || [];
       state.workerDocs = data.workerDocs || {};
@@ -2730,6 +2862,7 @@ function resetAll() {
   state.zoneUpdated = {};
   state.avancementZoneId = null;
   state.presences = {};
+  state.weather = {};
   state.adminDocs = {};
   state.workers = [];
   state.workerDocs = {};
