@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.42';
+const APP_VERSION = '0.43';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -2117,12 +2117,12 @@ function buildExpiryReport() {
       const clausesHtml = [];
       const pushClause = (clause, isExpired) => {
         clausesText.push(clause);
-        // <b style="color:..."> : single-balise avec style inline. Plus
-        // compact qu'un combo <b><font>, accepté par Outlook iOS qui
-        // sanitise certaines structures combinées de manière trop
-        // agressive. Apple Mail / Gmail / SMS le gèrent aussi.
+        // Gras + souligné pour les périmés : les deux balises les plus
+        // universellement supportées par les clients mail (y compris
+        // Outlook iOS, qui peut rejeter <font> ou les styles couleurs
+        // inline). Pas de couleur — l'œil repère déjà le formatage.
         clausesHtml.push(isExpired
-          ? `<b style="color:#d32f2f">${escapeHtml(clause)}</b>`
+          ? `<b><u>${escapeHtml(clause)}</u></b>`
           : escapeHtml(clause));
       };
       for (const docId of getApplicableDocIds(docs.employmentType)) {
@@ -2910,6 +2910,13 @@ function switchPage(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === `page-${name}`));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.page === name));
   window.scrollTo({ top: 0, behavior: 'instant' });
+  // Si la tab bar est scrollable horizontalement, on amène le bouton
+  // actif dans la zone visible pour éviter qu'il soit hors-champ après
+  // la sélection.
+  const activeBtn = document.querySelector(`.tab-btn.active[data-page="${name}"]`);
+  if (activeBtn && typeof activeBtn.scrollIntoView === 'function') {
+    activeBtn.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: 'smooth' });
+  }
   if (name === 'avancement') renderAvancement();
   if (name === 'administratif') renderAdministratif();
 }

@@ -980,9 +980,20 @@ input, select { font: inherit; }
   height: calc(var(--tabbar-h) + var(--safe-bottom));
   padding-bottom: var(--safe-bottom);
   box-shadow: 0 -2px 12px rgba(20, 24, 33, 0.04);
+  /* Quand trop d'onglets pour la largeur de l'écran : on autorise un
+     défilement horizontal natif tactile plutôt que de comprimer les
+     icônes / libellés. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;          /* Firefox */
 }
+.tab-bar::-webkit-scrollbar { display: none; } /* WebKit/Chrome */
 .tab-btn {
-  flex: 1;
+  /* grow=1 (les onglets remplissent l'écran s'ils tiennent), shrink=0
+     (jamais en dessous du min-width), basis=auto (taille naturelle). */
+  flex: 1 0 auto;
+  min-width: 78px;
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
   gap: 4px;
