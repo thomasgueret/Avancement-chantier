@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.44';
+const APP_VERSION = '0.45';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -51,6 +51,7 @@ const state = {
   echeckinCollapsed: {},  // { [companyId]: true } — entreprises repliées dans eCheckIn
   presences: {},          // { 'YYYY-MM-DD': [{ id, companyId, count }] }
   weather:   {},          // { 'YYYY-MM-DD': { [companyId]: true } } — entreprises en intempéries ce jour-là
+  stockEntries: [],       // [{ id, type: 'reception' | 'inventaire', article, qty, unit, date, notes }]
   currentDate: todayISO(),
   chartHidden: {},        // { [companyId]: true } — entreprises masquées du graphique
   chartRange: 30          // 7 | 30 | 'all'
@@ -96,6 +97,7 @@ function load() {
     if (data.echeckinCollapsed) state.echeckinCollapsed = data.echeckinCollapsed;
     if (data.presences) state.presences = data.presences;
     if (data.weather)   state.weather   = data.weather;
+    if (data.stockEntries) state.stockEntries = data.stockEntries;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
     // Champs hérités (ancien modèle à liste unique) → migrés ensuite
@@ -127,6 +129,7 @@ function save() {
     echeckinCollapsed: state.echeckinCollapsed,
     presences: state.presences,
     weather: state.weather,
+    stockEntries: state.stockEntries,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange
   };
@@ -268,6 +271,7 @@ function renderAll() {
   renderAvancement();
   renderAdministratif();
   renderDocLabelsConfig();
+  renderStock();
 }
 
 function renderDate() {
@@ -2835,6 +2839,325 @@ function toggleCompanyWeather(companyId) {
   renderRecapTable();
 }
 
+// ---------- Stock (entrées + consultation) ----------
+const STOCK_UNITS = ['u', 'sacs', 'palettes', 'kg', 't', 'm³', 'm²', 'ml', 'L'];
+
+function compareStockEntries(a, b) {
+  // Ordre chronologique (asc), à date égale : par id pour stabilité
+  return a.date.localeCompare(b.date) || String(a.id || '').localeCompare(String(b.id || ''));
+}
+// Agrégation : pour chaque article, on calcule le stock courant en
+// parcourant les entrées triées par date asc. Réception = ajout,
+// Inventaire = remise au compteur. La dernière entrée détermine
+// l'unité affichée.
+function getStockSummary() {
+  const map = new Map();
+  const sorted = state.stockEntries.slice().sort(compareStockEntries);
+  for (const e of sorted) {
+    const key = (e.article || '').trim().toLowerCase();
+    if (!key) continue;
+    if (!map.has(key)) {
+      map.set(key, { article: e.article, unit: e.unit, stock: 0, lastEntry: e, count: 0 });
+    }
+    const cur = map.get(key);
+    cur.article = e.article;       // garde la dernière casse saisie
+    cur.unit = e.unit;
+    cur.lastEntry = e;
+    cur.count++;
+    if (e.type === 'inventaire') cur.stock = Number(e.qty) || 0;
+    else cur.stock += Number(e.qty) || 0;
+  }
+  return Array.from(map.values()).sort((a, b) => a.article.localeCompare(b.article, 'fr'));
+}
+// Historique d'un article (le plus récent en premier) pour la modale détail
+function getArticleHistory(articleName) {
+  const key = (articleName || '').trim().toLowerCase();
+  return state.stockEntries
+    .filter(e => (e.article || '').trim().toLowerCase() === key)
+    .sort(compareStockEntries)
+    .reverse();
+}
+// Liste unique des noms d'articles déjà saisis, pour le datalist
+function getAllArticleNames() {
+  const set = new Map(); // clé = lowercase, valeur = dernière casse
+  for (const e of state.stockEntries) {
+    const k = (e.article || '').trim().toLowerCase();
+    if (k) set.set(k, e.article);
+  }
+  return Array.from(set.values()).sort((a, b) => a.localeCompare(b, 'fr'));
+}
+
+function fmtStockQty(n) {
+  return (Number(n) || 0).toLocaleString('fr-FR', { maximumFractionDigits: 3 });
+}
+
+// ----- Rendu : liste des entrées (sous-onglet Enregistrement) -----
+function renderStockEntries() {
+  const list = document.getElementById('stockentrylist');
+  const empty = document.getElementById('stockentryempty');
+  if (!list || !empty) return;
+  list.innerHTML = '';
+  empty.classList.remove('show');
+  if (state.stockEntries.length === 0) {
+    empty.innerHTML = '<p>Aucune entrée enregistrée.</p><p class="hint">Tapez le bouton + en bas à droite pour en ajouter une.</p>';
+    empty.classList.add('show');
+    return;
+  }
+  const sorted = state.stockEntries.slice().sort(compareStockEntries).reverse();
+  for (const e of sorted) {
+    list.appendChild(buildStockEntryRow(e));
+  }
+}
+function buildStockEntryRow(entry) {
+  const li = document.createElement('li');
+  li.className = 'stock-entry-row type-' + entry.type;
+  li.setAttribute('data-entry-id', entry.id);
+  const sign = entry.type === 'inventaire' ? '=' : '+';
+  li.innerHTML = `
+    <span class="stock-entry-date"></span>
+    <span class="stock-entry-name"></span>
+    <span class="stock-entry-qty"></span>
+    <button class="stock-entry-delete" type="button" aria-label="Supprimer cette entrée">
+      <svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+    </button>
+  `;
+  li.querySelector('.stock-entry-date').textContent = fmtDateShortFR(entry.date);
+  li.querySelector('.stock-entry-name').textContent = entry.article;
+  li.querySelector('.stock-entry-qty').textContent = `${sign} ${fmtStockQty(entry.qty)} ${entry.unit}`;
+  li.querySelector('.stock-entry-delete').addEventListener('click', () => removeStockEntry(entry.id));
+  return li;
+}
+
+// ----- Rendu : cards par article (sous-onglet Stock) -----
+function renderStockSummary() {
+  const list = document.getElementById('stocksummarylist');
+  const empty = document.getElementById('stocksummaryempty');
+  if (!list || !empty) return;
+  list.innerHTML = '';
+  empty.classList.remove('show');
+  const summary = getStockSummary();
+  if (summary.length === 0) {
+    empty.innerHTML = '<p>Aucun stock à afficher.</p><p class="hint">Commencez par saisir une entrée dans Enregistrement.</p>';
+    empty.classList.add('show');
+    return;
+  }
+  for (const item of summary) {
+    list.appendChild(buildStockSummaryCard(item));
+  }
+}
+function buildStockSummaryCard(item) {
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = 'stock-summary-card';
+  card.setAttribute('aria-label', `Détails de ${item.article}`);
+  const lastVerb = item.lastEntry.type === 'inventaire' ? 'Inventaire' : 'Réception';
+  const lastSign = item.lastEntry.type === 'inventaire' ? '=' : '+';
+  card.innerHTML = `
+    <div class="stock-summary-head">
+      <span class="stock-summary-name"></span>
+      <span class="stock-summary-total"></span>
+    </div>
+    <div class="stock-summary-sub"></div>
+  `;
+  card.querySelector('.stock-summary-name').textContent = item.article;
+  card.querySelector('.stock-summary-total').textContent = `${fmtStockQty(item.stock)} ${item.unit}`;
+  card.querySelector('.stock-summary-sub').textContent =
+    `Dernière entrée : ${fmtDateShortFR(item.lastEntry.date)} — ${lastVerb} ${lastSign}${fmtStockQty(item.lastEntry.qty)} ${item.unit}`;
+  card.addEventListener('click', () => openStockDetail(item.article));
+  return card;
+}
+
+function renderStock() {
+  renderStockEntries();
+  renderStockSummary();
+  refreshArticleDatalist();
+}
+function refreshArticleDatalist() {
+  const dl = document.getElementById('stockarticlelist');
+  if (!dl) return;
+  dl.innerHTML = '';
+  for (const name of getAllArticleNames()) {
+    const opt = document.createElement('option');
+    opt.value = name;
+    dl.appendChild(opt);
+  }
+}
+function fmtDateShortFR(iso) {
+  // (formatDateShortFR existe déjà ; alias pour éviter de re-déclarer)
+  return formatDateShortFR(iso);
+}
+
+// ----- CRUD -----
+function addStockEntry({ type, article, qty, unit, date, notes }) {
+  if (!article || !article.trim()) { showToast('Article requis', 'error'); return false; }
+  const q = parseFloat(String(qty).replace(',', '.'));
+  if (!Number.isFinite(q) || q < 0) { showToast('Quantité invalide', 'error'); return false; }
+  if (!date) { showToast('Date requise', 'error'); return false; }
+  state.stockEntries.push({
+    id: uid(),
+    type: type === 'inventaire' ? 'inventaire' : 'reception',
+    article: article.trim(),
+    qty: q,
+    unit: unit || 'u',
+    date,
+    notes: (notes || '').trim()
+  });
+  save();
+  renderStock();
+  return true;
+}
+function removeStockEntry(id) {
+  const entry = state.stockEntries.find(e => e.id === id);
+  if (!entry) return;
+  const label = `${entry.article} (${entry.type === 'inventaire' ? 'inventaire' : 'réception'} ${fmtStockQty(entry.qty)} ${entry.unit} du ${fmtDateShortFR(entry.date)})`;
+  if (!confirm(`Supprimer l'entrée ${label} ?`)) return;
+  state.stockEntries = state.stockEntries.filter(e => e.id !== id);
+  save();
+  // Si la modale détail est ouverte sur cet article, on la rafraîchit
+  if (stockDetailArticle && stockDetailArticle.toLowerCase() === entry.article.toLowerCase()) {
+    renderStockDetailBody();
+  }
+  renderStock();
+}
+
+// ----- Bottom sheet de saisie -----
+let currentStockEntryType = 'reception';
+function openStockEntrySheet() {
+  const sheet = document.getElementById('stockentrysheet');
+  if (!sheet) return;
+  setStockEntryType('reception');
+  // Reset des champs
+  document.getElementById('stockarticle').value = '';
+  document.getElementById('stockqty').value = '';
+  const unitSel = document.getElementById('stockunit');
+  if (unitSel.childElementCount === 0) {
+    for (const u of STOCK_UNITS) {
+      const opt = document.createElement('option');
+      opt.value = u; opt.textContent = u;
+      unitSel.appendChild(opt);
+    }
+  }
+  unitSel.value = 'm³';
+  document.getElementById('stockdate').value = todayISO();
+  document.getElementById('stocknotes').value = '';
+  refreshArticleDatalist();
+  sheet.hidden = false;
+  document.body.style.overflow = 'hidden';
+  // Focus sur le premier champ utile
+  setTimeout(() => document.getElementById('stockarticle')?.focus(), 50);
+}
+function closeStockEntrySheet() {
+  const sheet = document.getElementById('stockentrysheet');
+  if (sheet) sheet.hidden = true;
+  document.body.style.overflow = '';
+}
+function setStockEntryType(type) {
+  currentStockEntryType = type === 'inventaire' ? 'inventaire' : 'reception';
+  const seg = document.querySelector('.stock-type-seg');
+  if (seg) {
+    const buttons = seg.querySelectorAll('.seg-btn');
+    buttons.forEach((b, i) => {
+      const isActive = b.dataset.stockEntryType === currentStockEntryType;
+      b.classList.toggle('active', isActive);
+      if (isActive) seg.dataset.position = String(i);
+    });
+  }
+  const hint = document.getElementById('stocktypehint');
+  if (hint) {
+    hint.textContent = currentStockEntryType === 'reception'
+      ? 'Ajoute la quantité reçue au stock courant.'
+      : 'Remplace le stock courant par la quantité comptée (recalage).';
+  }
+}
+function submitStockEntry() {
+  const article = document.getElementById('stockarticle').value;
+  const qty     = document.getElementById('stockqty').value;
+  const unit    = document.getElementById('stockunit').value;
+  const date    = document.getElementById('stockdate').value;
+  const notes   = document.getElementById('stocknotes').value;
+  const ok = addStockEntry({ type: currentStockEntryType, article, qty, unit, date, notes });
+  if (ok) {
+    showToast(currentStockEntryType === 'inventaire' ? 'Inventaire enregistré' : 'Réception enregistrée');
+    closeStockEntrySheet();
+  }
+}
+
+// ----- Modale détail d'un article -----
+let stockDetailArticle = null;
+function openStockDetail(article) {
+  stockDetailArticle = article;
+  const modal = document.getElementById('stockdetailmodal');
+  const title = document.getElementById('stockdetailtitle');
+  if (!modal || !title) return;
+  title.textContent = article;
+  renderStockDetailBody();
+  modal.hidden = false;
+  document.body.style.overflow = 'hidden';
+}
+function closeStockDetail() {
+  const modal = document.getElementById('stockdetailmodal');
+  if (modal) modal.hidden = true;
+  document.body.style.overflow = '';
+  stockDetailArticle = null;
+}
+function renderStockDetailBody() {
+  if (!stockDetailArticle) return;
+  const body = document.getElementById('stockdetailbody');
+  if (!body) return;
+  body.innerHTML = '';
+  const summary = getStockSummary().find(s =>
+    s.article.toLowerCase() === stockDetailArticle.toLowerCase()
+  );
+  // Bandeau résumé
+  const head = document.createElement('div');
+  head.className = 'stock-detail-head';
+  if (summary) {
+    head.innerHTML = `
+      <div class="stock-detail-label">Stock courant</div>
+      <div class="stock-detail-value">${fmtStockQty(summary.stock)} ${escapeHtml(summary.unit)}</div>
+    `;
+  } else {
+    head.innerHTML = `<div class="stock-detail-label">Aucun stock enregistré pour cet article.</div>`;
+  }
+  body.appendChild(head);
+
+  const history = getArticleHistory(stockDetailArticle);
+  if (history.length === 0) return;
+
+  const title = document.createElement('div');
+  title.className = 'stock-detail-section-title';
+  title.textContent = 'Historique';
+  body.appendChild(title);
+
+  const ul = document.createElement('ul');
+  ul.className = 'stock-history';
+  for (const e of history) {
+    const li = document.createElement('li');
+    li.className = 'stock-history-item type-' + e.type;
+    const sign = e.type === 'inventaire' ? '=' : '+';
+    const verb = e.type === 'inventaire' ? 'Inventaire' : 'Réception';
+    li.innerHTML = `
+      <div class="stock-history-line">
+        <span class="stock-history-date"></span>
+        <span class="stock-history-type"></span>
+        <span class="stock-history-qty"></span>
+        <button class="stock-history-delete" type="button" aria-label="Supprimer cette entrée">
+          <svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+        </button>
+      </div>
+      <div class="stock-history-notes"></div>
+    `;
+    li.querySelector('.stock-history-date').textContent = fmtDateShortFR(e.date);
+    li.querySelector('.stock-history-type').textContent = verb;
+    li.querySelector('.stock-history-qty').textContent = `${sign}${fmtStockQty(e.qty)} ${e.unit}`;
+    const notesEl = li.querySelector('.stock-history-notes');
+    if (e.notes) notesEl.textContent = e.notes; else notesEl.remove();
+    li.querySelector('.stock-history-delete').addEventListener('click', () => removeStockEntry(e.id));
+    ul.appendChild(li);
+  }
+  body.appendChild(ul);
+}
+
 function incrementCount(companyId) {
   const date = state.currentDate;
   if (!state.presences[date]) state.presences[date] = [];
@@ -2919,6 +3242,7 @@ function switchPage(name) {
   }
   if (name === 'avancement') renderAvancement();
   if (name === 'administratif') renderAdministratif();
+  if (name === 'stock') renderStock();
 }
 
 // ---------- Import / Export ----------
@@ -2970,6 +3294,7 @@ function importData(file) {
       state.avancementZoneId = null;
       state.presences = data.presences;
       state.weather = data.weather || {};
+      state.stockEntries = data.stockEntries || [];
       state.adminDocs = data.adminDocs || {};
       state.workers = data.workers || [];
       state.workerDocs = data.workerDocs || {};
@@ -3010,6 +3335,7 @@ function resetAll() {
   state.avancementZoneId = null;
   state.presences = {};
   state.weather = {};
+  state.stockEntries = [];
   state.adminDocs = {};
   state.workers = [];
   state.workerDocs = {};
@@ -3108,6 +3434,25 @@ function init() {
   // Bouton « Copier le récap des échéances » en haut d'eCheckIn
   const reportBtn = document.getElementById('echeckinreportbtn');
   if (reportBtn) reportBtn.addEventListener('click', copyExpiryReport);
+
+  // ----- Stock : FAB + bottom sheet + modale détail -----
+  const stockFab = document.getElementById('stockfab');
+  if (stockFab) stockFab.addEventListener('click', openStockEntrySheet);
+  const stockSheet = document.getElementById('stockentrysheet');
+  if (stockSheet) {
+    document.getElementById('stockentrysheetclose').addEventListener('click', closeStockEntrySheet);
+    stockSheet.addEventListener('click', (e) => { if (e.target === stockSheet) closeStockEntrySheet(); });
+    document.getElementById('stockentrysave').addEventListener('click', submitStockEntry);
+    // Boutons Réception / Inventaire dans le segmented
+    stockSheet.querySelectorAll('[data-stock-entry-type]').forEach(b => {
+      b.addEventListener('click', () => setStockEntryType(b.dataset.stockEntryType));
+    });
+  }
+  const stockDetailModalEl = document.getElementById('stockdetailmodal');
+  if (stockDetailModalEl) {
+    document.getElementById('stockdetailclose').addEventListener('click', closeStockDetail);
+    stockDetailModalEl.addEventListener('click', (e) => { if (e.target === stockDetailModalEl) closeStockDetail(); });
+  }
 
   // Service worker : enregistrement + rechargement auto à chaque mise à jour
   if ('serviceWorker' in navigator) {
