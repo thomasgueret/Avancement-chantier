@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.38';
+const APP_VERSION = '0.39';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -2088,6 +2088,13 @@ function toggleECheckInCollapse(companyId) {
 //   Ouvrier : Doc est arrivé à échéance le JJ/MM/AAAA
 //   Ouvrier : Doc arrivera à échéance le JJ/MM/AAAA
 // Un bloc par entreprise, séparés par une ligne vide.
+// Joint des clauses à la française : « A », « A et B », « A, B et C »…
+function joinFR(parts) {
+  if (parts.length === 0) return '';
+  if (parts.length === 1) return parts[0];
+  return parts.slice(0, -1).join(', ') + ' et ' + parts[parts.length - 1];
+}
+
 function buildExpiryReportText() {
   const blocks = [];
   for (const company of state.companies) {
@@ -2095,6 +2102,10 @@ function buildExpiryReportText() {
     for (const worker of getCompanyWorkers(company.id)) {
       const docs = getWorkerDocs(worker.id);
       const name = worker.name?.trim() || '(ouvrier sans nom)';
+      // On collecte toutes les clauses du même ouvrier dans cet ordre :
+      // « Doc verbe DATE » ou « Doc est non conforme », puis on les
+      // joint avec « et » sur une seule ligne.
+      const clauses = [];
       for (const docId of getApplicableDocIds(docs.employmentType)) {
         const type = getDocType(docId);
         const status = getDocStatus(worker.id, docId);
@@ -2104,22 +2115,21 @@ function buildExpiryReportText() {
           const date = getDocValue(worker.id, docId);
           if (!date) continue;
           const verb = (status === 'expired') ? 'est arrivé à échéance le' : 'arrivera à échéance le';
-          lines.push(`${name} : ${label} ${verb} ${fmtFR(date)}`);
+          clauses.push(`${label} ${verb} ${fmtFR(date)}`);
         } else if (type === 'validation') {
-          // Statut non-conforme (= expired) sans date
-          lines.push(`${name} : ${label} est non conforme`);
+          clauses.push(`${label} est non conforme`);
         } else if (type === 'caces') {
-          // Une ligne par CACES posant problème
           const items = getDocValue(worker.id, docId) || [];
           for (const c of items) {
             const s = expiryStatus(c.expiresAt);
             if (s !== 'expired' && s !== 'danger' && s !== 'warning') continue;
             const subName = (c.name?.trim()) || label;
             const verb = (s === 'expired') ? 'est arrivé à échéance le' : 'arrivera à échéance le';
-            lines.push(`${name} : ${subName} ${verb} ${fmtFR(c.expiresAt)}`);
+            clauses.push(`${subName} ${verb} ${fmtFR(c.expiresAt)}`);
           }
         }
       }
+      if (clauses.length > 0) lines.push(`${name} : ${joinFR(clauses)}`);
     }
     if (lines.length > 0) {
       blocks.push([company.name || '(entreprise sans nom)', ...lines].join('\n'));
