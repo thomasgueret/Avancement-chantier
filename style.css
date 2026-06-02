@@ -1577,6 +1577,205 @@ input, select { font: inherit; }
 .caces-delete:active { background: var(--surface-2); color: var(--danger); }
 .caces-add { width: 100%; }
 
+/* ============ MAQUETTES STOCK (temporaire — à élaguer après choix) ============ */
+.maquette-intro {
+  font-size: 13px; color: var(--text-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin: 0 0 14px;
+  line-height: 1.45;
+}
+.mock-block { margin-bottom: 20px; }
+.mock-block:last-child { margin-bottom: 0; }
+.mock-label {
+  font-size: 11px; font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.mock-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 14px;
+}
+.mock-card-flush { padding: 0; overflow: hidden; }
+.mock-card-flush > .mock-section-head,
+.mock-card-flush > .mock-entry-list,
+.mock-card-flush > .mock-inline-form,
+.mock-card-flush > .mock-card-title,
+.mock-card-flush > .recap-table-wrap {
+  margin: 0;
+}
+.mock-pos-rel { position: relative; }
+.mock-card-title {
+  font-size: 15px; font-weight: 700;
+  color: var(--text);
+  padding: 12px 14px 8px;
+}
+.mock-full-btn { width: 100%; margin-top: 10px; }
+
+/* Form rows (designs A et B) */
+.mock-form-row { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; padding: 0 14px; }
+.mock-card > .mock-form-row:first-child { padding: 0; }
+.mock-form-row-split { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.mock-form-row.mock-form-row-split { padding: 0 14px; }
+.mock-form-label {
+  font-size: 12px; font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: 0.02em;
+}
+.mock-form-input {
+  font-size: 14px; color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  width: 100%;
+  font-family: inherit;
+  -webkit-appearance: none;
+}
+select.mock-form-input { -webkit-appearance: menulist; }
+.mock-form-input:focus { outline: none; border-color: var(--accent); }
+.mock-form-actions {
+  display: flex; gap: 8px; justify-content: flex-end;
+  margin-top: 14px;
+  padding: 0 14px 14px;
+}
+.mock-card > .mock-form-actions:last-child { padding: 14px 14px 14px; }
+
+/* Design B : section head + liste entrée + form inline */
+.mock-section-head {
+  font-size: 12px; font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: 10px 14px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.mock-entry-list { list-style: none; padding: 0; margin: 0; }
+.mock-entry-list-compact { padding-bottom: 60px; /* place pour le FAB */ }
+.mock-entry-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+.mock-entry-row:last-child { border-bottom: none; }
+.mock-entry-date {
+  flex-shrink: 0;
+  font-size: 12px; font-weight: 600;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  min-width: 42px;
+}
+.mock-entry-name { flex: 1; color: var(--text); font-weight: 500; }
+.mock-entry-qty {
+  flex-shrink: 0;
+  font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.mock-inline-form {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border-top: 1px solid var(--border);
+}
+.mock-inline-form .mock-form-actions { padding: 0; margin-top: 4px; }
+
+/* Design C : FAB + bottom sheet */
+.mock-fab {
+  position: absolute;
+  right: 14px; bottom: 70px;
+  width: 52px; height: 52px;
+  border-radius: 999px;
+  border: none;
+  background: var(--accent);
+  color: white;
+  font-size: 30px; font-weight: 300; line-height: 1;
+  box-shadow: 0 4px 16px rgba(20, 24, 33, 0.18);
+  z-index: 2;
+}
+.mock-bottom-sheet {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  border-radius: 16px 16px 0 0;
+  padding: 8px 14px 14px;
+  display: flex; flex-direction: column; gap: 8px;
+  box-shadow: 0 -4px 18px rgba(20, 24, 33, 0.10);
+}
+.mock-bottom-sheet-handle {
+  width: 36px; height: 4px;
+  background: var(--border-strong);
+  border-radius: 2px;
+  margin: 0 auto 4px;
+}
+.mock-bottom-sheet .mock-card-title { padding: 4px 0 6px; }
+
+/* Design E : cards par article */
+.mock-stock-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 12px 14px;
+  margin-bottom: 8px;
+}
+.mock-stock-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px;
+}
+.mock-stock-name { font-size: 15px; font-weight: 700; color: var(--text); }
+.mock-stock-total {
+  font-size: 16px; font-weight: 800;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.mock-stock-sub {
+  font-size: 12px; color: var(--text-3);
+  margin-top: 4px;
+}
+
+/* Design F : timeline */
+.mock-timeline {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 14px 14px;
+  box-shadow: var(--shadow-sm);
+}
+.mock-timeline-day {
+  font-size: 12px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-3);
+  margin-top: 10px; margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.mock-timeline-day:first-child { margin-top: 4px; }
+.mock-timeline-entry {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 0;
+  font-size: 14px;
+}
+.mock-timeline-dot {
+  width: 8px; height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+.mock-timeline-name { flex: 1; color: var(--text); }
+.mock-timeline-qty {
+  font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ============ ANIMATIONS ============ */
 @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slideup { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }

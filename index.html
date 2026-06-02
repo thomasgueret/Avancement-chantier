@@ -215,9 +215,235 @@
 
     <!-- ============== ONGLET : STOCK ============== -->
     <section class="page" id="page-stock">
-      <div class="empty-state show">
-        <p>Onglet Stock</p>
-        <p class="hint">Contenu à définir.</p>
+      <div class="segmented" role="tablist" data-group="stock" data-position="0" style="--count:2;">
+        <div class="segmented-thumb"></div>
+        <button class="seg-btn active" data-group="stock" data-sub="enregistrement" role="tab">Enregistrement</button>
+        <button class="seg-btn" data-group="stock" data-sub="stockview" role="tab">Stock</button>
+      </div>
+
+      <p class="maquette-intro">
+        Trois designs proposés pour ce sous-onglet — non fonctionnels,
+        juste pour valider le rendu. Choisis-en un et je l'implémente
+        pour de vrai.
+      </p>
+
+      <!-- ===== Sous-page : Enregistrement (saisie) ===== -->
+      <div class="sub-page active" id="sub-enregistrement" data-group="stock">
+
+        <!-- DESIGN A : formulaire pleine page -->
+        <div class="mock-block">
+          <div class="mock-label">A — Formulaire pleine page</div>
+          <div class="mock-card">
+            <div class="mock-card-title">Nouvelle entrée</div>
+            <div class="mock-form-row">
+              <label class="mock-form-label">Article</label>
+              <input class="mock-form-input" type="text" placeholder="Sable 0/4, Ciment, Parpaings…" value="Sable 0/4">
+            </div>
+            <div class="mock-form-row mock-form-row-split">
+              <div>
+                <label class="mock-form-label">Quantité</label>
+                <input class="mock-form-input" type="text" inputmode="decimal" value="5">
+              </div>
+              <div>
+                <label class="mock-form-label">Unité</label>
+                <select class="mock-form-input">
+                  <option>m³</option><option>t</option><option>kg</option>
+                  <option>sacs</option><option>palettes</option><option>u</option>
+                </select>
+              </div>
+            </div>
+            <div class="mock-form-row">
+              <label class="mock-form-label">Date</label>
+              <input class="mock-form-input" type="date" value="2026-06-06">
+            </div>
+            <div class="mock-form-row">
+              <label class="mock-form-label">Notes (optionnel)</label>
+              <input class="mock-form-input" type="text" placeholder="Fournisseur, zone de dépôt…">
+            </div>
+            <div class="mock-form-actions">
+              <button class="btn-secondary" type="button">Annuler</button>
+              <button class="btn-primary" type="button">Enregistrer</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- DESIGN B : liste du jour + formulaire inline + bouton + -->
+        <div class="mock-block">
+          <div class="mock-label">B — Liste du jour + saisie inline</div>
+          <div class="mock-card mock-card-flush">
+            <div class="mock-section-head">Aujourd'hui · 06/06/2026</div>
+            <ul class="mock-entry-list">
+              <li class="mock-entry-row">
+                <span class="mock-entry-name">Sable 0/4</span>
+                <span class="mock-entry-qty">5 m³</span>
+              </li>
+              <li class="mock-entry-row">
+                <span class="mock-entry-name">Ciment CEM I 52,5</span>
+                <span class="mock-entry-qty">20 sacs</span>
+              </li>
+              <li class="mock-entry-row">
+                <span class="mock-entry-name">Parpaings 20</span>
+                <span class="mock-entry-qty">150 u</span>
+              </li>
+            </ul>
+            <div class="mock-inline-form">
+              <input class="mock-form-input" type="text" placeholder="Article" value="">
+              <div class="mock-form-row-split">
+                <input class="mock-form-input" type="text" inputmode="decimal" placeholder="Qté">
+                <select class="mock-form-input">
+                  <option>m³</option><option>t</option><option>sacs</option>
+                  <option>palettes</option><option>u</option>
+                </select>
+              </div>
+              <div class="mock-form-actions">
+                <button class="btn-secondary" type="button">Annuler</button>
+                <button class="btn-primary" type="button">✓ Ajouter</button>
+              </div>
+            </div>
+          </div>
+          <button class="btn-primary mock-full-btn" type="button">+ Nouvelle entrée</button>
+        </div>
+
+        <!-- DESIGN C : liste compacte + FAB flottant + bottom-sheet -->
+        <div class="mock-block">
+          <div class="mock-label">C — Liste compacte + bouton flottant (bottom sheet)</div>
+          <div class="mock-card mock-card-flush mock-pos-rel">
+            <ul class="mock-entry-list mock-entry-list-compact">
+              <li class="mock-entry-row">
+                <span class="mock-entry-date">06/06</span>
+                <span class="mock-entry-name">Sable 0/4</span>
+                <span class="mock-entry-qty">5 m³</span>
+              </li>
+              <li class="mock-entry-row">
+                <span class="mock-entry-date">06/06</span>
+                <span class="mock-entry-name">Ciment 52,5</span>
+                <span class="mock-entry-qty">20 sacs</span>
+              </li>
+              <li class="mock-entry-row">
+                <span class="mock-entry-date">05/06</span>
+                <span class="mock-entry-name">Parpaings 20</span>
+                <span class="mock-entry-qty">150 u</span>
+              </li>
+              <li class="mock-entry-row">
+                <span class="mock-entry-date">05/06</span>
+                <span class="mock-entry-name">Sable 0/4</span>
+                <span class="mock-entry-qty">3 m³</span>
+              </li>
+            </ul>
+            <!-- FAB flottant -->
+            <button class="mock-fab" type="button" aria-label="Ajouter">+</button>
+            <!-- Bottom sheet (statique, juste pour montrer le rendu) -->
+            <div class="mock-bottom-sheet">
+              <div class="mock-bottom-sheet-handle"></div>
+              <div class="mock-card-title">Nouvelle entrée</div>
+              <input class="mock-form-input" type="text" placeholder="Article">
+              <div class="mock-form-row-split">
+                <input class="mock-form-input" type="text" inputmode="decimal" placeholder="Qté">
+                <select class="mock-form-input"><option>m³</option><option>t</option><option>sacs</option></select>
+              </div>
+              <input class="mock-form-input" type="date" value="2026-06-06">
+              <button class="btn-primary mock-full-btn" type="button">Enregistrer</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== Sous-page : Stock (consultation) ===== -->
+      <div class="sub-page" id="sub-stockview" data-group="stock">
+
+        <!-- DESIGN D : tableau récap (chronologique) -->
+        <div class="mock-block">
+          <div class="mock-label">D — Tableau récap chronologique</div>
+          <div class="mock-card mock-card-flush">
+            <div class="recap-table-wrap">
+              <table class="recap-table">
+                <thead>
+                  <tr>
+                    <th class="recap-date-col">Date</th>
+                    <th>Article</th>
+                    <th>Qté</th>
+                    <th>Unité</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><th class="recap-date-col">06/06/26</th><td style="text-align:left">Sable 0/4</td><td>5</td><td>m³</td></tr>
+                  <tr><th class="recap-date-col">06/06/26</th><td style="text-align:left">Ciment 52,5</td><td>20</td><td>sacs</td></tr>
+                  <tr><th class="recap-date-col">06/06/26</th><td style="text-align:left">Parpaings 20</td><td>150</td><td>u</td></tr>
+                  <tr><th class="recap-date-col">05/06/26</th><td style="text-align:left">Sable 0/4</td><td>3</td><td>m³</td></tr>
+                  <tr><th class="recap-date-col">04/06/26</th><td style="text-align:left">Treillis ST25</td><td>8</td><td>palettes</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- DESIGN E : cards par article (agrégation) -->
+        <div class="mock-block">
+          <div class="mock-label">E — Cards par article (stock agrégé)</div>
+          <div class="mock-stock-card">
+            <div class="mock-stock-head">
+              <span class="mock-stock-name">Sable 0/4</span>
+              <span class="mock-stock-total">8 m³</span>
+            </div>
+            <div class="mock-stock-sub">Dernière entrée : 06/06/26 — +5 m³</div>
+          </div>
+          <div class="mock-stock-card">
+            <div class="mock-stock-head">
+              <span class="mock-stock-name">Ciment CEM I 52,5</span>
+              <span class="mock-stock-total">20 sacs</span>
+            </div>
+            <div class="mock-stock-sub">Dernière entrée : 06/06/26 — +20 sacs</div>
+          </div>
+          <div class="mock-stock-card">
+            <div class="mock-stock-head">
+              <span class="mock-stock-name">Parpaings 20</span>
+              <span class="mock-stock-total">150 u</span>
+            </div>
+            <div class="mock-stock-sub">Dernière entrée : 06/06/26 — +150 u</div>
+          </div>
+          <div class="mock-stock-card">
+            <div class="mock-stock-head">
+              <span class="mock-stock-name">Treillis ST25</span>
+              <span class="mock-stock-total">8 palettes</span>
+            </div>
+            <div class="mock-stock-sub">Dernière entrée : 04/06/26 — +8 palettes</div>
+          </div>
+        </div>
+
+        <!-- DESIGN F : timeline chronologique par jour -->
+        <div class="mock-block">
+          <div class="mock-label">F — Timeline chronologique par jour</div>
+          <div class="mock-timeline">
+            <div class="mock-timeline-day">vendredi 06/06/2026</div>
+            <div class="mock-timeline-entry">
+              <span class="mock-timeline-dot"></span>
+              <span class="mock-timeline-name">Sable 0/4</span>
+              <span class="mock-timeline-qty">+ 5 m³</span>
+            </div>
+            <div class="mock-timeline-entry">
+              <span class="mock-timeline-dot"></span>
+              <span class="mock-timeline-name">Ciment CEM I 52,5</span>
+              <span class="mock-timeline-qty">+ 20 sacs</span>
+            </div>
+            <div class="mock-timeline-entry">
+              <span class="mock-timeline-dot"></span>
+              <span class="mock-timeline-name">Parpaings 20</span>
+              <span class="mock-timeline-qty">+ 150 u</span>
+            </div>
+            <div class="mock-timeline-day">jeudi 05/06/2026</div>
+            <div class="mock-timeline-entry">
+              <span class="mock-timeline-dot"></span>
+              <span class="mock-timeline-name">Sable 0/4</span>
+              <span class="mock-timeline-qty">+ 3 m³</span>
+            </div>
+            <div class="mock-timeline-day">mercredi 04/06/2026</div>
+            <div class="mock-timeline-entry">
+              <span class="mock-timeline-dot"></span>
+              <span class="mock-timeline-name">Treillis ST25</span>
+              <span class="mock-timeline-qty">+ 8 palettes</span>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
   </main>
