@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.39';
+const APP_VERSION = '0.40';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -2094,18 +2094,33 @@ function joinFR(parts) {
   if (parts.length === 1) return parts[0];
   return parts.slice(0, -1).join(', ') + ' et ' + parts[parts.length - 1];
 }
-
-function buildExpiryReportText() {
-  const blocks = [];
+// Échappe les caractères HTML spéciaux pour les noms saisis par l'utilisateur
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+// Construit deux versions du récap : texte brut et HTML (avec les
+// documents périmés mis en gras et rouge). Le HTML est utilisé par les
+// apps qui acceptent le formatage riche (mail), le texte brut sert de
+// repli pour les autres (SMS, notes…). Voir copyExpiryReport.
+function buildExpiryReport() {
+  const blocksText = [];
+  const blocksHtml = [];
   for (const company of state.companies) {
-    const lines = [];
+    const linesText = [];
+    const linesHtml = [];
     for (const worker of getCompanyWorkers(company.id)) {
       const docs = getWorkerDocs(worker.id);
       const name = worker.name?.trim() || '(ouvrier sans nom)';
-      // On collecte toutes les clauses du même ouvrier dans cet ordre :
-      // « Doc verbe DATE » ou « Doc est non conforme », puis on les
-      // joint avec « et » sur une seule ligne.
-      const clauses = [];
+      const clausesText = [];
+      const clausesHtml = [];
+      const pushClause = (clause, isExpired) => {
+        clausesText.push(clause);
+        clausesHtml.push(isExpired
+          ? `<strong style="color:#d32f2f">${escapeHtml(clause)}</strong>`
+          : escapeHtml(clause));
+      };
       for (const docId of getApplicableDocIds(docs.employmentType)) {
         const type = getDocType(docId);
         const status = getDocStatus(worker.id, docId);
@@ -2115,9 +2130,9 @@ function buildExpiryReportText() {
           const date = getDocValue(worker.id, docId);
           if (!date) continue;
           const verb = (status === 'expired') ? 'est arrivé à échéance le' : 'arrivera à échéance le';
-          clauses.push(`${label} ${verb} ${fmtFR(date)}`);
+          pushClause(`${label} ${verb} ${fmtFR(date)}`, status === 'expired');
         } else if (type === 'validation') {
-          clauses.push(`${label} est non conforme`);
+          pushClause(`${label} est non conforme`, true);
         } else if (type === 'caces') {
           const items = getDocValue(worker.id, docId) || [];
           for (const c of items) {
@@ -2125,30 +2140,51 @@ function buildExpiryReportText() {
             if (s !== 'expired' && s !== 'danger' && s !== 'warning') continue;
             const subName = (c.name?.trim()) || label;
             const verb = (s === 'expired') ? 'est arrivé à échéance le' : 'arrivera à échéance le';
-            clauses.push(`${subName} ${verb} ${fmtFR(c.expiresAt)}`);
+            pushClause(`${subName} ${verb} ${fmtFR(c.expiresAt)}`, s === 'expired');
           }
         }
       }
-      if (clauses.length > 0) lines.push(`${name} : ${joinFR(clauses)}`);
+      if (clausesText.length > 0) {
+        linesText.push(`${name} : ${joinFR(clausesText)}`);
+        linesHtml.push(`${escapeHtml(name)} : ${joinFR(clausesHtml)}`);
+      }
     }
-    if (lines.length > 0) {
-      blocks.push([company.name || '(entreprise sans nom)', ...lines].join('\n'));
+    if (linesText.length > 0) {
+      const companyName = company.name || '(entreprise sans nom)';
+      blocksText.push([companyName, ...linesText].join('\n'));
+      blocksHtml.push([`<strong>${escapeHtml(companyName)}</strong>`, ...linesHtml].join('<br>'));
     }
   }
-  return blocks.join('\n\n');
+  return {
+    text: blocksText.join('\n\n'),
+    html: blocksHtml.length > 0 ? `<div>${blocksHtml.join('<br><br>')}</div>` : ''
+  };
 }
+// Wrapper historique (utilisé dans certains anciens tests)
+function buildExpiryReportText() { return buildExpiryReport().text; }
 
 async function copyExpiryReport() {
-  const text = buildExpiryReportText();
+  const { text, html } = buildExpiryReport();
   if (!text) {
     showToast('Aucun document à signaler');
     return;
   }
+  // Stratégie en cascade : on essaie d'abord ClipboardItem avec
+  // text/html ET text/plain pour que les apps qui acceptent le riche
+  // (mail) voient les docs périmés en gras rouge, tandis que celles
+  // qui ne prennent que du texte (SMS, notes) tombent sur le plain.
+  // Repli ensuite sur writeText, puis textarea + execCommand pour les
+  // navigateurs les plus anciens.
   try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
+    if (navigator.clipboard && navigator.clipboard.write && typeof ClipboardItem !== 'undefined' && html) {
+      const item = new ClipboardItem({
+        'text/plain': new Blob([text], { type: 'text/plain' }),
+        'text/html':  new Blob([html], { type: 'text/html' })
+      });
+      await navigator.clipboard.write([item]);
+    } else if (navigator.clipboard && navigator.clipboard.writeText) {
       await navigator.clipboard.writeText(text);
     } else {
-      // Repli : textarea + execCommand (anciens iOS Safari)
       const ta = document.createElement('textarea');
       ta.value = text;
       ta.setAttribute('readonly', '');
@@ -2161,7 +2197,14 @@ async function copyExpiryReport() {
     }
     showToast('Récap copié dans le presse-papiers');
   } catch (e) {
-    showToast('Copie impossible', 'error');
+    // Filet de sécurité : si write() échoue (permissions ou MIME non
+    // autorisé), on retombe sur writeText
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('Récap copié dans le presse-papiers');
+    } catch (_) {
+      showToast('Copie impossible', 'error');
+    }
   }
 }
 
