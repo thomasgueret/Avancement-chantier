@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.41';
+const APP_VERSION = '0.42';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -2117,11 +2117,12 @@ function buildExpiryReport() {
       const clausesHtml = [];
       const pushClause = (clause, isExpired) => {
         clausesText.push(clause);
-        // Combo <b> + <font color> : les balises les plus largement
-        // supportées par les clients mail anciens (Outlook iOS notamment
-        // strippe les inline styles modernes mais respecte font color).
+        // <b style="color:..."> : single-balise avec style inline. Plus
+        // compact qu'un combo <b><font>, accepté par Outlook iOS qui
+        // sanitise certaines structures combinées de manière trop
+        // agressive. Apple Mail / Gmail / SMS le gèrent aussi.
         clausesHtml.push(isExpired
-          ? `<b><font color="#d32f2f">${escapeHtml(clause)}</font></b>`
+          ? `<b style="color:#d32f2f">${escapeHtml(clause)}</b>`
           : escapeHtml(clause));
       };
       for (const docId of getApplicableDocIds(docs.employmentType)) {
@@ -2159,15 +2160,14 @@ function buildExpiryReport() {
       blocksHtml.push([`<b>${escapeHtml(companyName)}</b>`, ...linesHtml].join('<br>'));
     }
   }
-  // HTML enveloppé dans un document complet : Outlook (notamment sur
-  // iOS) et certains autres clients mail rejettent ou ignorent un
-  // fragment HTML brut sans <html>/<body>, ce qui se traduit par un
-  // collage vide. <meta charset> évite les soucis d'encodage UTF-8.
+  // Fragment HTML brut (sans wrapper <html>/<body>) : c'est ce que
+  // la spec clipboard recommande. Les navigateurs ajoutent eux-mêmes
+  // les enveloppes spécifiques au pasteboard (CF_HTML sur Windows,
+  // etc.). Une enveloppe ajoutée par nos soins peut au contraire
+  // perturber des clients comme Outlook iOS qui attendent un fragment.
   return {
     text: blocksText.join('\n\n'),
-    html: blocksHtml.length > 0
-      ? `<html><head><meta charset="utf-8"></head><body>${blocksHtml.join('<br><br>')}</body></html>`
-      : ''
+    html: blocksHtml.length > 0 ? blocksHtml.join('<br><br>') : ''
   };
 }
 // Wrapper historique (utilisé dans certains anciens tests)
@@ -2188,8 +2188,11 @@ async function copyExpiryReport() {
   try {
     if (navigator.clipboard && navigator.clipboard.write && typeof ClipboardItem !== 'undefined' && html) {
       const item = new ClipboardItem({
-        'text/plain': new Blob([text], { type: 'text/plain' }),
-        'text/html':  new Blob([html], { type: 'text/html' })
+        // charset=utf-8 explicite : sans ça certains clients (Outlook
+        // iOS notamment) interprètent les accents en latin-1 et
+        // produisent du mojibake ou refusent de coller.
+        'text/plain': new Blob([text], { type: 'text/plain;charset=utf-8' }),
+        'text/html':  new Blob([html], { type: 'text/html;charset=utf-8' })
       });
       await navigator.clipboard.write([item]);
     } else if (navigator.clipboard && navigator.clipboard.writeText) {
