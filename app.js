@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.37';
+const APP_VERSION = '0.38';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -2081,6 +2081,80 @@ function toggleECheckInCollapse(companyId) {
   renderECheckIn();
 }
 
+// ---------- eCheckIn → récapitulatif des échéances ----------
+// Construit un texte listant les documents périmés ou bientôt expirés
+// pour TOUS les ouvriers (filtrés par scope vs type d'emploi). Format :
+//   Société
+//   Ouvrier : Doc est arrivé à échéance le JJ/MM/AAAA
+//   Ouvrier : Doc arrivera à échéance le JJ/MM/AAAA
+// Un bloc par entreprise, séparés par une ligne vide.
+function buildExpiryReportText() {
+  const blocks = [];
+  for (const company of state.companies) {
+    const lines = [];
+    for (const worker of getCompanyWorkers(company.id)) {
+      const docs = getWorkerDocs(worker.id);
+      const name = worker.name?.trim() || '(ouvrier sans nom)';
+      for (const docId of getApplicableDocIds(docs.employmentType)) {
+        const type = getDocType(docId);
+        const status = getDocStatus(worker.id, docId);
+        if (status !== 'expired' && status !== 'danger' && status !== 'warning') continue;
+        const label = getDocLabel(docId);
+        if (type === 'echeance') {
+          const date = getDocValue(worker.id, docId);
+          if (!date) continue;
+          const verb = (status === 'expired') ? 'est arrivé à échéance le' : 'arrivera à échéance le';
+          lines.push(`${name} : ${label} ${verb} ${fmtFR(date)}`);
+        } else if (type === 'validation') {
+          // Statut non-conforme (= expired) sans date
+          lines.push(`${name} : ${label} est non conforme`);
+        } else if (type === 'caces') {
+          // Une ligne par CACES posant problème
+          const items = getDocValue(worker.id, docId) || [];
+          for (const c of items) {
+            const s = expiryStatus(c.expiresAt);
+            if (s !== 'expired' && s !== 'danger' && s !== 'warning') continue;
+            const subName = (c.name?.trim()) || label;
+            const verb = (s === 'expired') ? 'est arrivé à échéance le' : 'arrivera à échéance le';
+            lines.push(`${name} : ${subName} ${verb} ${fmtFR(c.expiresAt)}`);
+          }
+        }
+      }
+    }
+    if (lines.length > 0) {
+      blocks.push([company.name || '(entreprise sans nom)', ...lines].join('\n'));
+    }
+  }
+  return blocks.join('\n\n');
+}
+
+async function copyExpiryReport() {
+  const text = buildExpiryReportText();
+  if (!text) {
+    showToast('Aucun document à signaler');
+    return;
+  }
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      // Repli : textarea + execCommand (anciens iOS Safari)
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    showToast('Récap copié dans le presse-papiers');
+  } catch (e) {
+    showToast('Copie impossible', 'error');
+  }
+}
+
 function renderECheckIn() {
   const list = document.getElementById('echeckinlist');
   const empty = document.getElementById('echeckinempty');
@@ -2957,6 +3031,10 @@ function init() {
     });
     document.getElementById('cacesadd').addEventListener('click', addCaces);
   }
+
+  // Bouton « Copier le récap des échéances » en haut d'eCheckIn
+  const reportBtn = document.getElementById('echeckinreportbtn');
+  if (reportBtn) reportBtn.addEventListener('click', copyExpiryReport);
 
   // Service worker : enregistrement + rechargement auto à chaque mise à jour
   if ('serviceWorker' in navigator) {

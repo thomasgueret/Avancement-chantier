@@ -953,6 +953,15 @@ input, select { font: inherit; }
 }
 .btn-primary { background: var(--accent); color: white; }
 .btn-primary:active { background: var(--accent-dark); }
+
+/* Bouton « Copier le récap » en haut d'eCheckIn — pleine largeur, icône à gauche */
+.echeckin-report-btn {
+  width: 100%;
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.echeckin-report-btn svg { width: 18px; height: 18px; fill: currentColor; }
 .btn-secondary { background: var(--surface); color: var(--text); border-color: var(--border-strong); }
 .btn-secondary:active { background: var(--surface-2); }
 .btn-danger { background: var(--surface); color: var(--danger); border-color: var(--danger); }
