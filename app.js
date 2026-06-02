@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.40';
+const APP_VERSION = '0.41';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -2117,8 +2117,11 @@ function buildExpiryReport() {
       const clausesHtml = [];
       const pushClause = (clause, isExpired) => {
         clausesText.push(clause);
+        // Combo <b> + <font color> : les balises les plus largement
+        // supportées par les clients mail anciens (Outlook iOS notamment
+        // strippe les inline styles modernes mais respecte font color).
         clausesHtml.push(isExpired
-          ? `<strong style="color:#d32f2f">${escapeHtml(clause)}</strong>`
+          ? `<b><font color="#d32f2f">${escapeHtml(clause)}</font></b>`
           : escapeHtml(clause));
       };
       for (const docId of getApplicableDocIds(docs.employmentType)) {
@@ -2152,12 +2155,19 @@ function buildExpiryReport() {
     if (linesText.length > 0) {
       const companyName = company.name || '(entreprise sans nom)';
       blocksText.push([companyName, ...linesText].join('\n'));
-      blocksHtml.push([`<strong>${escapeHtml(companyName)}</strong>`, ...linesHtml].join('<br>'));
+      // <b> plutôt que <strong> pour la compat des vieux clients mail
+      blocksHtml.push([`<b>${escapeHtml(companyName)}</b>`, ...linesHtml].join('<br>'));
     }
   }
+  // HTML enveloppé dans un document complet : Outlook (notamment sur
+  // iOS) et certains autres clients mail rejettent ou ignorent un
+  // fragment HTML brut sans <html>/<body>, ce qui se traduit par un
+  // collage vide. <meta charset> évite les soucis d'encodage UTF-8.
   return {
     text: blocksText.join('\n\n'),
-    html: blocksHtml.length > 0 ? `<div>${blocksHtml.join('<br><br>')}</div>` : ''
+    html: blocksHtml.length > 0
+      ? `<html><head><meta charset="utf-8"></head><body>${blocksHtml.join('<br><br>')}</body></html>`
+      : ''
   };
 }
 // Wrapper historique (utilisé dans certains anciens tests)
