@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.47';
+const APP_VERSION = '0.48';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -2901,6 +2901,36 @@ function addDaysISO(iso, n) {
   d.setDate(d.getDate() + n);
   return toISO(d);
 }
+// Jours ouvrés (lun-ven) strictement après d1 et jusqu'à d2 inclus.
+// Une semaine pleine entre lundi et lundi suivant → 5 jours.
+function businessDaysBetweenISO(d1, d2) {
+  const start = new Date(d1 + 'T00:00:00');
+  const end   = new Date(d2 + 'T00:00:00');
+  if (end <= start) return 0;
+  let count = 0;
+  const cur = new Date(start);
+  cur.setDate(cur.getDate() + 1); // borne basse exclue
+  while (cur <= end) {
+    const dow = cur.getDay(); // 0 = dimanche, 6 = samedi
+    if (dow !== 0 && dow !== 6) count++;
+    cur.setDate(cur.getDate() + 1);
+  }
+  return count;
+}
+// Projette une date en avant de n jours ouvrés (lun-ven), en sautant
+// samedis et dimanches. Si la cible tombe sur un week-end le résultat
+// sera le prochain jour ouvré.
+function addBusinessDaysISO(iso, n) {
+  if (n <= 0) return iso;
+  const d = fromISO(iso);
+  let remaining = n;
+  while (remaining > 0) {
+    d.setDate(d.getDate() + 1);
+    const dow = d.getDay();
+    if (dow !== 0 && dow !== 6) remaining--;
+  }
+  return toISO(d);
+}
 function getArticleDailyConsumption(articleName) {
   const key = (articleName || '').trim().toLowerCase();
   const sorted = state.stockEntries
@@ -2913,7 +2943,9 @@ function getArticleDailyConsumption(articleName) {
   for (let i = 1; i < inventories.length; i++) {
     const prev = inventories[i - 1];
     const cur  = inventories[i];
-    const days = daysBetweenISO(prev.date, cur.date);
+    // Comptage en jours ouvrés uniquement (lun-ven) — week-ends exclus
+    // car le chantier n'est pas actif.
+    const days = businessDaysBetweenISO(prev.date, cur.date);
     if (days <= 0) continue;
     const received = sorted
       .filter(e => e.type === 'reception' && e.date > prev.date && e.date < cur.date)
@@ -2929,13 +2961,13 @@ function getArticleDailyConsumption(articleName) {
   return totalConsumed / totalDays;
 }
 // À partir du stock courant et de la conso moyenne, estime le nombre de
-// jours restants + la date d'épuisement (à compter d'aujourd'hui).
+// jours ouvrés restants + la date d'épuisement (à compter d'aujourd'hui).
 function getArticleDepletion(articleName, currentStock) {
   const daily = getArticleDailyConsumption(articleName);
   if (daily === null || daily <= 0) return { daily, days: null, date: null };
   if (currentStock <= 0) return { daily, days: 0, date: todayISO() };
   const days = Math.round(currentStock / daily);
-  return { daily, days, date: addDaysISO(todayISO(), days) };
+  return { daily, days, date: addBusinessDaysISO(todayISO(), days) };
 }
 function fmtRate(n) {
   return Number(n).toLocaleString('fr-FR', { maximumFractionDigits: 2 });
@@ -3235,7 +3267,7 @@ function renderStockDetailBody() {
       consoCard.innerHTML = `
         <div class="stock-detail-stat-label">Conso moyenne</div>
         <div class="stock-detail-stat-value"></div>
-        <div class="stock-detail-stat-sub">par jour</div>
+        <div class="stock-detail-stat-sub">par jour ouvré</div>
       `;
       consoCard.querySelector('.stock-detail-stat-value').textContent = `${fmtRate(daily)} ${summary.unit}`;
     } else {
@@ -3253,7 +3285,7 @@ function renderStockDetailBody() {
     const depletionCard = document.createElement('div');
     depletionCard.className = 'stock-detail-stat';
     if (days !== null && date) {
-      const valueText = days === 0 ? 'épuisé' : (days === 1 ? 'dans 1 jour' : `dans ${days} jours`);
+      const valueText = days === 0 ? 'épuisé' : (days === 1 ? 'dans 1 j ouvré' : `dans ${days} j ouvrés`);
       depletionCard.innerHTML = `
         <div class="stock-detail-stat-label">Épuisement estimé</div>
         <div class="stock-detail-stat-value"></div>
