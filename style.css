@@ -2115,6 +2115,20 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   cursor: pointer;
 }
 .conso-line-remove:active { background: var(--surface); color: var(--danger); }
+/* Bloc « détails » d'une ligne — apparaît une fois le produit choisi */
+.conso-line-details {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+/* Champs verrouillés : ref/PU des produits déjà au registre canonique */
+.conso-line-ref[readonly],
+.conso-line-price[readonly] {
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: default;
+  border-style: dashed;
+}
 .conso-add-line {
   width: 100%;
   margin-top: 6px;

@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.52';
+const APP_VERSION = '0.53';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -52,7 +52,8 @@ const state = {
   presences: {},          // { 'YYYY-MM-DD': [{ id, companyId, count }] }
   weather:   {},          // { 'YYYY-MM-DD': { [companyId]: true } } — entreprises en intempéries ce jour-là
   stockEntries: [],       // [{ id, type: 'reception' | 'inventaire', article, qty, unit, date, notes }]
-  consommableEntries: [], // [{ id, product, qty, unit, unitPrice, date, notes }]
+  consommableEntries: [], // [{ id, orderId, date, notes, product, reference, qty, unit, unitPrice, eOTP }]
+  consoProducts: [],      // registre canonique : [{ name, reference, unitPrice }]
   currentDate: todayISO(),
   chartHidden: {},        // { [companyId]: true } — entreprises masquées du graphique
   chartRange: 30          // 7 | 30 | 'all'
@@ -100,6 +101,7 @@ function load() {
     if (data.weather)   state.weather   = data.weather;
     if (data.stockEntries) state.stockEntries = data.stockEntries;
     if (data.consommableEntries) state.consommableEntries = data.consommableEntries;
+    if (data.consoProducts) state.consoProducts = data.consoProducts;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
     // Champs hérités (ancien modèle à liste unique) → migrés ensuite
@@ -111,6 +113,8 @@ function load() {
   } catch (e) {
     console.warn('Lecture stockage impossible', e);
   }
+  // Migrations post-load
+  migrateConsoProductsFromEntries();
 }
 function save() {
   const data = {
@@ -133,6 +137,7 @@ function save() {
     weather: state.weather,
     stockEntries: state.stockEntries,
     consommableEntries: state.consommableEntries,
+    consoProducts: state.consoProducts,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange
   };
@@ -3629,27 +3634,62 @@ function compareConsommableEntries(a, b) {
   return (a.date || '').localeCompare(b.date || '') ||
          String(a.id || '').localeCompare(String(b.id || ''));
 }
-function getAllConsommableProductNames() {
-  const map = new Map();
-  for (const e of getConsommableEntries()) {
-    const k = (e.product || '').trim().toLowerCase();
-    if (k) map.set(k, e.product);
-  }
-  return Array.from(map.values()).sort((a, b) => a.localeCompare(b, 'fr'));
+// Registre canonique des produits : un produit y est enregistré la
+// première fois qu'il est saisi (avec sa référence + son prix
+// unitaire). Les futures saisies du même produit reprennent ces
+// valeurs en lecture seule pour éviter divergences et doublons.
+function getConsoProducts() { return Array.isArray(state.consoProducts) ? state.consoProducts : []; }
+function getConsoProduct(name) {
+  const k = (name || '').trim().toLowerCase();
+  return getConsoProducts().find(p => (p.name || '').trim().toLowerCase() === k) || null;
 }
-// Dernière référence saisie pour un nom de produit donné (utilisée
-// pour pré-remplir la ref quand on resélectionne le produit).
-function getLatestProductReference(productName) {
-  const key = (productName || '').trim().toLowerCase();
-  let ref = '';
+function getAllConsoProducts() {
+  return getConsoProducts().slice().sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+}
+// Insère ou complète un produit dans le registre. Si le produit existe
+// déjà avec une référence/un prix non vide, on NE les écrase PAS — on
+// remplit uniquement ce qui manque.
+function upsertConsoProduct({ name, reference, unitPrice }) {
+  if (!name || !name.trim()) return null;
+  if (!Array.isArray(state.consoProducts)) state.consoProducts = [];
+  let p = getConsoProduct(name);
+  if (!p) {
+    p = { name: name.trim(), reference: (reference || '').trim(), unitPrice: Number(unitPrice) || 0 };
+    state.consoProducts.push(p);
+  } else {
+    if (!p.reference && reference) p.reference = String(reference).trim();
+    if ((!p.unitPrice || p.unitPrice === 0) && unitPrice) p.unitPrice = Number(unitPrice) || 0;
+  }
+  return p;
+}
+// Migration : si le registre est vide mais qu'on a des entrées (cas
+// upgrade depuis v0.52), on le reconstruit en parcourant les entrées
+// dans l'ordre chronologique (la première occurrence d'un produit
+// fixe sa référence et son prix canoniques).
+function migrateConsoProductsFromEntries() {
+  if (getConsoProducts().length > 0) return;
+  state.consoProducts = [];
+  const sorted = getConsommableEntries().slice().sort(compareConsommableEntries);
+  for (const e of sorted) {
+    upsertConsoProduct({ name: e.product, reference: e.reference, unitPrice: e.unitPrice });
+  }
+}
+// Unité la plus récemment utilisée pour un produit (pour pré-remplir
+// le sélecteur unité quand on choisit un produit existant).
+function getMostRecentUnitForProduct(name) {
+  const key = (name || '').trim().toLowerCase();
+  let unit = 'u';
   let lastDate = '';
   for (const e of getConsommableEntries()) {
     if ((e.product || '').trim().toLowerCase() !== key) continue;
-    if (!e.reference) continue;
     const d = e.date || '';
-    if (d >= lastDate) { ref = e.reference; lastDate = d; }
+    if (d >= lastDate) { unit = e.unit || 'u'; lastDate = d; }
   }
-  return ref;
+  return unit;
+}
+function fmtPriceForInput(n) {
+  if (!n || isNaN(Number(n))) return '';
+  return Number(n).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
 }
 function fmtEur(n) {
   return Number(n || 0).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -3772,6 +3812,8 @@ function renderConsommableRecap() {
     const cur = productMap.get(pKey);
     cur.display = e.product;
     cur.unit = e.unit;
+    // La référence affichée dans le récap vient de l'entrée la plus
+    // récente (ou ultérieurement remplacée par la canonique ci-après)
     if (e.reference) cur.ref = e.reference;
     const cellKey = pKey + '|' + monthKey;
     if (!cells.has(cellKey)) cells.set(cellKey, { qty: 0, total: 0, unit: e.unit });
@@ -3783,6 +3825,12 @@ function renderConsommableRecap() {
     cell.unit = e.unit;
   }
   const months = Array.from(monthSet).sort();
+  // Préfère la référence canonique si elle existe (= celle qui apparaît
+  // dans le dropdown de saisie), pour avoir partout la même chaîne.
+  for (const [, p] of productMap) {
+    const canonical = getConsoProduct(p.display);
+    if (canonical && canonical.reference) p.ref = canonical.reference;
+  }
   const products = Array.from(productMap.entries())
     .sort((a, b) => a[1].display.localeCompare(b[1].display, 'fr'));
 
@@ -3927,7 +3975,7 @@ function buildOrderLine() {
   header.append(num, remove);
   line.appendChild(header);
 
-  // Produit (dropdown + nouveau)
+  // Sélection produit — toujours visible
   const prodLabel = document.createElement('label');
   prodLabel.className = 'stock-form-label';
   prodLabel.textContent = 'Produit';
@@ -3935,6 +3983,8 @@ function buildOrderLine() {
   const sel = document.createElement('select');
   sel.className = 'stock-form-input conso-line-product';
   line.appendChild(sel);
+  // Champ texte pour un nouveau produit (caché tant que « Nouveau »
+  // n'est pas sélectionné)
   const newInp = document.createElement('input');
   newInp.type = 'text';
   newInp.maxLength = 60;
@@ -3945,64 +3995,72 @@ function buildOrderLine() {
   line.appendChild(newInp);
   populateLineProductSelect(sel);
 
-  // Référence
-  const refLabel = document.createElement('label');
-  refLabel.className = 'stock-form-label';
-  refLabel.textContent = 'Référence (optionnel)';
-  line.appendChild(refLabel);
-  const ref = document.createElement('input');
-  ref.type = 'text';
-  ref.maxLength = 40;
-  ref.className = 'stock-form-input conso-line-ref';
-  ref.placeholder = 'VIS-6X40-001';
-  line.appendChild(ref);
-
-  // Qté + unité
-  const qtyRow = document.createElement('div');
-  qtyRow.className = 'stock-qty-row';
-  qtyRow.innerHTML = `
-    <div>
-      <label class="stock-form-label">Quantité</label>
-      <input class="stock-form-input conso-line-qty" type="text" inputmode="decimal" placeholder="0">
+  // Bloc détails — caché jusqu'à ce qu'un produit soit sélectionné.
+  // Référence et PU peuvent être en lecture seule si le produit est
+  // déjà enregistré au registre canonique.
+  const details = document.createElement('div');
+  details.className = 'conso-line-details';
+  details.hidden = true;
+  details.innerHTML = `
+    <label class="stock-form-label">Référence</label>
+    <input class="stock-form-input conso-line-ref" type="text" maxlength="40" placeholder="VIS-6X40-001">
+    <div class="stock-qty-row">
+      <div>
+        <label class="stock-form-label">Quantité</label>
+        <input class="stock-form-input conso-line-qty" type="text" inputmode="decimal" placeholder="0">
+      </div>
+      <div>
+        <label class="stock-form-label">Unité</label>
+        <select class="stock-form-input conso-line-unit"></select>
+      </div>
     </div>
-    <div>
-      <label class="stock-form-label">Unité</label>
-      <select class="stock-form-input conso-line-unit"></select>
+    <div class="stock-qty-row">
+      <div>
+        <label class="stock-form-label">Prix unitaire (€ HT)</label>
+        <input class="stock-form-input conso-line-price" type="text" inputmode="decimal" placeholder="0,00">
+      </div>
+      <div>
+        <label class="stock-form-label">eOTP (optionnel)</label>
+        <input class="stock-form-input conso-line-eotp" type="text" maxlength="20" placeholder="OTP-2026-001">
+      </div>
     </div>
   `;
-  const unitSel = qtyRow.querySelector('.conso-line-unit');
+  const unitSel = details.querySelector('.conso-line-unit');
   for (const u of CONSO_UNITS) unitSel.appendChild(new Option(u, u));
   unitSel.value = 'u';
-  line.appendChild(qtyRow);
+  line.appendChild(details);
 
-  // Prix + eOTP
-  const priceRow = document.createElement('div');
-  priceRow.className = 'stock-qty-row';
-  priceRow.innerHTML = `
-    <div>
-      <label class="stock-form-label">Prix unitaire (€ HT)</label>
-      <input class="stock-form-input conso-line-price" type="text" inputmode="decimal" placeholder="0,00">
-    </div>
-    <div>
-      <label class="stock-form-label">eOTP (optionnel)</label>
-      <input class="stock-form-input conso-line-eotp" type="text" maxlength="20" placeholder="OTP-2026-001">
-    </div>
-  `;
-  line.appendChild(priceRow);
+  const refInp   = details.querySelector('.conso-line-ref');
+  const priceInp = details.querySelector('.conso-line-price');
 
   sel.addEventListener('change', () => {
     if (sel.value === NEW_ARTICLE_SENTINEL) {
+      // Nouveau produit : nom à saisir, ref et PU éditables et vides
       newInp.hidden = false;
       newInp.value = '';
-      ref.value = '';
+      refInp.value = '';
+      refInp.readOnly = false;
+      priceInp.value = '';
+      priceInp.readOnly = false;
+      unitSel.value = 'u';
+      details.hidden = false;
       setTimeout(() => newInp.focus(), 50);
     } else if (sel.value) {
+      // Produit existant : on lit le registre, ref/PU readonly si déjà set
       newInp.hidden = true;
       newInp.value = '';
-      ref.value = getLatestProductReference(sel.value);
+      const canonical = getConsoProduct(sel.value);
+      refInp.value    = canonical?.reference || '';
+      refInp.readOnly = !!(canonical && canonical.reference);
+      priceInp.value  = canonical && canonical.unitPrice ? fmtPriceForInput(canonical.unitPrice) : '';
+      priceInp.readOnly = !!(canonical && canonical.unitPrice > 0);
+      unitSel.value   = getMostRecentUnitForProduct(sel.value);
+      details.hidden = false;
     } else {
+      // Aucune sélection (placeholder) → cache les détails
       newInp.hidden = true;
       newInp.value = '';
+      details.hidden = true;
     }
   });
 
@@ -4010,15 +4068,14 @@ function buildOrderLine() {
 }
 function populateLineProductSelect(sel) {
   sel.innerHTML = '';
-  const names = getAllConsommableProductNames();
+  const products = getAllConsoProducts();
   const placeholder = new Option('Choisir un produit…', '');
   placeholder.disabled = true;
   placeholder.selected = true;
   sel.appendChild(placeholder);
-  for (const n of names) {
-    const ref = getLatestProductReference(n);
-    const text = ref ? `${n} (${ref})` : n;
-    sel.appendChild(new Option(text, n));
+  for (const p of products) {
+    const text = p.reference ? `${p.name} (${p.reference})` : p.name;
+    sel.appendChild(new Option(text, p.name));
   }
   sel.appendChild(new Option('+ Nouveau produit…', NEW_ARTICLE_SENTINEL));
 }
@@ -4068,13 +4125,29 @@ function submitConsommableOrder() {
     if (!Number.isFinite(q) || q <= 0) { showToast(`« ${product} » : quantité invalide`, 'error'); return; }
     const p = parseFloat(String(priceStr).replace(',', '.'));
     if (!Number.isFinite(p) || p < 0) { showToast(`« ${product} » : prix invalide`, 'error'); return; }
-    parsed.push({ product, reference: ref, qty: q, unit: unit || 'u', unitPrice: p, eOTP });
+
+    // Si l'utilisateur a tapé un nom déjà existant via « Nouveau »,
+    // on respecte le registre canonique (ref + PU) pour ne pas
+    // diverger silencieusement. Sinon on enregistre les valeurs
+    // saisies dans le registre pour les futurs réemplois.
+    const canonical = getConsoProduct(product);
+    let finalRef = ref;
+    let finalPrice = p;
+    if (canonical) {
+      if (canonical.reference) finalRef = canonical.reference;
+      if (canonical.unitPrice > 0) finalPrice = canonical.unitPrice;
+    }
+
+    parsed.push({ product, reference: finalRef, qty: q, unit: unit || 'u', unitPrice: finalPrice, eOTP });
   }
   if (parsed.length === 0) { showToast('Aucune ligne à enregistrer', 'error'); return; }
 
   if (!Array.isArray(state.consommableEntries)) state.consommableEntries = [];
   const orderId = 'order_' + uid();
   for (const line of parsed) {
+    // Insère ou complète le registre canonique (n'écrase pas les
+    // valeurs déjà saisies)
+    upsertConsoProduct({ name: line.product, reference: line.reference, unitPrice: line.unitPrice });
     state.consommableEntries.push({
       id: uid(), orderId, date, notes,
       product: line.product, reference: line.reference,
@@ -4230,6 +4303,7 @@ function importData(file) {
       state.weather = data.weather || {};
       state.stockEntries = data.stockEntries || [];
       state.consommableEntries = data.consommableEntries || [];
+      state.consoProducts = data.consoProducts || [];
       state.adminDocs = data.adminDocs || {};
       state.workers = data.workers || [];
       state.workerDocs = data.workerDocs || {};
@@ -4247,6 +4321,7 @@ function importData(file) {
       state._legacyTasks = data.tasks;
       state._legacyZoneHasTasks = data.zoneHasTasks;
       migrateSetups();
+      migrateConsoProductsFromEntries();
       save();
       renderAll();
       showToast('Import réussi');
@@ -4272,6 +4347,7 @@ function resetAll() {
   state.weather = {};
   state.stockEntries = [];
   state.consommableEntries = [];
+  state.consoProducts = [];
   state.adminDocs = {};
   state.workers = [];
   state.workerDocs = {};
