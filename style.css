@@ -1815,6 +1815,205 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   font-style: italic;
 }
 
+/* ============ TABLEAU DE BORD ============ */
+/* La page dashboard s'élargit en desktop pour profiter de l'écran. */
+#page-dashboard { max-width: 1280px; }
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+@media (min-width: 720px) {
+  .dashboard-grid { grid-template-columns: repeat(2, 1fr); }
+  .dashboard-hero { grid-column: 1 / -1; }
+}
+@media (min-width: 1080px) {
+  .dashboard-grid { grid-template-columns: repeat(3, 1fr); }
+}
+.dashboard-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 14px 16px 16px;
+  display: flex; flex-direction: column;
+}
+.dashboard-card-header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.dashboard-card-title {
+  margin: 0;
+  font-size: 13px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-2);
+}
+.dashboard-card-link {
+  border: none; background: transparent;
+  font-size: 12px; font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+.dashboard-card-link:active { background: var(--accent-soft); }
+.dashboard-empty {
+  font-size: 13px; color: var(--text-3); font-style: italic;
+  text-align: center; padding: 16px 8px;
+  margin: 0;
+}
+
+/* Hero « Aujourd'hui » */
+.dashboard-hero {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%);
+  color: white;
+  border: none;
+}
+.dashboard-hero .dashboard-card-title { color: rgba(255, 255, 255, 0.85); }
+.dashboard-hero .dashboard-card-link { color: white; background: rgba(255, 255, 255, 0.15); }
+.dashboard-today-body { display: flex; flex-direction: column; gap: 12px; }
+.dashboard-today-date {
+  font-size: 14px; font-weight: 600;
+  opacity: 0.9;
+}
+.dashboard-today-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+.dashboard-today-stat {
+  background: rgba(255, 255, 255, 0.13);
+  border-radius: var(--radius-sm);
+  padding: 14px 12px;
+  text-align: center;
+}
+.dashboard-today-value {
+  font-size: 36px; font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.dashboard-today-label {
+  font-size: 12px;
+  margin-top: 6px;
+  opacity: 0.9;
+}
+.dashboard-today-stat.is-weather-on { background: rgba(25, 118, 210, 0.55); }
+
+/* Alertes documents */
+.dashboard-alerts-body { display: flex; flex-direction: column; gap: 8px; }
+.dashboard-alert-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border-left: 4px solid;
+}
+.dashboard-alert-row.status-expired { background: rgba(26,26,26,0.06);   border-left-color: #1a1a1a;  color: #1a1a1a; }
+.dashboard-alert-row.status-danger  { background: rgba(211,47,47,0.08); border-left-color: #d32f2f;  color: #b71c1c; }
+.dashboard-alert-row.status-warning { background: rgba(237,108,2,0.08); border-left-color: #ed6c02;  color: #b54708; }
+.dashboard-alert-count {
+  font-size: 20px; font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  min-width: 32px; text-align: right;
+}
+.dashboard-alert-label { font-size: 13px; flex: 1; }
+
+/* Stock critique */
+.dashboard-stock-list {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.dashboard-stock-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border-left: 4px solid;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.dashboard-stock-row:active { background: var(--surface); }
+.dashboard-stock-row.is-empty   { border-left-color: #1a1a1a;  background: rgba(26,26,26,0.06); }
+.dashboard-stock-row.is-danger  { border-left-color: #d32f2f;  background: rgba(211,47,47,0.06); }
+.dashboard-stock-row.is-warning { border-left-color: #ed6c02;  background: rgba(237,108,2,0.06); }
+.dashboard-stock-name {
+  font-size: 14px; font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dashboard-stock-stock {
+  font-size: 13px; font-variant-numeric: tabular-nums; color: var(--text-2);
+}
+.dashboard-stock-days {
+  font-size: 13px; font-weight: 700;
+  white-space: nowrap;
+}
+.dashboard-stock-row.is-empty   .dashboard-stock-days { color: #1a1a1a; }
+.dashboard-stock-row.is-danger  .dashboard-stock-days { color: #b71c1c; }
+.dashboard-stock-row.is-warning .dashboard-stock-days { color: #b54708; }
+
+/* Effectifs par entreprise */
+.dashboard-companies-body { overflow-x: auto; }
+.dashboard-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 14px;
+}
+.dashboard-table th, .dashboard-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.dashboard-table thead th {
+  font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+.dashboard-table .dashboard-table-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+.dashboard-table tfoot th {
+  font-weight: 800; color: var(--text);
+  border-bottom: none;
+}
+.dashboard-table tr.is-weather td:first-child { color: #1565c0; }
+.dashboard-weather-pill {
+  margin-left: 6px;
+  font-size: 12px;
+}
+
+/* Avancement par bâtiment */
+.dashboard-buildings-body { display: flex; flex-direction: column; gap: 10px; }
+.dashboard-building-line {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 4px;
+}
+.dashboard-building-name {
+  font-size: 14px; font-weight: 600; color: var(--text);
+}
+.dashboard-building-pct {
+  font-size: 14px; font-weight: 800;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.dashboard-building-row.is-done .dashboard-building-pct { color: #2e7d32; }
+.dashboard-building-bar {
+  height: 6px;
+  background: var(--surface-2);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.dashboard-building-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.3s;
+}
+.dashboard-building-row.is-done .dashboard-building-bar-fill { background: #2e7d32; }
+
 /* ============ ANIMATIONS ============ */
 @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slideup { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }

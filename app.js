@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.48';
+const APP_VERSION = '0.49';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -272,6 +272,7 @@ function renderAll() {
   renderAdministratif();
   renderDocLabelsConfig();
   renderStock();
+  renderDashboard();
 }
 
 function renderDate() {
@@ -518,6 +519,275 @@ function setChartRange(range) {
   });
   renderChart();
   renderRecapTable();
+}
+
+// ---------- Tableau de bord ----------
+// Vue globale agrégeant les autres onglets. Pensé desktop (3 colonnes)
+// mais responsive jusqu'à 1 colonne sur mobile.
+const STOCK_ALERT_THRESHOLD_DAYS = 7; // jours ouvrés avant épuisement
+
+function renderDashboard() {
+  if (!document.getElementById('page-dashboard')) return;
+  renderDashboardToday();
+  renderDashboardDocAlerts();
+  renderDashboardStockAlerts();
+  renderDashboardCompaniesPresence();
+  renderDashboardBuildings();
+}
+
+function dashboardCardHeader(title, gotoPage) {
+  const h = document.createElement('div');
+  h.className = 'dashboard-card-header';
+  const t = document.createElement('h3');
+  t.className = 'dashboard-card-title';
+  t.textContent = title;
+  h.appendChild(t);
+  if (gotoPage) {
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'dashboard-card-link';
+    link.textContent = 'Ouvrir →';
+    link.addEventListener('click', () => switchPage(gotoPage));
+    h.appendChild(link);
+  }
+  return h;
+}
+
+// --- Widget « Aujourd'hui » (hero) ---
+function renderDashboardToday() {
+  const el = document.getElementById('dashtoday');
+  if (!el) return;
+  el.innerHTML = '';
+  const date = state.currentDate;
+  const presences = state.presences[date] || [];
+  const total = presences.reduce((s, e) => s + (e.count || 0), 0);
+  const presentCount = presences.filter(e => (e.count || 0) > 0).length;
+  const weatherCount = Object.keys(state.weather?.[date] || {}).length;
+  const totalCompanies = state.companies.length;
+  const { full } = formatDateFR(date);
+
+  el.appendChild(dashboardCardHeader('Aujourd\'hui', 'effectifs'));
+  const body = document.createElement('div');
+  body.className = 'dashboard-today-body';
+  body.innerHTML = `
+    <div class="dashboard-today-date"></div>
+    <div class="dashboard-today-stats">
+      <div class="dashboard-today-stat">
+        <div class="dashboard-today-value" id="dt-total"></div>
+        <div class="dashboard-today-label" id="dt-totallabel"></div>
+      </div>
+      <div class="dashboard-today-stat">
+        <div class="dashboard-today-value" id="dt-present"></div>
+        <div class="dashboard-today-label">entreprises présentes</div>
+      </div>
+      <div class="dashboard-today-stat ${weatherCount > 0 ? 'is-weather-on' : ''}" id="dt-weather-wrap">
+        <div class="dashboard-today-value" id="dt-weather"></div>
+        <div class="dashboard-today-label">en intempéries</div>
+      </div>
+    </div>
+  `;
+  body.querySelector('.dashboard-today-date').textContent = full;
+  body.querySelector('#dt-total').textContent = total;
+  body.querySelector('#dt-totallabel').textContent = total > 1 ? 'personnes sur chantier' : 'personne sur chantier';
+  body.querySelector('#dt-present').textContent = `${presentCount}/${totalCompanies}`;
+  body.querySelector('#dt-weather').textContent = weatherCount;
+  el.appendChild(body);
+}
+
+// --- Widget « Alertes documents » (eCheckIn) ---
+function renderDashboardDocAlerts() {
+  const el = document.getElementById('dashdocalerts');
+  if (!el) return;
+  el.innerHTML = '';
+  el.appendChild(dashboardCardHeader('Alertes documents', 'administratif'));
+
+  // Compte par sévérité, à travers tous les ouvriers, sur les seuls
+  // documents OBLIGATOIRES et APPLICABLES au type d'emploi.
+  let nExpired = 0, nDanger = 0, nWarning = 0;
+  for (const worker of state.workers) {
+    const empType = getWorkerDocs(worker.id).employmentType;
+    let maxIdx = -1;
+    for (const docId of getApplicableDocIds(empType)) {
+      if (!isDocRequired(docId)) continue;
+      const s = getDocStatus(worker.id, docId);
+      const idx = STATUS_WORST_ORDER.indexOf(s);
+      if (idx > maxIdx) maxIdx = idx;
+    }
+    const worst = maxIdx >= 0 ? STATUS_WORST_ORDER[maxIdx] : null;
+    if (worst === 'expired') nExpired++;
+    else if (worst === 'danger') nDanger++;
+    else if (worst === 'warning') nWarning++;
+  }
+
+  const body = document.createElement('div');
+  body.className = 'dashboard-alerts-body';
+  if (nExpired === 0 && nDanger === 0 && nWarning === 0) {
+    body.innerHTML = '<p class="dashboard-empty">Aucun document à signaler.</p>';
+  } else {
+    body.innerHTML = `
+      <div class="dashboard-alert-row status-expired" hidden>
+        <span class="dashboard-alert-count" id="da-expired"></span>
+        <span class="dashboard-alert-label">ouvriers avec doc périmé</span>
+      </div>
+      <div class="dashboard-alert-row status-danger" hidden>
+        <span class="dashboard-alert-count" id="da-danger"></span>
+        <span class="dashboard-alert-label">ouvriers en danger (≤ 3 j)</span>
+      </div>
+      <div class="dashboard-alert-row status-warning" hidden>
+        <span class="dashboard-alert-count" id="da-warning"></span>
+        <span class="dashboard-alert-label">ouvriers en alerte (≤ 7 j)</span>
+      </div>
+    `;
+    if (nExpired > 0) {
+      body.querySelector('.status-expired').hidden = false;
+      body.querySelector('#da-expired').textContent = nExpired;
+    }
+    if (nDanger > 0) {
+      body.querySelector('.status-danger').hidden = false;
+      body.querySelector('#da-danger').textContent = nDanger;
+    }
+    if (nWarning > 0) {
+      body.querySelector('.status-warning').hidden = false;
+      body.querySelector('#da-warning').textContent = nWarning;
+    }
+  }
+  el.appendChild(body);
+}
+
+// --- Widget « Stock critique » ---
+function renderDashboardStockAlerts() {
+  const el = document.getElementById('dashstockalerts');
+  if (!el) return;
+  el.innerHTML = '';
+  el.appendChild(dashboardCardHeader('Stock critique', 'stock'));
+
+  const summary = getStockSummary();
+  const critical = [];
+  for (const item of summary) {
+    const dep = getArticleDepletion(item.article, item.stock);
+    if (dep.days !== null && dep.days >= 0 && dep.days <= STOCK_ALERT_THRESHOLD_DAYS) {
+      critical.push({ ...item, depletion: dep });
+    }
+  }
+  critical.sort((a, b) => a.depletion.days - b.depletion.days);
+
+  const body = document.createElement('div');
+  body.className = 'dashboard-stock-body';
+  if (critical.length === 0) {
+    body.innerHTML = '<p class="dashboard-empty">Aucun article en alerte.</p>';
+  } else {
+    const ul = document.createElement('ul');
+    ul.className = 'dashboard-stock-list';
+    for (const it of critical) {
+      const days = it.depletion.days;
+      const li = document.createElement('li');
+      li.className = 'dashboard-stock-row' + (days <= 0 ? ' is-empty' : (days <= 3 ? ' is-danger' : ' is-warning'));
+      const label = days <= 0 ? 'épuisé' : (days === 1 ? '1 j ouvré' : `${days} j ouvrés`);
+      li.innerHTML = `
+        <span class="dashboard-stock-name"></span>
+        <span class="dashboard-stock-stock"></span>
+        <span class="dashboard-stock-days"></span>
+      `;
+      li.querySelector('.dashboard-stock-name').textContent = it.article;
+      li.querySelector('.dashboard-stock-stock').textContent = `${fmtStockQty(it.stock)} ${it.unit}`;
+      li.querySelector('.dashboard-stock-days').textContent = label;
+      li.addEventListener('click', () => { switchPage('stock'); switchSubPage('stock', 'stockview'); openStockDetail(it.article); });
+      ul.appendChild(li);
+    }
+    body.appendChild(ul);
+  }
+  el.appendChild(body);
+}
+
+// --- Widget « Effectifs par entreprise » ---
+function renderDashboardCompaniesPresence() {
+  const el = document.getElementById('dashcompanies');
+  if (!el) return;
+  el.innerHTML = '';
+  el.appendChild(dashboardCardHeader('Effectifs par entreprise', 'effectifs'));
+
+  const date = state.currentDate;
+  const entries = state.presences[date] || [];
+  const weather = state.weather?.[date] || {};
+  const rows = state.companies.map(c => {
+    const entry = entries.find(e => e.companyId === c.id);
+    return { id: c.id, name: c.name, count: entry ? entry.count : 0, onWeather: !!weather[c.id] };
+  }).sort((a, b) => (b.count - a.count) || a.name.localeCompare(b.name, 'fr'));
+
+  const body = document.createElement('div');
+  body.className = 'dashboard-companies-body';
+  if (state.companies.length === 0) {
+    body.innerHTML = '<p class="dashboard-empty">Aucune entreprise enregistrée.</p>';
+  } else {
+    const table = document.createElement('table');
+    table.className = 'dashboard-table';
+    table.innerHTML = '<thead><tr><th>Entreprise</th><th>Effectif</th></tr></thead>';
+    const tbody = document.createElement('tbody');
+    for (const r of rows) {
+      const tr = document.createElement('tr');
+      tr.className = r.onWeather ? 'is-weather' : '';
+      tr.innerHTML = `
+        <td>
+          <span class="dashboard-company-name"></span>
+          ${r.onWeather ? '<span class="dashboard-weather-pill">🌧</span>' : ''}
+        </td>
+        <td class="dashboard-table-num"></td>
+      `;
+      tr.querySelector('.dashboard-company-name').textContent = r.name;
+      tr.querySelector('.dashboard-table-num').textContent = r.count;
+      tbody.appendChild(tr);
+    }
+    const total = rows.reduce((s, r) => s + r.count, 0);
+    const tfoot = document.createElement('tfoot');
+    tfoot.innerHTML = '<tr><th>Total</th><th class="dashboard-table-num"></th></tr>';
+    tfoot.querySelector('.dashboard-table-num').textContent = total;
+    table.appendChild(tbody);
+    table.appendChild(tfoot);
+    body.appendChild(table);
+  }
+  el.appendChild(body);
+}
+
+// --- Widget « Avancement par bâtiment » ---
+function getBuildingOverallProgress(buildingId) {
+  const descendants = getDescendantZones(buildingId);
+  const active = descendants.filter(zid => getZoneOuvrages(zid).length > 0);
+  if (active.length === 0) return null;
+  const total = active.reduce((sum, zid) => sum + getZoneProgress(zid), 0);
+  return total / active.length;
+}
+function renderDashboardBuildings() {
+  const el = document.getElementById('dashbuildings');
+  if (!el) return;
+  el.innerHTML = '';
+  el.appendChild(dashboardCardHeader('Avancement par bâtiment', 'avancement'));
+
+  const buildings = getBuildings();
+  const body = document.createElement('div');
+  body.className = 'dashboard-buildings-body';
+  if (buildings.length === 0) {
+    body.innerHTML = '<p class="dashboard-empty">Aucun bâtiment (zone racine) défini.</p>';
+  } else {
+    for (const b of buildings) {
+      const pct = getBuildingOverallProgress(b.id);
+      const row = document.createElement('div');
+      row.className = 'dashboard-building-row';
+      const pctText = pct === null ? '—' : `${formatPct(Math.round(pct * 10) / 10)} %`;
+      const barPct = pct === null ? 0 : Math.max(0, Math.min(100, pct));
+      row.innerHTML = `
+        <div class="dashboard-building-line">
+          <span class="dashboard-building-name"></span>
+          <span class="dashboard-building-pct"></span>
+        </div>
+        <div class="dashboard-building-bar"><div class="dashboard-building-bar-fill" style="width:${barPct}%"></div></div>
+      `;
+      row.querySelector('.dashboard-building-name').textContent = b.name || '(zone sans nom)';
+      row.querySelector('.dashboard-building-pct').textContent = pctText;
+      if (pct !== null && pct >= 100) row.classList.add('is-done');
+      body.appendChild(row);
+    }
+  }
+  el.appendChild(body);
 }
 
 // ---------- Tableau récap effectifs (Effectifs → Graphique) ----------
@@ -3428,6 +3698,7 @@ function switchPage(name) {
   if (name === 'avancement') renderAvancement();
   if (name === 'administratif') renderAdministratif();
   if (name === 'stock') renderStock();
+  if (name === 'dashboard') renderDashboard();
 }
 
 // ---------- Import / Export ----------

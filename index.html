@@ -19,6 +19,17 @@
   </header>
 
   <main class="app-body">
+    <!-- ============== ONGLET : TABLEAU DE BORD ============== -->
+    <section class="page" id="page-dashboard">
+      <div class="dashboard-grid">
+        <div class="dashboard-card dashboard-hero" id="dashtoday"></div>
+        <div class="dashboard-card" id="dashdocalerts"></div>
+        <div class="dashboard-card" id="dashstockalerts"></div>
+        <div class="dashboard-card" id="dashcompanies"></div>
+        <div class="dashboard-card" id="dashbuildings"></div>
+      </div>
+    </section>
+
     <!-- ============== ONGLET : EFFECTIFS ============== -->
     <section class="page active" id="page-effectifs">
       <div class="segmented" role="tablist" data-group="effectifs">
@@ -238,6 +249,10 @@
 
   <!-- ============== TAB BAR ============== -->
   <nav class="tab-bar" role="tablist">
+    <button class="tab-btn" data-page="dashboard" role="tab">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h8V3H3v10Zm0 8h8v-6H3v6Zm10 0h8V11h-8v10Zm0-18v6h8V3h-8Z"/></svg>
+      <span>Tableau de bord</span>
+    </button>
     <button class="tab-btn active" data-page="effectifs" role="tab">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 2c-2.67 0-8 1.34-8 4v3h10v-3c0-.96.5-1.85 1.35-2.59A12.3 12.3 0 0 0 8 13Zm8 0c-.34 0-.7.02-1.07.05A4.43 4.43 0 0 1 17 16v3h7v-3c0-2.66-5.33-4-8-4Z"/></svg>
       <span>Effectifs</span>
