@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.46';
+const APP_VERSION = '0.47';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -2887,6 +2887,60 @@ function getAllArticleNames() {
   return Array.from(set.values()).sort((a, b) => a.localeCompare(b, 'fr'));
 }
 
+// Consommation moyenne par jour sur la base des inventaires successifs.
+// Entre deux inventaires (qty_prev → qty_cur), on retire de cur le total
+// des réceptions intercalées (dates strictement entre les deux
+// inventaires) puis on rapporte le tout au nombre de jours écoulés.
+// Renvoie null si moins de 2 inventaires existent ou si aucune fenêtre
+// utile (≥ 1 jour) n'a pu être trouvée.
+function daysBetweenISO(d1, d2) {
+  return Math.round((Date.parse(d2 + 'T00:00:00') - Date.parse(d1 + 'T00:00:00')) / 86400000);
+}
+function addDaysISO(iso, n) {
+  const d = fromISO(iso);
+  d.setDate(d.getDate() + n);
+  return toISO(d);
+}
+function getArticleDailyConsumption(articleName) {
+  const key = (articleName || '').trim().toLowerCase();
+  const sorted = state.stockEntries
+    .filter(e => (e.article || '').trim().toLowerCase() === key)
+    .sort(compareStockEntries);
+  const inventories = sorted.filter(e => e.type === 'inventaire');
+  if (inventories.length < 2) return null;
+  let totalConsumed = 0;
+  let totalDays = 0;
+  for (let i = 1; i < inventories.length; i++) {
+    const prev = inventories[i - 1];
+    const cur  = inventories[i];
+    const days = daysBetweenISO(prev.date, cur.date);
+    if (days <= 0) continue;
+    const received = sorted
+      .filter(e => e.type === 'reception' && e.date > prev.date && e.date < cur.date)
+      .reduce((s, e) => s + (Number(e.qty) || 0), 0);
+    // On borne à 0 : un net négatif (stock qui monte sans réception
+    // enregistrée) indique probablement une réception oubliée, on
+    // l'ignore pour ne pas biaiser la moyenne.
+    const consumed = Math.max(0, (Number(prev.qty) || 0) + received - (Number(cur.qty) || 0));
+    totalConsumed += consumed;
+    totalDays += days;
+  }
+  if (totalDays === 0) return null;
+  return totalConsumed / totalDays;
+}
+// À partir du stock courant et de la conso moyenne, estime le nombre de
+// jours restants + la date d'épuisement (à compter d'aujourd'hui).
+function getArticleDepletion(articleName, currentStock) {
+  const daily = getArticleDailyConsumption(articleName);
+  if (daily === null || daily <= 0) return { daily, days: null, date: null };
+  if (currentStock <= 0) return { daily, days: 0, date: todayISO() };
+  const days = Math.round(currentStock / daily);
+  return { daily, days, date: addDaysISO(todayISO(), days) };
+}
+function fmtRate(n) {
+  return Number(n).toLocaleString('fr-FR', { maximumFractionDigits: 2 });
+}
+
 function fmtStockQty(n) {
   return (Number(n) || 0).toLocaleString('fr-FR', { maximumFractionDigits: 3 });
 }
@@ -3167,6 +3221,58 @@ function renderStockDetailBody() {
     head.innerHTML = `<div class="stock-detail-label">Aucun stock enregistré pour cet article.</div>`;
   }
   body.appendChild(head);
+
+  // Encarts : conso moyenne / jours restants estimés.
+  if (summary) {
+    const stats = document.createElement('div');
+    stats.className = 'stock-detail-stats';
+    const { daily, days, date } = getArticleDepletion(summary.article, summary.stock);
+
+    // Conso moyenne
+    const consoCard = document.createElement('div');
+    consoCard.className = 'stock-detail-stat';
+    if (daily !== null && daily > 0) {
+      consoCard.innerHTML = `
+        <div class="stock-detail-stat-label">Conso moyenne</div>
+        <div class="stock-detail-stat-value"></div>
+        <div class="stock-detail-stat-sub">par jour</div>
+      `;
+      consoCard.querySelector('.stock-detail-stat-value').textContent = `${fmtRate(daily)} ${summary.unit}`;
+    } else {
+      consoCard.innerHTML = `
+        <div class="stock-detail-stat-label">Conso moyenne</div>
+        <div class="stock-detail-stat-value stock-detail-stat-empty">—</div>
+        <div class="stock-detail-stat-sub"></div>
+      `;
+      consoCard.querySelector('.stock-detail-stat-sub').textContent =
+        daily === null ? '2 inventaires min.' : 'Aucune conso observée';
+    }
+    stats.appendChild(consoCard);
+
+    // Épuisement estimé
+    const depletionCard = document.createElement('div');
+    depletionCard.className = 'stock-detail-stat';
+    if (days !== null && date) {
+      const valueText = days === 0 ? 'épuisé' : (days === 1 ? 'dans 1 jour' : `dans ${days} jours`);
+      depletionCard.innerHTML = `
+        <div class="stock-detail-stat-label">Épuisement estimé</div>
+        <div class="stock-detail-stat-value"></div>
+        <div class="stock-detail-stat-sub"></div>
+      `;
+      depletionCard.querySelector('.stock-detail-stat-value').textContent = valueText;
+      depletionCard.querySelector('.stock-detail-stat-sub').textContent =
+        days === 0 ? '' : `(${formatDateShortFR(date)})`;
+    } else {
+      depletionCard.innerHTML = `
+        <div class="stock-detail-stat-label">Épuisement estimé</div>
+        <div class="stock-detail-stat-value stock-detail-stat-empty">—</div>
+        <div class="stock-detail-stat-sub">Conso indispo.</div>
+      `;
+    }
+    stats.appendChild(depletionCard);
+
+    body.appendChild(stats);
+  }
 
   const history = getArticleHistory(stockDetailArticle);
   if (history.length === 0) return;

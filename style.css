@@ -1728,6 +1728,38 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   margin-top: 4px;
   font-variant-numeric: tabular-nums;
 }
+/* Encarts conso moyenne / épuisement estimé */
+.stock-detail-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.stock-detail-stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 10px;
+  text-align: center;
+  display: flex; flex-direction: column; gap: 4px;
+  min-height: 86px;
+  justify-content: center;
+}
+.stock-detail-stat-label {
+  font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+.stock-detail-stat-value {
+  font-size: 18px; font-weight: 800;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.stock-detail-stat-sub {
+  font-size: 11px; color: var(--text-3);
+}
+.stock-detail-stat-empty { color: var(--text-3); font-weight: 700; }
 .stock-detail-section-title {
   margin: 16px 0 8px;
   font-size: 13px; font-weight: 700;
