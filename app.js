@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.51';
+const APP_VERSION = '0.52';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -3617,34 +3617,53 @@ function renderStockDetailBody() {
   body.appendChild(ul);
 }
 
-// ---------- Consommables (saisie + récap mensuel) ----------
+
+// ---------- Consommables (commandes groupées + récap mensuel) ----------
 const CONSO_UNITS = ['u', 'paires', 'boîtes', 'sacs', 'palettes', 'kg', 't', 'm³', 'm²', 'ml', 'L'];
 
 function getConsommableEntries() { return Array.isArray(state.consommableEntries) ? state.consommableEntries : []; }
+function getEntryOrderId(e) { return e.orderId || e.id; }
+function getEntryReference(e) { return e.reference || ''; }
+function getEntryEOTP(e) { return e.eOTP || ''; }
 function compareConsommableEntries(a, b) {
   return (a.date || '').localeCompare(b.date || '') ||
          String(a.id || '').localeCompare(String(b.id || ''));
 }
 function getAllConsommableProductNames() {
-  const map = new Map(); // clé = lowercase, valeur = dernière casse
+  const map = new Map();
   for (const e of getConsommableEntries()) {
     const k = (e.product || '').trim().toLowerCase();
     if (k) map.set(k, e.product);
   }
   return Array.from(map.values()).sort((a, b) => a.localeCompare(b, 'fr'));
 }
+// Dernière référence saisie pour un nom de produit donné (utilisée
+// pour pré-remplir la ref quand on resélectionne le produit).
+function getLatestProductReference(productName) {
+  const key = (productName || '').trim().toLowerCase();
+  let ref = '';
+  let lastDate = '';
+  for (const e of getConsommableEntries()) {
+    if ((e.product || '').trim().toLowerCase() !== key) continue;
+    if (!e.reference) continue;
+    const d = e.date || '';
+    if (d >= lastDate) { ref = e.reference; lastDate = d; }
+  }
+  return ref;
+}
 function fmtEur(n) {
   return Number(n || 0).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 function fmtMonthKeyFR(monthKey) {
-  // monthKey = 'YYYY-MM' → « janv. 26 »
   const [y, m] = monthKey.split('-');
   const d = new Date(Number(y), Number(m) - 1, 1);
   let s = d.toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' });
-  return s.charAt(0).toUpperCase() + s.slice(1); // « Janv. 26 »
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-// ----- Liste des entrées (sous-onglet Saisie) -----
+// ----- Liste des commandes (sous-onglet Saisie) -----
+// Les entrées sont regroupées par orderId : un en-tête « Commande du X »
+// avec total, puis les lignes produits en dessous.
 function renderConsommableEntries() {
   const list = document.getElementById('consoentrylist');
   const empty = document.getElementById('consoentryempty');
@@ -3653,32 +3672,75 @@ function renderConsommableEntries() {
   empty.classList.remove('show');
   const entries = getConsommableEntries();
   if (entries.length === 0) {
-    empty.innerHTML = '<p>Aucun consommable enregistré.</p><p class="hint">Tapez le bouton + en bas à droite pour en ajouter un.</p>';
+    empty.innerHTML = '<p>Aucune commande enregistrée.</p><p class="hint">Tapez le bouton + en bas à droite pour saisir votre première commande.</p>';
     empty.classList.add('show');
     return;
   }
   const sorted = entries.slice().sort(compareConsommableEntries).reverse();
-  for (const e of sorted) list.appendChild(buildConsommableRow(e));
+  const seen = new Set();
+  const ordered = [];
+  for (const e of sorted) {
+    const oid = getEntryOrderId(e);
+    if (seen.has(oid)) continue;
+    seen.add(oid);
+    const group = sorted.filter(x => getEntryOrderId(x) === oid);
+    ordered.push({ orderId: oid, entries: group });
+  }
+  for (const g of ordered) list.appendChild(buildOrderGroup(g));
 }
-function buildConsommableRow(entry) {
-  const li = document.createElement('li');
-  li.className = 'conso-entry-row';
-  li.setAttribute('data-entry-id', entry.id);
-  const total = (Number(entry.qty) || 0) * (Number(entry.unitPrice) || 0);
-  li.innerHTML = `
-    <span class="conso-entry-date"></span>
-    <span class="conso-entry-name"></span>
-    <span class="conso-entry-qty"></span>
-    <span class="conso-entry-total"></span>
-    <button class="stock-entry-delete" type="button" aria-label="Supprimer cette ligne">
-      <svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
-    </button>
+function buildOrderGroup(group) {
+  const wrap = document.createElement('li');
+  wrap.className = 'conso-order-group';
+  wrap.setAttribute('data-order-id', group.orderId);
+  const first = group.entries[0];
+  const total = group.entries.reduce((s, e) => s + (Number(e.qty) || 0) * (Number(e.unitPrice) || 0), 0);
+  const header = document.createElement('div');
+  header.className = 'conso-order-head';
+  header.innerHTML = `
+    <span class="conso-order-date"></span>
+    <span class="conso-order-notes"></span>
+    <span class="conso-order-total"></span>
   `;
-  li.querySelector('.conso-entry-date').textContent = formatDateShortFR(entry.date);
+  header.querySelector('.conso-order-date').textContent = formatDateShortFR(first.date);
+  header.querySelector('.conso-order-notes').textContent = first.notes || '';
+  header.querySelector('.conso-order-total').textContent = fmtEur(total);
+  wrap.appendChild(header);
+  const ul = document.createElement('ul');
+  ul.className = 'conso-order-entries';
+  for (const e of group.entries) ul.appendChild(buildOrderEntryRow(e));
+  wrap.appendChild(ul);
+  return wrap;
+}
+function buildOrderEntryRow(entry) {
+  const li = document.createElement('li');
+  li.className = 'conso-order-entry';
+  const total = (Number(entry.qty) || 0) * (Number(entry.unitPrice) || 0);
+  const ref = getEntryReference(entry);
+  const eotp = getEntryEOTP(entry);
+  li.innerHTML = `
+    <div class="conso-entry-main">
+      <span class="conso-entry-name"></span>
+      <span class="conso-entry-qty"></span>
+      <span class="conso-entry-total"></span>
+      <button class="stock-entry-delete" type="button" aria-label="Supprimer cette ligne">
+        <svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+      </button>
+    </div>
+    <div class="conso-entry-sub" hidden>
+      <span class="conso-entry-ref"></span>
+      <span class="conso-entry-eotp"></span>
+    </div>
+  `;
   li.querySelector('.conso-entry-name').textContent = entry.product;
   li.querySelector('.conso-entry-qty').textContent = `${fmtStockQty(entry.qty)} ${entry.unit}`;
   li.querySelector('.conso-entry-total').textContent = fmtEur(total);
   li.querySelector('.stock-entry-delete').addEventListener('click', () => removeConsommableEntry(entry.id));
+  if (ref || eotp) {
+    const sub = li.querySelector('.conso-entry-sub');
+    sub.hidden = false;
+    sub.querySelector('.conso-entry-ref').textContent = ref ? `Réf. ${ref}` : '';
+    sub.querySelector('.conso-entry-eotp').textContent = eotp ? `eOTP ${eotp}` : '';
+  }
   return li;
 }
 
@@ -3689,26 +3751,28 @@ function renderConsommableRecap() {
   if (!wrap || !empty) return;
   wrap.innerHTML = '';
   empty.classList.remove('show');
-
   const entries = getConsommableEntries();
   if (entries.length === 0) {
-    empty.innerHTML = '<p>Aucun consommable à afficher.</p><p class="hint">Saisis une ligne dans le sous-onglet Saisie pour commencer.</p>';
+    empty.innerHTML = '<p>Aucun consommable à afficher.</p><p class="hint">Saisis une commande pour commencer.</p>';
     empty.classList.add('show');
     return;
   }
-
-  // Agrégation produit × mois → { qty, total, unit }
   const monthSet = new Set();
-  const productMap = new Map(); // key (lc) → { display, unit }
-  const cells = new Map();      // 'product|month' → { qty, total, unit }
-  for (const e of entries) {
+  const productMap = new Map(); // lc → { display, unit, ref }
+  const cells = new Map();
+  // Itère trié pour que la « dernière référence » prise soit bien la plus récente
+  const sorted = entries.slice().sort(compareConsommableEntries);
+  for (const e of sorted) {
     const monthKey = (e.date || '').slice(0, 7);
     if (!monthKey) continue;
     const pKey = (e.product || '').trim().toLowerCase();
     if (!pKey) continue;
     monthSet.add(monthKey);
-    if (!productMap.has(pKey)) productMap.set(pKey, { display: e.product, unit: e.unit });
-    else productMap.get(pKey).display = e.product;
+    if (!productMap.has(pKey)) productMap.set(pKey, { display: e.product, unit: e.unit, ref: '' });
+    const cur = productMap.get(pKey);
+    cur.display = e.product;
+    cur.unit = e.unit;
+    if (e.reference) cur.ref = e.reference;
     const cellKey = pKey + '|' + monthKey;
     if (!cells.has(cellKey)) cells.set(cellKey, { qty: 0, total: 0, unit: e.unit });
     const cell = cells.get(cellKey);
@@ -3718,14 +3782,13 @@ function renderConsommableRecap() {
     cell.total += q * p;
     cell.unit = e.unit;
   }
-  const months = Array.from(monthSet).sort(); // chronologique, plus ancien à gauche
+  const months = Array.from(monthSet).sort();
   const products = Array.from(productMap.entries())
     .sort((a, b) => a[1].display.localeCompare(b[1].display, 'fr'));
 
   const table = document.createElement('table');
-  table.className = 'recap-table';
+  table.className = 'recap-table conso-recap-table';
 
-  // Thead
   const thead = document.createElement('thead');
   const headRow = document.createElement('tr');
   const productTh = document.createElement('th');
@@ -3747,16 +3810,24 @@ function renderConsommableRecap() {
   thead.appendChild(headRow);
   table.appendChild(thead);
 
-  // Tbody
   const tbody = document.createElement('tbody');
-  const monthTotals = months.map(() => 0); // total € par mois
+  const monthTotals = months.map(() => 0);
   let grandTotal = 0;
   for (const [pKey, p] of products) {
     const tr = document.createElement('tr');
     const prodCell = document.createElement('th');
     prodCell.className = 'recap-date-col';
     prodCell.scope = 'row';
-    prodCell.textContent = p.display;
+    const nameDiv = document.createElement('div');
+    nameDiv.className = 'conso-product-name';
+    nameDiv.textContent = p.display;
+    prodCell.appendChild(nameDiv);
+    if (p.ref) {
+      const refDiv = document.createElement('div');
+      refDiv.className = 'conso-product-ref';
+      refDiv.textContent = p.ref;
+      prodCell.appendChild(refDiv);
+    }
     tr.appendChild(prodCell);
     let rowTotal = 0;
     for (let i = 0; i < months.length; i++) {
@@ -3782,7 +3853,6 @@ function renderConsommableRecap() {
   }
   table.appendChild(tbody);
 
-  // Tfoot (totaux mensuels + grand total)
   const tfoot = document.createElement('tfoot');
   const footRow = document.createElement('tr');
   const footLabel = document.createElement('th');
@@ -3808,73 +3878,8 @@ function renderConsommableRecap() {
 function renderConsommable() {
   renderConsommableEntries();
   renderConsommableRecap();
-  refreshConsommableProductControl();
-}
-function refreshConsommableProductControl() {
-  const sel = document.getElementById('consoproductselect');
-  const inp = document.getElementById('consoproductnew');
-  if (!sel || !inp) return;
-  const names = getAllConsommableProductNames();
-  sel.innerHTML = '';
-  if (names.length === 0) {
-    sel.hidden = true;
-    inp.hidden = false;
-    inp.value = '';
-    return;
-  }
-  sel.hidden = false;
-  const placeholder = new Option('Choisir un produit…', '');
-  placeholder.disabled = true;
-  placeholder.selected = true;
-  sel.appendChild(placeholder);
-  for (const n of names) sel.appendChild(new Option(n, n));
-  sel.appendChild(new Option('+ Nouveau produit…', NEW_ARTICLE_SENTINEL));
-  inp.hidden = true;
-  inp.value = '';
-}
-function getConsommableProductFromForm() {
-  const sel = document.getElementById('consoproductselect');
-  const inp = document.getElementById('consoproductnew');
-  if (inp && !inp.hidden) return inp.value;
-  if (sel && sel.value && sel.value !== NEW_ARTICLE_SENTINEL) return sel.value;
-  return '';
-}
-function onConsommableProductSelectChange() {
-  const sel = document.getElementById('consoproductselect');
-  const inp = document.getElementById('consoproductnew');
-  if (!sel || !inp) return;
-  if (sel.value === NEW_ARTICLE_SENTINEL) {
-    inp.hidden = false;
-    inp.value = '';
-    setTimeout(() => inp.focus(), 50);
-  } else {
-    inp.hidden = true;
-    inp.value = '';
-  }
 }
 
-// ----- CRUD -----
-function addConsommableEntry({ product, qty, unit, unitPrice, date, notes }) {
-  if (!product || !product.trim()) { showToast('Produit requis', 'error'); return false; }
-  const q = parseFloat(String(qty).replace(',', '.'));
-  if (!Number.isFinite(q) || q < 0) { showToast('Quantité invalide', 'error'); return false; }
-  const p = parseFloat(String(unitPrice).replace(',', '.'));
-  if (!Number.isFinite(p) || p < 0) { showToast('Prix unitaire invalide', 'error'); return false; }
-  if (!date) { showToast('Date requise', 'error'); return false; }
-  if (!Array.isArray(state.consommableEntries)) state.consommableEntries = [];
-  state.consommableEntries.push({
-    id: uid(),
-    product: product.trim(),
-    qty: q,
-    unit: unit || 'u',
-    unitPrice: p,
-    date,
-    notes: (notes || '').trim()
-  });
-  save();
-  renderConsommable();
-  return true;
-}
 function removeConsommableEntry(id) {
   const entry = getConsommableEntries().find(e => e.id === id);
   if (!entry) return;
@@ -3885,49 +3890,204 @@ function removeConsommableEntry(id) {
   renderConsommable();
 }
 
-// ----- Bottom sheet -----
+// ----- Bottom sheet : commande groupée multi-lignes -----
 function openConsommableSheet() {
   const sheet = document.getElementById('consoentrysheet');
   if (!sheet) return;
-  refreshConsommableProductControl();
-  document.getElementById('consoqty').value = '';
-  document.getElementById('consoprice').value = '';
-  const unitSel = document.getElementById('consounit');
-  if (unitSel.childElementCount === 0) {
-    for (const u of CONSO_UNITS) {
-      const opt = document.createElement('option');
-      opt.value = u; opt.textContent = u;
-      unitSel.appendChild(opt);
-    }
-  }
-  unitSel.value = 'u';
-  document.getElementById('consodate').value = todayISO();
-  document.getElementById('consonotes').value = '';
+  document.getElementById('consoorderdate').value = todayISO();
+  document.getElementById('consoordernotes').value = '';
+  const linesContainer = document.getElementById('consoorderlines');
+  linesContainer.innerHTML = '';
+  addOrderLine();
   sheet.hidden = false;
   document.body.style.overflow = 'hidden';
-  setTimeout(() => {
-    const inp = document.getElementById('consoproductnew');
-    const sel = document.getElementById('consoproductselect');
-    if (inp && !inp.hidden) inp.focus();
-    else if (sel) sel.focus();
-  }, 50);
 }
 function closeConsommableSheet() {
   const sheet = document.getElementById('consoentrysheet');
   if (sheet) sheet.hidden = true;
   document.body.style.overflow = '';
 }
-function submitConsommableEntry() {
-  const product = getConsommableProductFromForm();
-  const qty = document.getElementById('consoqty').value;
-  const unit = document.getElementById('consounit').value;
-  const unitPrice = document.getElementById('consoprice').value;
-  const date = document.getElementById('consodate').value;
-  const notes = document.getElementById('consonotes').value;
-  if (addConsommableEntry({ product, qty, unit, unitPrice, date, notes })) {
-    showToast('Consommable enregistré');
-    closeConsommableSheet();
+
+function buildOrderLine() {
+  const line = document.createElement('div');
+  line.className = 'conso-order-line';
+  line.setAttribute('data-line-id', uid());
+
+  const header = document.createElement('div');
+  header.className = 'conso-line-header';
+  const num = document.createElement('span');
+  num.className = 'conso-line-num';
+  num.textContent = 'Ligne';
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'conso-line-remove';
+  remove.setAttribute('aria-label', 'Supprimer cette ligne');
+  remove.textContent = '×';
+  remove.addEventListener('click', () => removeOrderLine(line));
+  header.append(num, remove);
+  line.appendChild(header);
+
+  // Produit (dropdown + nouveau)
+  const prodLabel = document.createElement('label');
+  prodLabel.className = 'stock-form-label';
+  prodLabel.textContent = 'Produit';
+  line.appendChild(prodLabel);
+  const sel = document.createElement('select');
+  sel.className = 'stock-form-input conso-line-product';
+  line.appendChild(sel);
+  const newInp = document.createElement('input');
+  newInp.type = 'text';
+  newInp.maxLength = 60;
+  newInp.autocomplete = 'off';
+  newInp.placeholder = 'Nom du nouveau produit';
+  newInp.className = 'stock-form-input stock-article-new conso-line-product-new';
+  newInp.hidden = true;
+  line.appendChild(newInp);
+  populateLineProductSelect(sel);
+
+  // Référence
+  const refLabel = document.createElement('label');
+  refLabel.className = 'stock-form-label';
+  refLabel.textContent = 'Référence (optionnel)';
+  line.appendChild(refLabel);
+  const ref = document.createElement('input');
+  ref.type = 'text';
+  ref.maxLength = 40;
+  ref.className = 'stock-form-input conso-line-ref';
+  ref.placeholder = 'VIS-6X40-001';
+  line.appendChild(ref);
+
+  // Qté + unité
+  const qtyRow = document.createElement('div');
+  qtyRow.className = 'stock-qty-row';
+  qtyRow.innerHTML = `
+    <div>
+      <label class="stock-form-label">Quantité</label>
+      <input class="stock-form-input conso-line-qty" type="text" inputmode="decimal" placeholder="0">
+    </div>
+    <div>
+      <label class="stock-form-label">Unité</label>
+      <select class="stock-form-input conso-line-unit"></select>
+    </div>
+  `;
+  const unitSel = qtyRow.querySelector('.conso-line-unit');
+  for (const u of CONSO_UNITS) unitSel.appendChild(new Option(u, u));
+  unitSel.value = 'u';
+  line.appendChild(qtyRow);
+
+  // Prix + eOTP
+  const priceRow = document.createElement('div');
+  priceRow.className = 'stock-qty-row';
+  priceRow.innerHTML = `
+    <div>
+      <label class="stock-form-label">Prix unitaire (€ HT)</label>
+      <input class="stock-form-input conso-line-price" type="text" inputmode="decimal" placeholder="0,00">
+    </div>
+    <div>
+      <label class="stock-form-label">eOTP (optionnel)</label>
+      <input class="stock-form-input conso-line-eotp" type="text" maxlength="20" placeholder="OTP-2026-001">
+    </div>
+  `;
+  line.appendChild(priceRow);
+
+  sel.addEventListener('change', () => {
+    if (sel.value === NEW_ARTICLE_SENTINEL) {
+      newInp.hidden = false;
+      newInp.value = '';
+      ref.value = '';
+      setTimeout(() => newInp.focus(), 50);
+    } else if (sel.value) {
+      newInp.hidden = true;
+      newInp.value = '';
+      ref.value = getLatestProductReference(sel.value);
+    } else {
+      newInp.hidden = true;
+      newInp.value = '';
+    }
+  });
+
+  return line;
+}
+function populateLineProductSelect(sel) {
+  sel.innerHTML = '';
+  const names = getAllConsommableProductNames();
+  const placeholder = new Option('Choisir un produit…', '');
+  placeholder.disabled = true;
+  placeholder.selected = true;
+  sel.appendChild(placeholder);
+  for (const n of names) {
+    const ref = getLatestProductReference(n);
+    const text = ref ? `${n} (${ref})` : n;
+    sel.appendChild(new Option(text, n));
   }
+  sel.appendChild(new Option('+ Nouveau produit…', NEW_ARTICLE_SENTINEL));
+}
+function addOrderLine() {
+  const container = document.getElementById('consoorderlines');
+  if (!container) return;
+  container.appendChild(buildOrderLine());
+  refreshOrderLineNumbers();
+}
+function removeOrderLine(lineEl) {
+  const container = document.getElementById('consoorderlines');
+  if (!container) return;
+  if (container.children.length <= 1) return;
+  lineEl.remove();
+  refreshOrderLineNumbers();
+}
+function refreshOrderLineNumbers() {
+  const lines = document.querySelectorAll('.conso-order-line');
+  lines.forEach((line, idx) => {
+    line.querySelector('.conso-line-num').textContent = `Ligne ${idx + 1}`;
+    line.querySelector('.conso-line-remove').hidden = (lines.length === 1);
+  });
+}
+
+function submitConsommableOrder() {
+  const date = document.getElementById('consoorderdate').value;
+  if (!date) { showToast('Date requise', 'error'); return; }
+  const notes = document.getElementById('consoordernotes').value.trim();
+  const lineEls = Array.from(document.querySelectorAll('.conso-order-line'));
+  const parsed = [];
+  for (const el of lineEls) {
+    const sel    = el.querySelector('.conso-line-product');
+    const newInp = el.querySelector('.conso-line-product-new');
+    const ref    = el.querySelector('.conso-line-ref').value.trim();
+    const qtyStr = el.querySelector('.conso-line-qty').value;
+    const unit   = el.querySelector('.conso-line-unit').value;
+    const priceStr = el.querySelector('.conso-line-price').value;
+    const eOTP   = el.querySelector('.conso-line-eotp').value.trim();
+
+    let product = '';
+    if (newInp && !newInp.hidden) product = newInp.value.trim();
+    else if (sel.value && sel.value !== NEW_ARTICLE_SENTINEL) product = sel.value;
+
+    if (!product && !qtyStr && !priceStr) continue; // ligne vide ignorée
+    if (!product) { showToast(`Ligne ${parsed.length + 1} : produit requis`, 'error'); return; }
+    const q = parseFloat(String(qtyStr).replace(',', '.'));
+    if (!Number.isFinite(q) || q <= 0) { showToast(`« ${product} » : quantité invalide`, 'error'); return; }
+    const p = parseFloat(String(priceStr).replace(',', '.'));
+    if (!Number.isFinite(p) || p < 0) { showToast(`« ${product} » : prix invalide`, 'error'); return; }
+    parsed.push({ product, reference: ref, qty: q, unit: unit || 'u', unitPrice: p, eOTP });
+  }
+  if (parsed.length === 0) { showToast('Aucune ligne à enregistrer', 'error'); return; }
+
+  if (!Array.isArray(state.consommableEntries)) state.consommableEntries = [];
+  const orderId = 'order_' + uid();
+  for (const line of parsed) {
+    state.consommableEntries.push({
+      id: uid(), orderId, date, notes,
+      product: line.product, reference: line.reference,
+      qty: line.qty, unit: line.unit, unitPrice: line.unitPrice,
+      eOTP: line.eOTP
+    });
+  }
+  save();
+  renderConsommable();
+  showToast(parsed.length === 1
+    ? 'Commande enregistrée (1 ligne)'
+    : `Commande enregistrée (${parsed.length} lignes)`);
+  closeConsommableSheet();
 }
 
 function incrementCount(companyId) {
@@ -4240,9 +4400,9 @@ function init() {
   if (consoSheet) {
     document.getElementById('consoentrysheetclose').addEventListener('click', closeConsommableSheet);
     consoSheet.addEventListener('click', (e) => { if (e.target === consoSheet) closeConsommableSheet(); });
-    document.getElementById('consoentrysave').addEventListener('click', submitConsommableEntry);
-    const productSel = document.getElementById('consoproductselect');
-    if (productSel) productSel.addEventListener('change', onConsommableProductSelectChange);
+    document.getElementById('consoentrysave').addEventListener('click', submitConsommableOrder);
+    const addLineBtn = document.getElementById('consoaddline');
+    if (addLineBtn) addLineBtn.addEventListener('click', addOrderLine);
   }
 
   // Service worker : enregistrement + rechargement auto à chaque mise à jour

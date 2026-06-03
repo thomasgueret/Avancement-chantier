@@ -374,35 +374,23 @@
   <div class="modal-overlay" id="consoentrysheet" hidden>
     <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="consoentrysheetTitle">
       <div class="modal-header">
-        <h3 class="modal-title" id="consoentrysheetTitle">Nouveau consommable</h3>
+        <h3 class="modal-title" id="consoentrysheetTitle">Nouvelle commande</h3>
         <button class="modal-close" id="consoentrysheetclose" type="button" aria-label="Fermer">×</button>
       </div>
       <div class="modal-body">
-        <label class="stock-form-label" for="consoproductselect">Produit</label>
-        <select id="consoproductselect" class="stock-form-input"></select>
-        <input id="consoproductnew" class="stock-form-input stock-article-new" type="text" maxlength="60" autocomplete="off" placeholder="Nom du nouveau produit" hidden>
+        <!-- Champs partagés par toute la commande -->
+        <label class="stock-form-label" for="consoorderdate">Date de la commande</label>
+        <input id="consoorderdate" class="stock-form-input" type="date">
 
-        <div class="stock-qty-row">
-          <div>
-            <label class="stock-form-label" for="consoqty">Quantité</label>
-            <input id="consoqty" class="stock-form-input" type="text" inputmode="decimal" placeholder="0">
-          </div>
-          <div>
-            <label class="stock-form-label" for="consounit">Unité</label>
-            <select id="consounit" class="stock-form-input"></select>
-          </div>
-        </div>
+        <label class="stock-form-label" for="consoordernotes">Fournisseur / n° de commande (optionnel)</label>
+        <input id="consoordernotes" class="stock-form-input" type="text" maxlength="80" placeholder="Cedeo BC-2026-042…">
 
-        <label class="stock-form-label" for="consoprice">Prix unitaire (€ HT)</label>
-        <input id="consoprice" class="stock-form-input" type="text" inputmode="decimal" placeholder="0,00">
+        <!-- Lignes dynamiques de produits -->
+        <div class="conso-order-lines" id="consoorderlines"></div>
 
-        <label class="stock-form-label" for="consodate">Date</label>
-        <input id="consodate" class="stock-form-input" type="date">
+        <button class="btn-secondary conso-add-line" id="consoaddline" type="button">+ Ajouter une ligne</button>
 
-        <label class="stock-form-label" for="consonotes">Notes / référence (optionnel)</label>
-        <input id="consonotes" class="stock-form-input" type="text" maxlength="80" placeholder="Fournisseur, n° de commande…">
-
-        <button class="btn-primary stock-submit-btn" id="consoentrysave" type="button">Enregistrer</button>
+        <button class="btn-primary stock-submit-btn" id="consoentrysave" type="button">Enregistrer la commande</button>
       </div>
     </div>
   </div>

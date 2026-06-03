@@ -2014,30 +2014,56 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 }
 .dashboard-building-row.is-done .dashboard-building-bar-fill { background: #2e7d32; }
 
-/* ============ CONSOMMABLE : Saisie (liste compacte) ============ */
+/* ============ CONSOMMABLE : Saisie — liste groupée par commande ============ */
 .conso-entry-list {
   list-style: none; padding: 0; margin: 0;
+  padding-bottom: 76px; /* place pour le FAB */
+  display: flex; flex-direction: column; gap: 12px;
+}
+.conso-order-group {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-sm);
   overflow: hidden;
-  padding-bottom: 76px; /* place pour le FAB */
 }
-.conso-entry-row {
-  display: grid;
-  grid-template-columns: 50px 1fr auto auto 32px;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 8px 10px 14px;
+.conso-order-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.conso-order-date {
+  font-size: 13px; font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.conso-order-notes {
+  flex: 1; min-width: 0;
+  font-size: 12px; color: var(--text-3); font-style: italic;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.conso-order-total {
+  font-size: 14px; font-weight: 800;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.conso-order-entries {
+  list-style: none; padding: 0; margin: 0;
+}
+.conso-order-entry {
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
   font-size: 14px;
 }
-.conso-entry-row:last-child { border-bottom: none; }
-.conso-entry-date {
-  font-size: 12px; font-weight: 600;
-  color: var(--text-3);
-  font-variant-numeric: tabular-nums;
+.conso-order-entry:last-child { border-bottom: none; }
+.conso-entry-main {
+  display: grid;
+  grid-template-columns: 1fr auto auto 28px;
+  align-items: center;
+  gap: 8px;
 }
 .conso-entry-name {
   color: var(--text); font-weight: 500;
@@ -2046,11 +2072,52 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 .conso-entry-qty {
   font-variant-numeric: tabular-nums;
   color: var(--text-2);
+  font-size: 13px;
 }
 .conso-entry-total {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--accent);
+}
+.conso-entry-sub {
+  display: flex; gap: 12px; flex-wrap: wrap;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+/* ============ CONSOMMABLE : Bottom sheet — commande multi-lignes ============ */
+.conso-order-lines {
+  display: flex; flex-direction: column; gap: 12px;
+  margin-top: 14px;
+}
+.conso-order-line {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+.conso-line-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 4px;
+}
+.conso-line-num {
+  font-size: 12px; font-weight: 700;
+  color: var(--text-3);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.conso-line-remove {
+  width: 26px; height: 26px;
+  border: none; background: transparent;
+  color: var(--text-3);
+  font-size: 18px; font-weight: 600; line-height: 1;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.conso-line-remove:active { background: var(--surface); color: var(--danger); }
+.conso-add-line {
+  width: 100%;
+  margin-top: 6px;
 }
 
 /* ============ CONSOMMABLE : Récap mensuel (cellule qty + €) ============ */
@@ -2072,6 +2139,28 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   background: var(--surface-2);
   font-weight: 800;
   border-top: 1px solid var(--border-strong);
+}
+/* Nom de produit qui peut wrap dans le récap consommable, pour laisser
+   plus de place aux colonnes de mois. Référence affichée en petit sous
+   le nom. */
+.recap-table.conso-recap-table th.recap-date-col,
+.recap-table.conso-recap-table td.recap-date-col {
+  white-space: normal;
+  word-break: break-word;
+  min-width: 110px;
+  max-width: 160px;
+  line-height: 1.3;
+}
+.conso-product-name {
+  font-weight: 700;
+  color: var(--text);
+}
+.conso-product-ref {
+  display: block;
+  font-size: 11px; font-weight: 500;
+  color: var(--text-3);
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ============ ANIMATIONS ============ */
