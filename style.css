@@ -1697,6 +1697,9 @@ input, select { font: inherit; }
 }
 select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 .stock-form-input:focus { outline: none; border-color: var(--accent); }
+/* Champ « nouvel article » qui apparaît sous le dropdown — léger
+   décalage visuel pour bien montrer qu'il en dépend. */
+.stock-article-new { margin-top: 6px; }
 .stock-qty-row {
   display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
 }

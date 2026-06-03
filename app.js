@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.45';
+const APP_VERSION = '0.46';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -2970,16 +2970,58 @@ function buildStockSummaryCard(item) {
 function renderStock() {
   renderStockEntries();
   renderStockSummary();
-  refreshArticleDatalist();
+  refreshArticleControl();
 }
-function refreshArticleDatalist() {
-  const dl = document.getElementById('stockarticlelist');
-  if (!dl) return;
-  dl.innerHTML = '';
-  for (const name of getAllArticleNames()) {
-    const opt = document.createElement('option');
-    opt.value = name;
-    dl.appendChild(opt);
+// Peuple le dropdown des articles à partir de ceux déjà saisis. Si la
+// liste est vide, on bascule directement sur le champ texte. Sinon le
+// dropdown contient toutes les références + une entrée « + Nouveau
+// article… » qui révèle le champ texte au choix.
+const NEW_ARTICLE_SENTINEL = '__new__';
+function refreshArticleControl() {
+  const sel = document.getElementById('stockarticleselect');
+  const inp = document.getElementById('stockarticlenew');
+  if (!sel || !inp) return;
+  const names = getAllArticleNames();
+  sel.innerHTML = '';
+  if (names.length === 0) {
+    // Aucun article connu : on cache le select, on affiche le champ
+    // texte (rien à choisir, l'utilisateur tape directement).
+    sel.hidden = true;
+    inp.hidden = false;
+    inp.value = '';
+    return;
+  }
+  sel.hidden = false;
+  const placeholder = new Option('Choisir un article…', '');
+  placeholder.disabled = true;
+  placeholder.selected = true;
+  sel.appendChild(placeholder);
+  for (const n of names) sel.appendChild(new Option(n, n));
+  sel.appendChild(new Option('+ Nouveau article…', NEW_ARTICLE_SENTINEL));
+  inp.hidden = true;
+  inp.value = '';
+}
+// Récupère l'article à enregistrer : si l'utilisateur a basculé sur la
+// saisie nouvelle, c'est elle qui prime ; sinon on prend la sélection.
+function getStockArticleFromForm() {
+  const sel = document.getElementById('stockarticleselect');
+  const inp = document.getElementById('stockarticlenew');
+  if (inp && !inp.hidden) return inp.value;
+  if (sel && sel.value && sel.value !== NEW_ARTICLE_SENTINEL) return sel.value;
+  return '';
+}
+// Handler du select : « + Nouveau article… » → on révèle l'input texte
+function onArticleSelectChange() {
+  const sel = document.getElementById('stockarticleselect');
+  const inp = document.getElementById('stockarticlenew');
+  if (!sel || !inp) return;
+  if (sel.value === NEW_ARTICLE_SENTINEL) {
+    inp.hidden = false;
+    inp.value = '';
+    setTimeout(() => inp.focus(), 50);
+  } else {
+    inp.hidden = true;
+    inp.value = '';
   }
 }
 function fmtDateShortFR(iso) {
@@ -3026,8 +3068,9 @@ function openStockEntrySheet() {
   const sheet = document.getElementById('stockentrysheet');
   if (!sheet) return;
   setStockEntryType('reception');
-  // Reset des champs
-  document.getElementById('stockarticle').value = '';
+  // (Re)peuple le dropdown ; bascule auto sur le champ texte si aucune
+  // référence existe encore.
+  refreshArticleControl();
   document.getElementById('stockqty').value = '';
   const unitSel = document.getElementById('stockunit');
   if (unitSel.childElementCount === 0) {
@@ -3040,11 +3083,15 @@ function openStockEntrySheet() {
   unitSel.value = 'm³';
   document.getElementById('stockdate').value = todayISO();
   document.getElementById('stocknotes').value = '';
-  refreshArticleDatalist();
   sheet.hidden = false;
   document.body.style.overflow = 'hidden';
-  // Focus sur le premier champ utile
-  setTimeout(() => document.getElementById('stockarticle')?.focus(), 50);
+  // Focus : champ texte si pas de référence connue, sinon le select
+  setTimeout(() => {
+    const inp = document.getElementById('stockarticlenew');
+    const sel = document.getElementById('stockarticleselect');
+    if (inp && !inp.hidden) inp.focus();
+    else if (sel) sel.focus();
+  }, 50);
 }
 function closeStockEntrySheet() {
   const sheet = document.getElementById('stockentrysheet');
@@ -3070,7 +3117,7 @@ function setStockEntryType(type) {
   }
 }
 function submitStockEntry() {
-  const article = document.getElementById('stockarticle').value;
+  const article = getStockArticleFromForm();
   const qty     = document.getElementById('stockqty').value;
   const unit    = document.getElementById('stockunit').value;
   const date    = document.getElementById('stockdate').value;
@@ -3447,6 +3494,9 @@ function init() {
     stockSheet.querySelectorAll('[data-stock-entry-type]').forEach(b => {
       b.addEventListener('click', () => setStockEntryType(b.dataset.stockEntryType));
     });
+    // Dropdown article : bascule sur le champ texte si « Nouveau »
+    const articleSel = document.getElementById('stockarticleselect');
+    if (articleSel) articleSel.addEventListener('change', onArticleSelectChange);
   }
   const stockDetailModalEl = document.getElementById('stockdetailmodal');
   if (stockDetailModalEl) {
