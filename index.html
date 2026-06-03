@@ -248,9 +248,23 @@
 
     <!-- ============== ONGLET : CONSOMMABLE ============== -->
     <section class="page" id="page-consommable">
-      <div class="empty-state show">
-        <p>Onglet Consommable</p>
-        <p class="hint">Contenu à définir.</p>
+      <div class="segmented" role="tablist" data-group="conso" data-position="0" style="--count:2;">
+        <div class="segmented-thumb"></div>
+        <button class="seg-btn active" data-group="conso" data-sub="consaisie" role="tab">Saisie</button>
+        <button class="seg-btn" data-group="conso" data-sub="conrecap" role="tab">Récapitulatif</button>
+      </div>
+
+      <!-- Sous-onglet : Saisie (liste + FAB) -->
+      <div class="sub-page active" id="sub-consaisie" data-group="conso">
+        <ul class="conso-entry-list" id="consoentrylist"></ul>
+        <div class="empty-state" id="consoentryempty"></div>
+        <button class="stock-fab" id="consofab" type="button" aria-label="Nouvelle ligne consommable">+</button>
+      </div>
+
+      <!-- Sous-onglet : Récapitulatif (tableau produit × mois) -->
+      <div class="sub-page" id="sub-conrecap" data-group="conso">
+        <div class="recap-table-wrap" id="consorecapwrap"></div>
+        <div class="empty-state" id="consorecapempty"></div>
       </div>
     </section>
   </main>
@@ -353,6 +367,43 @@
         <button class="modal-close" id="stockdetailclose" type="button" aria-label="Fermer">×</button>
       </div>
       <div class="modal-body" id="stockdetailbody"></div>
+    </div>
+  </div>
+
+  <!-- ============== Bottom sheet : nouveau consommable ============== -->
+  <div class="modal-overlay" id="consoentrysheet" hidden>
+    <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="consoentrysheetTitle">
+      <div class="modal-header">
+        <h3 class="modal-title" id="consoentrysheetTitle">Nouveau consommable</h3>
+        <button class="modal-close" id="consoentrysheetclose" type="button" aria-label="Fermer">×</button>
+      </div>
+      <div class="modal-body">
+        <label class="stock-form-label" for="consoproductselect">Produit</label>
+        <select id="consoproductselect" class="stock-form-input"></select>
+        <input id="consoproductnew" class="stock-form-input stock-article-new" type="text" maxlength="60" autocomplete="off" placeholder="Nom du nouveau produit" hidden>
+
+        <div class="stock-qty-row">
+          <div>
+            <label class="stock-form-label" for="consoqty">Quantité</label>
+            <input id="consoqty" class="stock-form-input" type="text" inputmode="decimal" placeholder="0">
+          </div>
+          <div>
+            <label class="stock-form-label" for="consounit">Unité</label>
+            <select id="consounit" class="stock-form-input"></select>
+          </div>
+        </div>
+
+        <label class="stock-form-label" for="consoprice">Prix unitaire (€ HT)</label>
+        <input id="consoprice" class="stock-form-input" type="text" inputmode="decimal" placeholder="0,00">
+
+        <label class="stock-form-label" for="consodate">Date</label>
+        <input id="consodate" class="stock-form-input" type="date">
+
+        <label class="stock-form-label" for="consonotes">Notes / référence (optionnel)</label>
+        <input id="consonotes" class="stock-form-input" type="text" maxlength="80" placeholder="Fournisseur, n° de commande…">
+
+        <button class="btn-primary stock-submit-btn" id="consoentrysave" type="button">Enregistrer</button>
+      </div>
     </div>
   </div>
 

@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.50';
+const APP_VERSION = '0.51';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -52,6 +52,7 @@ const state = {
   presences: {},          // { 'YYYY-MM-DD': [{ id, companyId, count }] }
   weather:   {},          // { 'YYYY-MM-DD': { [companyId]: true } } — entreprises en intempéries ce jour-là
   stockEntries: [],       // [{ id, type: 'reception' | 'inventaire', article, qty, unit, date, notes }]
+  consommableEntries: [], // [{ id, product, qty, unit, unitPrice, date, notes }]
   currentDate: todayISO(),
   chartHidden: {},        // { [companyId]: true } — entreprises masquées du graphique
   chartRange: 30          // 7 | 30 | 'all'
@@ -98,6 +99,7 @@ function load() {
     if (data.presences) state.presences = data.presences;
     if (data.weather)   state.weather   = data.weather;
     if (data.stockEntries) state.stockEntries = data.stockEntries;
+    if (data.consommableEntries) state.consommableEntries = data.consommableEntries;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
     // Champs hérités (ancien modèle à liste unique) → migrés ensuite
@@ -130,6 +132,7 @@ function save() {
     presences: state.presences,
     weather: state.weather,
     stockEntries: state.stockEntries,
+    consommableEntries: state.consommableEntries,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange
   };
@@ -272,6 +275,7 @@ function renderAll() {
   renderAdministratif();
   renderDocLabelsConfig();
   renderStock();
+  renderConsommable();
   renderDashboard();
 }
 
@@ -3613,6 +3617,319 @@ function renderStockDetailBody() {
   body.appendChild(ul);
 }
 
+// ---------- Consommables (saisie + récap mensuel) ----------
+const CONSO_UNITS = ['u', 'paires', 'boîtes', 'sacs', 'palettes', 'kg', 't', 'm³', 'm²', 'ml', 'L'];
+
+function getConsommableEntries() { return Array.isArray(state.consommableEntries) ? state.consommableEntries : []; }
+function compareConsommableEntries(a, b) {
+  return (a.date || '').localeCompare(b.date || '') ||
+         String(a.id || '').localeCompare(String(b.id || ''));
+}
+function getAllConsommableProductNames() {
+  const map = new Map(); // clé = lowercase, valeur = dernière casse
+  for (const e of getConsommableEntries()) {
+    const k = (e.product || '').trim().toLowerCase();
+    if (k) map.set(k, e.product);
+  }
+  return Array.from(map.values()).sort((a, b) => a.localeCompare(b, 'fr'));
+}
+function fmtEur(n) {
+  return Number(n || 0).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtMonthKeyFR(monthKey) {
+  // monthKey = 'YYYY-MM' → « janv. 26 »
+  const [y, m] = monthKey.split('-');
+  const d = new Date(Number(y), Number(m) - 1, 1);
+  let s = d.toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' });
+  return s.charAt(0).toUpperCase() + s.slice(1); // « Janv. 26 »
+}
+
+// ----- Liste des entrées (sous-onglet Saisie) -----
+function renderConsommableEntries() {
+  const list = document.getElementById('consoentrylist');
+  const empty = document.getElementById('consoentryempty');
+  if (!list || !empty) return;
+  list.innerHTML = '';
+  empty.classList.remove('show');
+  const entries = getConsommableEntries();
+  if (entries.length === 0) {
+    empty.innerHTML = '<p>Aucun consommable enregistré.</p><p class="hint">Tapez le bouton + en bas à droite pour en ajouter un.</p>';
+    empty.classList.add('show');
+    return;
+  }
+  const sorted = entries.slice().sort(compareConsommableEntries).reverse();
+  for (const e of sorted) list.appendChild(buildConsommableRow(e));
+}
+function buildConsommableRow(entry) {
+  const li = document.createElement('li');
+  li.className = 'conso-entry-row';
+  li.setAttribute('data-entry-id', entry.id);
+  const total = (Number(entry.qty) || 0) * (Number(entry.unitPrice) || 0);
+  li.innerHTML = `
+    <span class="conso-entry-date"></span>
+    <span class="conso-entry-name"></span>
+    <span class="conso-entry-qty"></span>
+    <span class="conso-entry-total"></span>
+    <button class="stock-entry-delete" type="button" aria-label="Supprimer cette ligne">
+      <svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+    </button>
+  `;
+  li.querySelector('.conso-entry-date').textContent = formatDateShortFR(entry.date);
+  li.querySelector('.conso-entry-name').textContent = entry.product;
+  li.querySelector('.conso-entry-qty').textContent = `${fmtStockQty(entry.qty)} ${entry.unit}`;
+  li.querySelector('.conso-entry-total').textContent = fmtEur(total);
+  li.querySelector('.stock-entry-delete').addEventListener('click', () => removeConsommableEntry(entry.id));
+  return li;
+}
+
+// ----- Récap mensuel (sous-onglet Récapitulatif) -----
+function renderConsommableRecap() {
+  const wrap = document.getElementById('consorecapwrap');
+  const empty = document.getElementById('consorecapempty');
+  if (!wrap || !empty) return;
+  wrap.innerHTML = '';
+  empty.classList.remove('show');
+
+  const entries = getConsommableEntries();
+  if (entries.length === 0) {
+    empty.innerHTML = '<p>Aucun consommable à afficher.</p><p class="hint">Saisis une ligne dans le sous-onglet Saisie pour commencer.</p>';
+    empty.classList.add('show');
+    return;
+  }
+
+  // Agrégation produit × mois → { qty, total, unit }
+  const monthSet = new Set();
+  const productMap = new Map(); // key (lc) → { display, unit }
+  const cells = new Map();      // 'product|month' → { qty, total, unit }
+  for (const e of entries) {
+    const monthKey = (e.date || '').slice(0, 7);
+    if (!monthKey) continue;
+    const pKey = (e.product || '').trim().toLowerCase();
+    if (!pKey) continue;
+    monthSet.add(monthKey);
+    if (!productMap.has(pKey)) productMap.set(pKey, { display: e.product, unit: e.unit });
+    else productMap.get(pKey).display = e.product;
+    const cellKey = pKey + '|' + monthKey;
+    if (!cells.has(cellKey)) cells.set(cellKey, { qty: 0, total: 0, unit: e.unit });
+    const cell = cells.get(cellKey);
+    const q = Number(e.qty) || 0;
+    const p = Number(e.unitPrice) || 0;
+    cell.qty += q;
+    cell.total += q * p;
+    cell.unit = e.unit;
+  }
+  const months = Array.from(monthSet).sort(); // chronologique, plus ancien à gauche
+  const products = Array.from(productMap.entries())
+    .sort((a, b) => a[1].display.localeCompare(b[1].display, 'fr'));
+
+  const table = document.createElement('table');
+  table.className = 'recap-table';
+
+  // Thead
+  const thead = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  const productTh = document.createElement('th');
+  productTh.className = 'recap-date-col';
+  productTh.scope = 'col';
+  productTh.textContent = 'Produit';
+  headRow.appendChild(productTh);
+  for (const m of months) {
+    const th = document.createElement('th');
+    th.scope = 'col';
+    th.textContent = fmtMonthKeyFR(m);
+    headRow.appendChild(th);
+  }
+  const totalTh = document.createElement('th');
+  totalTh.className = 'recap-total-col';
+  totalTh.scope = 'col';
+  totalTh.textContent = 'Total';
+  headRow.appendChild(totalTh);
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  // Tbody
+  const tbody = document.createElement('tbody');
+  const monthTotals = months.map(() => 0); // total € par mois
+  let grandTotal = 0;
+  for (const [pKey, p] of products) {
+    const tr = document.createElement('tr');
+    const prodCell = document.createElement('th');
+    prodCell.className = 'recap-date-col';
+    prodCell.scope = 'row';
+    prodCell.textContent = p.display;
+    tr.appendChild(prodCell);
+    let rowTotal = 0;
+    for (let i = 0; i < months.length; i++) {
+      const td = document.createElement('td');
+      const cell = cells.get(pKey + '|' + months[i]);
+      if (cell) {
+        td.innerHTML = `<span class="conso-cell-qty"></span><br><span class="conso-cell-eur"></span>`;
+        td.querySelector('.conso-cell-qty').textContent = `${fmtStockQty(cell.qty)} ${cell.unit}`;
+        td.querySelector('.conso-cell-eur').textContent = fmtEur(cell.total);
+        rowTotal += cell.total;
+        monthTotals[i] += cell.total;
+      } else {
+        td.innerHTML = '<span class="recap-empty-cell">—</span>';
+      }
+      tr.appendChild(td);
+    }
+    const totalTd = document.createElement('td');
+    totalTd.className = 'recap-total-col';
+    totalTd.textContent = fmtEur(rowTotal);
+    tr.appendChild(totalTd);
+    grandTotal += rowTotal;
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+
+  // Tfoot (totaux mensuels + grand total)
+  const tfoot = document.createElement('tfoot');
+  const footRow = document.createElement('tr');
+  const footLabel = document.createElement('th');
+  footLabel.className = 'recap-date-col';
+  footLabel.scope = 'row';
+  footLabel.textContent = 'Total';
+  footRow.appendChild(footLabel);
+  for (let i = 0; i < months.length; i++) {
+    const td = document.createElement('td');
+    td.textContent = fmtEur(monthTotals[i]);
+    footRow.appendChild(td);
+  }
+  const gtTd = document.createElement('td');
+  gtTd.className = 'recap-total-col';
+  gtTd.textContent = fmtEur(grandTotal);
+  footRow.appendChild(gtTd);
+  tfoot.appendChild(footRow);
+  table.appendChild(tfoot);
+
+  wrap.appendChild(table);
+}
+
+function renderConsommable() {
+  renderConsommableEntries();
+  renderConsommableRecap();
+  refreshConsommableProductControl();
+}
+function refreshConsommableProductControl() {
+  const sel = document.getElementById('consoproductselect');
+  const inp = document.getElementById('consoproductnew');
+  if (!sel || !inp) return;
+  const names = getAllConsommableProductNames();
+  sel.innerHTML = '';
+  if (names.length === 0) {
+    sel.hidden = true;
+    inp.hidden = false;
+    inp.value = '';
+    return;
+  }
+  sel.hidden = false;
+  const placeholder = new Option('Choisir un produit…', '');
+  placeholder.disabled = true;
+  placeholder.selected = true;
+  sel.appendChild(placeholder);
+  for (const n of names) sel.appendChild(new Option(n, n));
+  sel.appendChild(new Option('+ Nouveau produit…', NEW_ARTICLE_SENTINEL));
+  inp.hidden = true;
+  inp.value = '';
+}
+function getConsommableProductFromForm() {
+  const sel = document.getElementById('consoproductselect');
+  const inp = document.getElementById('consoproductnew');
+  if (inp && !inp.hidden) return inp.value;
+  if (sel && sel.value && sel.value !== NEW_ARTICLE_SENTINEL) return sel.value;
+  return '';
+}
+function onConsommableProductSelectChange() {
+  const sel = document.getElementById('consoproductselect');
+  const inp = document.getElementById('consoproductnew');
+  if (!sel || !inp) return;
+  if (sel.value === NEW_ARTICLE_SENTINEL) {
+    inp.hidden = false;
+    inp.value = '';
+    setTimeout(() => inp.focus(), 50);
+  } else {
+    inp.hidden = true;
+    inp.value = '';
+  }
+}
+
+// ----- CRUD -----
+function addConsommableEntry({ product, qty, unit, unitPrice, date, notes }) {
+  if (!product || !product.trim()) { showToast('Produit requis', 'error'); return false; }
+  const q = parseFloat(String(qty).replace(',', '.'));
+  if (!Number.isFinite(q) || q < 0) { showToast('Quantité invalide', 'error'); return false; }
+  const p = parseFloat(String(unitPrice).replace(',', '.'));
+  if (!Number.isFinite(p) || p < 0) { showToast('Prix unitaire invalide', 'error'); return false; }
+  if (!date) { showToast('Date requise', 'error'); return false; }
+  if (!Array.isArray(state.consommableEntries)) state.consommableEntries = [];
+  state.consommableEntries.push({
+    id: uid(),
+    product: product.trim(),
+    qty: q,
+    unit: unit || 'u',
+    unitPrice: p,
+    date,
+    notes: (notes || '').trim()
+  });
+  save();
+  renderConsommable();
+  return true;
+}
+function removeConsommableEntry(id) {
+  const entry = getConsommableEntries().find(e => e.id === id);
+  if (!entry) return;
+  const label = `${entry.product} (${fmtStockQty(entry.qty)} ${entry.unit} à ${fmtEur(entry.unitPrice)} le ${formatDateShortFR(entry.date)})`;
+  if (!confirm(`Supprimer la ligne ${label} ?`)) return;
+  state.consommableEntries = getConsommableEntries().filter(e => e.id !== id);
+  save();
+  renderConsommable();
+}
+
+// ----- Bottom sheet -----
+function openConsommableSheet() {
+  const sheet = document.getElementById('consoentrysheet');
+  if (!sheet) return;
+  refreshConsommableProductControl();
+  document.getElementById('consoqty').value = '';
+  document.getElementById('consoprice').value = '';
+  const unitSel = document.getElementById('consounit');
+  if (unitSel.childElementCount === 0) {
+    for (const u of CONSO_UNITS) {
+      const opt = document.createElement('option');
+      opt.value = u; opt.textContent = u;
+      unitSel.appendChild(opt);
+    }
+  }
+  unitSel.value = 'u';
+  document.getElementById('consodate').value = todayISO();
+  document.getElementById('consonotes').value = '';
+  sheet.hidden = false;
+  document.body.style.overflow = 'hidden';
+  setTimeout(() => {
+    const inp = document.getElementById('consoproductnew');
+    const sel = document.getElementById('consoproductselect');
+    if (inp && !inp.hidden) inp.focus();
+    else if (sel) sel.focus();
+  }, 50);
+}
+function closeConsommableSheet() {
+  const sheet = document.getElementById('consoentrysheet');
+  if (sheet) sheet.hidden = true;
+  document.body.style.overflow = '';
+}
+function submitConsommableEntry() {
+  const product = getConsommableProductFromForm();
+  const qty = document.getElementById('consoqty').value;
+  const unit = document.getElementById('consounit').value;
+  const unitPrice = document.getElementById('consoprice').value;
+  const date = document.getElementById('consodate').value;
+  const notes = document.getElementById('consonotes').value;
+  if (addConsommableEntry({ product, qty, unit, unitPrice, date, notes })) {
+    showToast('Consommable enregistré');
+    closeConsommableSheet();
+  }
+}
+
 function incrementCount(companyId) {
   const date = state.currentDate;
   if (!state.presences[date]) state.presences[date] = [];
@@ -3698,6 +4015,7 @@ function switchPage(name) {
   if (name === 'avancement') renderAvancement();
   if (name === 'administratif') renderAdministratif();
   if (name === 'stock') renderStock();
+  if (name === 'consommable') renderConsommable();
   if (name === 'dashboard') renderDashboard();
 }
 
@@ -3751,6 +4069,7 @@ function importData(file) {
       state.presences = data.presences;
       state.weather = data.weather || {};
       state.stockEntries = data.stockEntries || [];
+      state.consommableEntries = data.consommableEntries || [];
       state.adminDocs = data.adminDocs || {};
       state.workers = data.workers || [];
       state.workerDocs = data.workerDocs || {};
@@ -3792,6 +4111,7 @@ function resetAll() {
   state.presences = {};
   state.weather = {};
   state.stockEntries = [];
+  state.consommableEntries = [];
   state.adminDocs = {};
   state.workers = [];
   state.workerDocs = {};
@@ -3911,6 +4231,18 @@ function init() {
   if (stockDetailModalEl) {
     document.getElementById('stockdetailclose').addEventListener('click', closeStockDetail);
     stockDetailModalEl.addEventListener('click', (e) => { if (e.target === stockDetailModalEl) closeStockDetail(); });
+  }
+
+  // ----- Consommable : FAB + bottom sheet + dropdown -----
+  const consoFab = document.getElementById('consofab');
+  if (consoFab) consoFab.addEventListener('click', openConsommableSheet);
+  const consoSheet = document.getElementById('consoentrysheet');
+  if (consoSheet) {
+    document.getElementById('consoentrysheetclose').addEventListener('click', closeConsommableSheet);
+    consoSheet.addEventListener('click', (e) => { if (e.target === consoSheet) closeConsommableSheet(); });
+    document.getElementById('consoentrysave').addEventListener('click', submitConsommableEntry);
+    const productSel = document.getElementById('consoproductselect');
+    if (productSel) productSel.addEventListener('change', onConsommableProductSelectChange);
   }
 
   // Service worker : enregistrement + rechargement auto à chaque mise à jour
