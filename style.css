@@ -2115,12 +2115,27 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   cursor: pointer;
 }
 .conso-line-remove:active { background: var(--surface); color: var(--danger); }
+
+/* Compression mobile dans les lignes du formulaire commande :
+   labels plus petits + paddings réduits + gap resserré. */
+.conso-order-line { padding: 8px 10px; }
+.conso-order-line .stock-form-label {
+  font-size: 11px;
+  margin: 6px 0 2px;
+}
+.conso-order-line .stock-form-input { padding: 7px 9px; font-size: 13px; }
+.conso-order-line select.stock-form-input { padding: 6px 6px; }
+.conso-order-line .stock-qty-row { gap: 6px; }
+.conso-order-line .stock-article-new { margin-top: 4px; }
+
 /* Bloc « détails » d'une ligne — apparaît une fois le produit choisi */
 .conso-line-details {
   margin-top: 4px;
-  padding-top: 8px;
+  padding-top: 4px;
   border-top: 1px dashed var(--border);
 }
+.conso-line-details .stock-form-label:first-child { margin-top: 2px; }
+
 /* Champs verrouillés : ref/PU des produits déjà au registre canonique */
 .conso-line-ref[readonly],
 .conso-line-price[readonly] {
@@ -2133,6 +2148,19 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   width: 100%;
   margin-top: 6px;
 }
+
+/* Bouton crayon dans l'en-tête de chaque commande */
+.conso-order-edit {
+  flex-shrink: 0;
+  width: 28px; height: 28px;
+  border: none; background: transparent;
+  color: var(--text-3);
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.conso-order-edit svg { width: 14px; height: 14px; fill: currentColor; }
+.conso-order-edit:active { background: var(--accent-soft); color: var(--accent); }
 
 /* ============ CONSOMMABLE : Récap mensuel (cellule qty + €) ============ */
 .conso-cell-qty {

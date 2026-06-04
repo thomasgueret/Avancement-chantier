@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.53';
+const APP_VERSION = '0.54';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -3740,10 +3740,14 @@ function buildOrderGroup(group) {
     <span class="conso-order-date"></span>
     <span class="conso-order-notes"></span>
     <span class="conso-order-total"></span>
+    <button class="conso-order-edit" type="button" aria-label="Modifier la commande">
+      <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83Z"/></svg>
+    </button>
   `;
   header.querySelector('.conso-order-date').textContent = formatDateShortFR(first.date);
   header.querySelector('.conso-order-notes').textContent = first.notes || '';
   header.querySelector('.conso-order-total').textContent = fmtEur(total);
+  header.querySelector('.conso-order-edit').addEventListener('click', () => openConsommableSheetForEdit(group.orderId));
   wrap.appendChild(header);
   const ul = document.createElement('ul');
   ul.className = 'conso-order-entries';
@@ -3939,9 +3943,16 @@ function removeConsommableEntry(id) {
 }
 
 // ----- Bottom sheet : commande groupée multi-lignes -----
+// Mode édition : null pour une nouvelle commande, orderId pour une
+// commande existante qu'on remplace au moment du Save.
+let editingOrderId = null;
+
 function openConsommableSheet() {
   const sheet = document.getElementById('consoentrysheet');
   if (!sheet) return;
+  editingOrderId = null;
+  const title = document.getElementById('consoentrysheetTitle');
+  if (title) title.textContent = 'Nouvelle commande';
   document.getElementById('consoorderdate').value = todayISO();
   document.getElementById('consoordernotes').value = '';
   const linesContainer = document.getElementById('consoorderlines');
@@ -3950,10 +3961,47 @@ function openConsommableSheet() {
   sheet.hidden = false;
   document.body.style.overflow = 'hidden';
 }
+// Ouvre le sheet en mode édition : ré-utilise l'orderId, pré-remplit la
+// date/notes et les lignes avec les entrées existantes. À la
+// soumission, les anciennes entrées sont remplacées par les nouvelles.
+function openConsommableSheetForEdit(orderId) {
+  const sheet = document.getElementById('consoentrysheet');
+  if (!sheet) return;
+  const orderEntries = getConsommableEntries()
+    .filter(e => getEntryOrderId(e) === orderId)
+    .sort(compareConsommableEntries);
+  if (orderEntries.length === 0) return;
+  editingOrderId = orderId;
+  const title = document.getElementById('consoentrysheetTitle');
+  if (title) title.textContent = 'Modifier la commande';
+  document.getElementById('consoorderdate').value = orderEntries[0].date || todayISO();
+  document.getElementById('consoordernotes').value = orderEntries[0].notes || '';
+  const linesContainer = document.getElementById('consoorderlines');
+  linesContainer.innerHTML = '';
+  for (const entry of orderEntries) {
+    const lineEl = buildOrderLine();
+    linesContainer.appendChild(lineEl);
+    // Force la sélection du produit puis dispatch change pour que le
+    // handler remplisse ref + PU canoniques et révèle les détails.
+    const sel = lineEl.querySelector('.conso-line-product');
+    sel.value = entry.product;
+    sel.dispatchEvent(new Event('change'));
+    // Restaure qty/unité/eOTP propres à l'entrée (le handler de change
+    // peut avoir mis l'unité "la plus récente" du produit, on remet
+    // celle réellement enregistrée pour cette ligne)
+    lineEl.querySelector('.conso-line-qty').value  = fmtStockQty(entry.qty);
+    lineEl.querySelector('.conso-line-unit').value = entry.unit || 'u';
+    lineEl.querySelector('.conso-line-eotp').value = entry.eOTP || '';
+  }
+  refreshOrderLineNumbers();
+  sheet.hidden = false;
+  document.body.style.overflow = 'hidden';
+}
 function closeConsommableSheet() {
   const sheet = document.getElementById('consoentrysheet');
   if (sheet) sheet.hidden = true;
   document.body.style.overflow = '';
+  editingOrderId = null;
 }
 
 function buildOrderLine() {
@@ -3996,14 +4044,22 @@ function buildOrderLine() {
   populateLineProductSelect(sel);
 
   // Bloc détails — caché jusqu'à ce qu'un produit soit sélectionné.
-  // Référence et PU peuvent être en lecture seule si le produit est
-  // déjà enregistré au registre canonique.
+  // Layout compact : ref + PU côte à côte, qty + unité côte à côte,
+  // eOTP en pleine largeur — moins de hauteur sur mobile.
   const details = document.createElement('div');
   details.className = 'conso-line-details';
   details.hidden = true;
   details.innerHTML = `
-    <label class="stock-form-label">Référence</label>
-    <input class="stock-form-input conso-line-ref" type="text" maxlength="40" placeholder="VIS-6X40-001">
+    <div class="stock-qty-row">
+      <div>
+        <label class="stock-form-label">Référence</label>
+        <input class="stock-form-input conso-line-ref" type="text" maxlength="40" placeholder="VIS-6X40-001">
+      </div>
+      <div>
+        <label class="stock-form-label">Prix unitaire (€ HT)</label>
+        <input class="stock-form-input conso-line-price" type="text" inputmode="decimal" placeholder="0,00">
+      </div>
+    </div>
     <div class="stock-qty-row">
       <div>
         <label class="stock-form-label">Quantité</label>
@@ -4014,16 +4070,8 @@ function buildOrderLine() {
         <select class="stock-form-input conso-line-unit"></select>
       </div>
     </div>
-    <div class="stock-qty-row">
-      <div>
-        <label class="stock-form-label">Prix unitaire (€ HT)</label>
-        <input class="stock-form-input conso-line-price" type="text" inputmode="decimal" placeholder="0,00">
-      </div>
-      <div>
-        <label class="stock-form-label">eOTP (optionnel)</label>
-        <input class="stock-form-input conso-line-eotp" type="text" maxlength="20" placeholder="OTP-2026-001">
-      </div>
-    </div>
+    <label class="stock-form-label">eOTP (optionnel)</label>
+    <input class="stock-form-input conso-line-eotp" type="text" maxlength="20" placeholder="OTP-2026-001">
   `;
   const unitSel = details.querySelector('.conso-line-unit');
   for (const u of CONSO_UNITS) unitSel.appendChild(new Option(u, u));
@@ -4143,7 +4191,13 @@ function submitConsommableOrder() {
   if (parsed.length === 0) { showToast('Aucune ligne à enregistrer', 'error'); return; }
 
   if (!Array.isArray(state.consommableEntries)) state.consommableEntries = [];
-  const orderId = 'order_' + uid();
+  // Mode édition : on remplace les entrées de la commande existante par
+  // les nouvelles lignes parsées (mêmes orderId/date/notes appliqués).
+  const isEditing = !!editingOrderId;
+  const orderId = isEditing ? editingOrderId : ('order_' + uid());
+  if (isEditing) {
+    state.consommableEntries = state.consommableEntries.filter(e => getEntryOrderId(e) !== orderId);
+  }
   for (const line of parsed) {
     // Insère ou complète le registre canonique (n'écrase pas les
     // valeurs déjà saisies)
@@ -4157,9 +4211,9 @@ function submitConsommableOrder() {
   }
   save();
   renderConsommable();
-  showToast(parsed.length === 1
-    ? 'Commande enregistrée (1 ligne)'
-    : `Commande enregistrée (${parsed.length} lignes)`);
+  showToast(isEditing
+    ? `Commande mise à jour (${parsed.length} ligne${parsed.length > 1 ? 's' : ''})`
+    : `Commande enregistrée (${parsed.length} ligne${parsed.length > 1 ? 's' : ''})`);
   closeConsommableSheet();
 }
 
