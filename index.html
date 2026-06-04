@@ -102,12 +102,13 @@
 
     <!-- ============== ONGLET : DONNÉES ============== -->
     <section class="page" id="page-donnees">
-      <div class="segmented" role="tablist" data-group="donnees" style="--count:4;">
+      <div class="segmented" role="tablist" data-group="donnees" style="--count:5;">
         <div class="segmented-thumb"></div>
         <button class="seg-btn active" data-group="donnees" data-sub="entreprises" role="tab">Entreprises</button>
         <button class="seg-btn" data-group="donnees" data-sub="zones" role="tab">Zones</button>
         <button class="seg-btn" data-group="donnees" data-sub="taches" role="tab">Tâches</button>
         <button class="seg-btn" data-group="donnees" data-sub="adminconfig" role="tab">Admin.</button>
+        <button class="seg-btn" data-group="donnees" data-sub="eotp" role="tab">eOTP</button>
       </div>
 
       <!-- Sous-page : Entreprises -->
@@ -155,6 +156,15 @@
         <div class="list-section">
           <p class="section-help">Personnalisez le libellé des quatre pièces administratives suivies dans Administratif → eCheckIn.</p>
           <ul class="doc-labels-list" id="doclabelslist"></ul>
+        </div>
+      </div>
+
+      <!-- Sous-page : eOTP (lignes de budget pour Consommable) -->
+      <div class="sub-page" id="sub-eotp" data-group="donnees">
+        <div class="list-section">
+          <p class="section-help">Lignes de budget proposées dans le menu déroulant eOTP de Consommable → Saisie. Le budget indique la dotation totale de chaque ligne.</p>
+          <ul class="eotp-list" id="eotplist"></ul>
+          <button class="btn-primary eotp-add-btn" id="eotpadd" type="button">+ Ajouter une ligne de budget</button>
         </div>
       </div>
 

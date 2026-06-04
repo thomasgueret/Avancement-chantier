@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.54';
+const APP_VERSION = '0.55';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -54,6 +54,8 @@ const state = {
   stockEntries: [],       // [{ id, type: 'reception' | 'inventaire', article, qty, unit, date, notes }]
   consommableEntries: [], // [{ id, orderId, date, notes, product, reference, qty, unit, unitPrice, eOTP }]
   consoProducts: [],      // registre canonique : [{ name, reference, unitPrice }]
+  eotps: [],              // lignes de budget eOTP : [{ id, code, label, budget }]
+  eotpRegistryInitialized: false, // flag de migration douce (une fois)
   currentDate: todayISO(),
   chartHidden: {},        // { [companyId]: true } — entreprises masquées du graphique
   chartRange: 30          // 7 | 30 | 'all'
@@ -102,6 +104,8 @@ function load() {
     if (data.stockEntries) state.stockEntries = data.stockEntries;
     if (data.consommableEntries) state.consommableEntries = data.consommableEntries;
     if (data.consoProducts) state.consoProducts = data.consoProducts;
+    if (data.eotps) state.eotps = data.eotps;
+    if (typeof data.eotpRegistryInitialized === 'boolean') state.eotpRegistryInitialized = data.eotpRegistryInitialized;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
     // Champs hérités (ancien modèle à liste unique) → migrés ensuite
@@ -115,6 +119,7 @@ function load() {
   }
   // Migrations post-load
   migrateConsoProductsFromEntries();
+  migrateEOTPsFromConsoEntries();
 }
 function save() {
   const data = {
@@ -138,6 +143,8 @@ function save() {
     stockEntries: state.stockEntries,
     consommableEntries: state.consommableEntries,
     consoProducts: state.consoProducts,
+    eotps: state.eotps,
+    eotpRegistryInitialized: state.eotpRegistryInitialized,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange
   };
@@ -279,6 +286,7 @@ function renderAll() {
   renderAvancement();
   renderAdministratif();
   renderDocLabelsConfig();
+  renderEOTPsConfig();
   renderStock();
   renderConsommable();
   renderDashboard();
@@ -2803,6 +2811,52 @@ function renderDocLabelsConfig() {
   list.appendChild(addBtn);
 }
 
+function renderEOTPsConfig() {
+  const list = document.getElementById('eotplist');
+  if (!list) return;
+  list.innerHTML = '';
+  const eotps = getEOTPs();
+  if (eotps.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'eotp-empty';
+    empty.textContent = 'Aucune ligne de budget. Tapez « + Ajouter » pour en créer.';
+    list.appendChild(empty);
+    return;
+  }
+  // Tri par code alphanumérique pour la lecture
+  const sorted = eotps.slice().sort((a, b) => (a.code || '').localeCompare(b.code || '', 'fr'));
+  for (const e of sorted) list.appendChild(buildEOTPRow(e));
+}
+function buildEOTPRow(eotp) {
+  const li = document.createElement('li');
+  li.className = 'eotp-row';
+  li.setAttribute('data-eotp-id', eotp.id);
+  li.innerHTML = `
+    <div class="eotp-row-main">
+      <input class="eotp-code" type="text" maxlength="30" placeholder="OTP-2026-001">
+      <div class="eotp-budget-wrap">
+        <input class="eotp-budget" type="text" inputmode="decimal" placeholder="0">
+        <span class="eotp-budget-currency">€</span>
+      </div>
+      <button class="eotp-remove" type="button" aria-label="Supprimer cette ligne">
+        <svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+      </button>
+    </div>
+    <input class="eotp-label" type="text" maxlength="80" placeholder="Libellé (optionnel) : Plomberie phase 1, GO…">
+  `;
+  const code   = li.querySelector('.eotp-code');
+  const budget = li.querySelector('.eotp-budget');
+  const label  = li.querySelector('.eotp-label');
+  code.value   = eotp.code || '';
+  budget.value = eotp.budget ? fmtPriceForInput(eotp.budget) : '';
+  label.value  = eotp.label || '';
+  code.addEventListener('input',   () => setEOTPCode(eotp.id, code.value));
+  budget.addEventListener('input', () => setEOTPBudget(eotp.id, budget.value));
+  label.addEventListener('input',  () => setEOTPLabel(eotp.id, label.value));
+  li.querySelector('.eotp-remove').addEventListener('click', () => removeEOTP(eotp.id));
+  return li;
+}
+
 function buildDocConfigRow(doc) {
   const li = document.createElement('li');
   li.className = 'doc-label-item';
@@ -3674,6 +3728,81 @@ function migrateConsoProductsFromEntries() {
     upsertConsoProduct({ name: e.product, reference: e.reference, unitPrice: e.unitPrice });
   }
 }
+
+// ---------- Registre eOTP (lignes de budget) ----------
+function getEOTPs() { return Array.isArray(state.eotps) ? state.eotps : []; }
+function getEOTP(code) {
+  const k = (code || '').trim();
+  if (!k) return null;
+  return getEOTPs().find(e => (e.code || '').trim() === k) || null;
+}
+function addEOTP() {
+  if (!Array.isArray(state.eotps)) state.eotps = [];
+  state.eotps.push({ id: 'eotp_' + uid(), code: '', label: '', budget: 0 });
+  save();
+  renderEOTPsConfig();
+}
+function removeEOTP(id) {
+  const e = getEOTPs().find(x => x.id === id);
+  if (!e) return;
+  const label = e.code || e.label || 'cette ligne';
+  if (!confirm(`Supprimer la ligne de budget « ${label} » ?\nLes commandes existantes conservent ce code mais il ne sera plus proposé dans le menu déroulant.`)) return;
+  state.eotps = getEOTPs().filter(x => x.id !== id);
+  save();
+  renderEOTPsConfig();
+  renderConsommable();
+}
+function setEOTPCode(id, code) {
+  const e = getEOTPs().find(x => x.id === id);
+  if (!e) return;
+  const oldCode = e.code;
+  const newCode = (code || '').trim();
+  e.code = newCode;
+  // Si le code change et qu'il existait avant, on met à jour les
+  // entrées qui le référencent pour ne pas créer d'orphelins.
+  if (oldCode && oldCode !== newCode) {
+    for (const entry of getConsommableEntries()) {
+      if (entry.eOTP === oldCode) entry.eOTP = newCode;
+    }
+  }
+  save();
+  renderConsommable();
+}
+function setEOTPLabel(id, label) {
+  const e = getEOTPs().find(x => x.id === id);
+  if (!e) return;
+  e.label = (label || '').trim();
+  save();
+  renderConsommable();
+}
+function setEOTPBudget(id, value) {
+  const e = getEOTPs().find(x => x.id === id);
+  if (!e) return;
+  const n = parseFloat(String(value).replace(',', '.'));
+  e.budget = Number.isFinite(n) && n >= 0 ? n : 0;
+  save();
+}
+// Migration douce : à la première lecture du storage avec eOTP existants
+// dans les entrées mais pas encore dans le registre, on enregistre les
+// codes pour qu'ils apparaissent dans le menu déroulant. Une fois fait,
+// le flag empêche de tout réajouter si l'utilisateur supprime un code.
+function migrateEOTPsFromConsoEntries() {
+  if (state.eotpRegistryInitialized) return;
+  if (!Array.isArray(state.eotps)) state.eotps = [];
+  const known = new Set(state.eotps.map(x => (x.code || '').trim()));
+  for (const e of getConsommableEntries()) {
+    const code = (e.eOTP || '').trim();
+    if (!code || known.has(code)) continue;
+    state.eotps.push({ id: 'eotp_' + uid(), code, label: '', budget: 0 });
+    known.add(code);
+  }
+  state.eotpRegistryInitialized = true;
+}
+// Affichage : code « OTP-2026-001 » ou « OTP-2026-001 — Plomberie » si label
+function eotpDisplay(eotp) {
+  if (!eotp) return '';
+  return eotp.label ? `${eotp.code} — ${eotp.label}` : eotp.code;
+}
 // Unité la plus récemment utilisée pour un produit (pour pré-remplir
 // le sélecteur unité quand on choisit un produit existant).
 function getMostRecentUnitForProduct(name) {
@@ -3991,7 +4120,23 @@ function openConsommableSheetForEdit(orderId) {
     // celle réellement enregistrée pour cette ligne)
     lineEl.querySelector('.conso-line-qty').value  = fmtStockQty(entry.qty);
     lineEl.querySelector('.conso-line-unit').value = entry.unit || 'u';
-    lineEl.querySelector('.conso-line-eotp').value = entry.eOTP || '';
+    // eOTP : si le code existe dans le dropdown, on le sélectionne ;
+    // sinon (cas où le code aurait disparu du registre) on bascule sur
+    // « + Nouveau » avec la valeur historique pré-remplie en texte.
+    const eotpSelEdit = lineEl.querySelector('.conso-line-eotp');
+    const eotpNewEdit = lineEl.querySelector('.conso-line-eotp-new');
+    const wanted = entry.eOTP || '';
+    if (!wanted) {
+      eotpSelEdit.value = '';
+      eotpNewEdit.hidden = true;
+    } else if (Array.from(eotpSelEdit.options).some(o => o.value === wanted)) {
+      eotpSelEdit.value = wanted;
+      eotpNewEdit.hidden = true;
+    } else {
+      eotpSelEdit.value = NEW_ARTICLE_SENTINEL;
+      eotpNewEdit.hidden = false;
+      eotpNewEdit.value = wanted;
+    }
   }
   refreshOrderLineNumbers();
   sheet.hidden = false;
@@ -4071,11 +4216,26 @@ function buildOrderLine() {
       </div>
     </div>
     <label class="stock-form-label">eOTP (optionnel)</label>
-    <input class="stock-form-input conso-line-eotp" type="text" maxlength="20" placeholder="OTP-2026-001">
+    <select class="stock-form-input conso-line-eotp"></select>
+    <input class="stock-form-input conso-line-eotp-new stock-article-new" type="text" maxlength="30" placeholder="Nouveau code eOTP" hidden>
   `;
   const unitSel = details.querySelector('.conso-line-unit');
   for (const u of CONSO_UNITS) unitSel.appendChild(new Option(u, u));
   unitSel.value = 'u';
+  // Dropdown eOTP basé sur le registre
+  const eotpSel = details.querySelector('.conso-line-eotp');
+  const eotpNew = details.querySelector('.conso-line-eotp-new');
+  populateLineEOTPSelect(eotpSel);
+  eotpSel.addEventListener('change', () => {
+    if (eotpSel.value === NEW_ARTICLE_SENTINEL) {
+      eotpNew.hidden = false;
+      eotpNew.value = '';
+      setTimeout(() => eotpNew.focus(), 50);
+    } else {
+      eotpNew.hidden = true;
+      eotpNew.value = '';
+    }
+  });
   line.appendChild(details);
 
   const refInp   = details.querySelector('.conso-line-ref');
@@ -4127,6 +4287,19 @@ function populateLineProductSelect(sel) {
   }
   sel.appendChild(new Option('+ Nouveau produit…', NEW_ARTICLE_SENTINEL));
 }
+function populateLineEOTPSelect(sel) {
+  sel.innerHTML = '';
+  // « Aucun » par défaut (eOTP optionnel)
+  const none = new Option('— Aucun —', '');
+  none.selected = true;
+  sel.appendChild(none);
+  const eotps = getEOTPs().slice().sort((a, b) => (a.code || '').localeCompare(b.code || '', 'fr'));
+  for (const e of eotps) {
+    if (!e.code) continue;
+    sel.appendChild(new Option(eotpDisplay(e), e.code));
+  }
+  sel.appendChild(new Option('+ Nouveau eOTP…', NEW_ARTICLE_SENTINEL));
+}
 function addOrderLine() {
   const container = document.getElementById('consoorderlines');
   if (!container) return;
@@ -4161,7 +4334,12 @@ function submitConsommableOrder() {
     const qtyStr = el.querySelector('.conso-line-qty').value;
     const unit   = el.querySelector('.conso-line-unit').value;
     const priceStr = el.querySelector('.conso-line-price').value;
-    const eOTP   = el.querySelector('.conso-line-eotp').value.trim();
+    // eOTP : dropdown du registre + champ texte (caché sauf si « + Nouveau »)
+    const eotpSel = el.querySelector('.conso-line-eotp');
+    const eotpNew = el.querySelector('.conso-line-eotp-new');
+    let eOTP = '';
+    if (eotpNew && !eotpNew.hidden) eOTP = eotpNew.value.trim();
+    else if (eotpSel && eotpSel.value && eotpSel.value !== NEW_ARTICLE_SENTINEL) eOTP = eotpSel.value;
 
     let product = '';
     if (newInp && !newInp.hidden) product = newInp.value.trim();
@@ -4202,6 +4380,11 @@ function submitConsommableOrder() {
     // Insère ou complète le registre canonique (n'écrase pas les
     // valeurs déjà saisies)
     upsertConsoProduct({ name: line.product, reference: line.reference, unitPrice: line.unitPrice });
+    // Enregistre un nouveau code eOTP s'il n'est pas connu (sans budget
+    // ni libellé, à compléter dans Données → eOTP)
+    if (line.eOTP && !getEOTP(line.eOTP)) {
+      state.eotps.push({ id: 'eotp_' + uid(), code: line.eOTP, label: '', budget: 0 });
+    }
     state.consommableEntries.push({
       id: uid(), orderId, date, notes,
       product: line.product, reference: line.reference,
@@ -4358,6 +4541,8 @@ function importData(file) {
       state.stockEntries = data.stockEntries || [];
       state.consommableEntries = data.consommableEntries || [];
       state.consoProducts = data.consoProducts || [];
+      state.eotps = data.eotps || [];
+      state.eotpRegistryInitialized = data.eotpRegistryInitialized === true;
       state.adminDocs = data.adminDocs || {};
       state.workers = data.workers || [];
       state.workerDocs = data.workerDocs || {};
@@ -4376,6 +4561,7 @@ function importData(file) {
       state._legacyZoneHasTasks = data.zoneHasTasks;
       migrateSetups();
       migrateConsoProductsFromEntries();
+  migrateEOTPsFromConsoEntries();
       save();
       renderAll();
       showToast('Import réussi');
@@ -4402,6 +4588,8 @@ function resetAll() {
   state.stockEntries = [];
   state.consommableEntries = [];
   state.consoProducts = [];
+  state.eotps = [];
+  state.eotpRegistryInitialized = false;
   state.adminDocs = {};
   state.workers = [];
   state.workerDocs = {};
@@ -4534,6 +4722,10 @@ function init() {
     const addLineBtn = document.getElementById('consoaddline');
     if (addLineBtn) addLineBtn.addEventListener('click', addOrderLine);
   }
+
+  // ----- Données → eOTP : bouton + Ajouter une ligne de budget -----
+  const eotpAddBtn = document.getElementById('eotpadd');
+  if (eotpAddBtn) eotpAddBtn.addEventListener('click', addEOTP);
 
   // Service worker : enregistrement + rechargement auto à chaque mise à jour
   if ('serviceWorker' in navigator) {
