@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.58';
+const APP_VERSION = '0.59';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -57,6 +57,8 @@ const state = {
   eotps: [],              // lignes de budget eOTP : [{ id, code, label, budget }]
   eotpRegistryInitialized: false, // flag de migration douce (une fois)
   consoRecapMode: 'product', // 'product' | 'eotp' : axe de regroupement du récap Consommable
+  projectStart: '',          // date ISO YYYY-MM-DD : début prévu du chantier
+  projectEnd: '',            // date ISO YYYY-MM-DD : fin prévue du chantier
   currentDate: todayISO(),
   chartHidden: {},        // { [companyId]: true } — entreprises masquées du graphique
   chartRange: 30          // 7 | 30 | 'all'
@@ -108,6 +110,8 @@ function load() {
     if (data.eotps) state.eotps = data.eotps;
     if (typeof data.eotpRegistryInitialized === 'boolean') state.eotpRegistryInitialized = data.eotpRegistryInitialized;
     if (data.consoRecapMode === 'product' || data.consoRecapMode === 'eotp') state.consoRecapMode = data.consoRecapMode;
+    if (typeof data.projectStart === 'string') state.projectStart = data.projectStart;
+    if (typeof data.projectEnd === 'string') state.projectEnd = data.projectEnd;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
     // Champs hérités (ancien modèle à liste unique) → migrés ensuite
@@ -148,6 +152,8 @@ function save() {
     eotps: state.eotps,
     eotpRegistryInitialized: state.eotpRegistryInitialized,
     consoRecapMode: state.consoRecapMode,
+    projectStart: state.projectStart,
+    projectEnd: state.projectEnd,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange
   };
@@ -290,6 +296,7 @@ function renderAll() {
   renderAdministratif();
   renderDocLabelsConfig();
   renderEOTPsConfig();
+  renderProjectDates();
   renderStock();
   renderConsommable();
   renderDashboard();
@@ -2860,6 +2867,50 @@ function buildEOTPRow(eotp) {
   return li;
 }
 
+// ---------- Période du chantier (Données → Admin.) ----------
+function renderProjectDates() {
+  const startInp = document.getElementById('projectstart');
+  const endInp   = document.getElementById('projectend');
+  const info     = document.getElementById('projectdatesinfo');
+  if (!startInp || !endInp || !info) return;
+  // Synchronise les inputs (idempotent, n'écrase pas la saisie en cours)
+  if (document.activeElement !== startInp) startInp.value = state.projectStart || '';
+  if (document.activeElement !== endInp)   endInp.value   = state.projectEnd   || '';
+  info.classList.remove('is-warn');
+  if (!state.projectStart && !state.projectEnd) {
+    info.textContent = 'Renseignez les dates pour voir la durée et les mois restants.';
+    return;
+  }
+  if (state.projectStart && state.projectEnd && new Date(state.projectEnd) < new Date(state.projectStart)) {
+    info.classList.add('is-warn');
+    info.textContent = 'La date de fin doit être postérieure à la date de début.';
+    return;
+  }
+  const total    = getProjectMonthsTotal();
+  const elapsed  = getProjectMonthsElapsed();
+  const remaining = getProjectMonthsRemaining();
+  const parts = [];
+  if (total > 0) parts.push(`Durée prévue : <strong>${total} mois</strong>`);
+  else if (state.projectStart && !state.projectEnd) parts.push(`Début le <strong>${formatDateShortFR(state.projectStart)}</strong> — fin non renseignée`);
+  else if (!state.projectStart && state.projectEnd) parts.push(`Fin le <strong>${formatDateShortFR(state.projectEnd)}</strong> — début non renseigné`);
+  if (state.projectStart && elapsed > 0) parts.push(`<strong>${elapsed}</strong> écoulé${elapsed > 1 ? 's' : ''}`);
+  if (state.projectEnd && remaining > 0) parts.push(`<strong>${remaining}</strong> restant${remaining > 1 ? 's' : ''}`);
+  if (state.projectEnd && remaining === 0) parts.push('chantier terminé');
+  info.innerHTML = parts.join(' · ');
+}
+function setProjectStart(value) {
+  state.projectStart = value || '';
+  save();
+  renderProjectDates();
+  renderConsommable();
+}
+function setProjectEnd(value) {
+  state.projectEnd = value || '';
+  save();
+  renderProjectDates();
+  renderConsommable();
+}
+
 function buildDocConfigRow(doc) {
   const li = document.createElement('li');
   li.className = 'doc-label-item';
@@ -3826,6 +3877,31 @@ function fmtPriceForInput(n) {
 function fmtEur(n) {
   return Number(n || 0).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+
+// ---------- Période du chantier (utilisée par récap + projection FDC) ----------
+// Tous les compteurs sont en mois inclusifs (le mois de début et le mois de
+// fin comptent chacun pour 1). monthsInclusive('2026-01-15','2026-03-02') = 3.
+function monthsInclusive(aISO, bISO) {
+  if (!aISO || !bISO) return 0;
+  const a = new Date(aISO);
+  const b = new Date(bISO);
+  if (!Number.isFinite(a.getTime()) || !Number.isFinite(b.getTime())) return 0;
+  if (b < a) return 0;
+  return (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth()) + 1;
+}
+function getProjectMonthsTotal() {
+  return monthsInclusive(state.projectStart, state.projectEnd);
+}
+function getProjectMonthsElapsed() {
+  if (!state.projectStart) return 0;
+  return monthsInclusive(state.projectStart, todayISO());
+}
+function getProjectMonthsRemaining() {
+  if (!state.projectEnd) return 0;
+  return monthsInclusive(todayISO(), state.projectEnd);
+}
+
+
 function fmtMonthKeyFR(monthKey) {
   const [y, m] = monthKey.split('-');
   const d = new Date(Number(y), Number(m) - 1, 1);
@@ -3946,7 +4022,7 @@ function renderConsommableRecap() {
 
 function renderConsommableRecapByProduct(wrap, empty, entries) {
   const monthSet = new Set();
-  const productMap = new Map(); // lc → { display, unit, ref }
+  const productMap = new Map(); // lc → { display, unit, ref, totalQty, monthsWithData:Set }
   const cells = new Map();
   // Itère trié pour que la « dernière référence » prise soit bien la plus récente
   const sorted = entries.slice().sort(compareConsommableEntries);
@@ -3956,13 +4032,14 @@ function renderConsommableRecapByProduct(wrap, empty, entries) {
     const pKey = (e.product || '').trim().toLowerCase();
     if (!pKey) continue;
     monthSet.add(monthKey);
-    if (!productMap.has(pKey)) productMap.set(pKey, { display: e.product, unit: e.unit, ref: '' });
+    if (!productMap.has(pKey)) productMap.set(pKey, { display: e.product, unit: e.unit, ref: '', totalQty: 0, monthsWithData: new Set() });
     const cur = productMap.get(pKey);
     cur.display = e.product;
     cur.unit = e.unit;
     // La référence affichée dans le récap vient de l'entrée la plus
     // récente (ou ultérieurement remplacée par la canonique ci-après)
     if (e.reference) cur.ref = e.reference;
+    cur.monthsWithData.add(monthKey);
     const cellKey = pKey + '|' + monthKey;
     if (!cells.has(cellKey)) cells.set(cellKey, { qty: 0, total: 0, unit: e.unit });
     const cell = cells.get(cellKey);
@@ -3971,6 +4048,7 @@ function renderConsommableRecapByProduct(wrap, empty, entries) {
     cell.qty += q;
     cell.total += q * p;
     cell.unit = e.unit;
+    cur.totalQty += q;
   }
   const months = Array.from(monthSet).sort();
   // Préfère la référence canonique si elle existe (= celle qui apparaît
@@ -3999,7 +4077,37 @@ function renderConsommableRecapByProduct(wrap, empty, entries) {
     return cellTh;
   };
   const cellAccess = ([pKey], monthKey) => cells.get(pKey + '|' + monthKey);
-  buildRecapTable(wrap, months, products, headerLabel, rowBuilder, cellAccess);
+  // Pour la moyenne mensuelle : on prend les mois écoulés depuis le
+  // début du chantier si renseigné (vue projet réelle), sinon la plage
+  // de mois couverts par les données (fallback).
+  const elapsed = getProjectMonthsElapsed();
+  const fallbackMonths = months.length; // au moins 1 si on est ici
+  const trailingCols = [
+    {
+      header: 'Moy. / mois',
+      headerTitle: elapsed > 0
+        ? `Moyenne mensuelle calculée sur ${elapsed} mois écoulés depuis le début du chantier`
+        : `Moyenne calculée sur ${fallbackMonths} mois (durée des données — renseignez les dates dans Données → Admin. pour un calcul basé sur la durée projet).`,
+      className: 'recap-avg-col',
+      cell: ([, p], rowTotal) => {
+        const divisor = elapsed > 0 ? elapsed : fallbackMonths;
+        if (divisor <= 0) return { text: '—', className: 'recap-empty-cell' };
+        const avgQty = p.totalQty / divisor;
+        const avgEur = rowTotal / divisor;
+        return {
+          html: `<span class="conso-cell-qty">${escapeHtml(fmtStockQty(avgQty))} ${escapeHtml(p.unit || '')}</span><br><span class="conso-cell-eur">${escapeHtml(fmtEur(avgEur))}</span>`
+        };
+      },
+      footer: (grandTotal, rowTotals, allRows) => {
+        const divisor = elapsed > 0 ? elapsed : fallbackMonths;
+        if (divisor <= 0) return { text: '—' };
+        const avgEur = grandTotal / divisor;
+        // Pas de moyenne quantité globale (unités hétérogènes) — juste €
+        return { html: `<span class="conso-cell-eur">${escapeHtml(fmtEur(avgEur))}</span>` };
+      }
+    }
+  ];
+  buildRecapTable(wrap, months, products, headerLabel, rowBuilder, cellAccess, [], trailingCols);
 }
 
 function renderConsommableRecapByEOTP(wrap, empty, entries) {
@@ -4100,15 +4208,84 @@ function renderConsommableRecapByEOTP(wrap, empty, entries) {
       }
     }
   ];
-  buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess, extraCols);
+  // Colonnes trailing : FDC et Écart FDC, à droite du Total.
+  // FDC = projection des dépenses à la fin du chantier si on continue
+  // au rythme moyen constaté (avg/mois × durée totale projet).
+  // Équivalent : total_actuel + avg/mois × mois_restants — formellement
+  // identique. Requiert les deux dates projet renseignées.
+  const elapsed   = getProjectMonthsElapsed();
+  const totalProj = getProjectMonthsTotal();
+  const canProject = elapsed > 0 && totalProj > 0;
+  const fdcTooltip = canProject
+    ? `Projection à la fin du chantier : moyenne mensuelle (sur ${elapsed} mois écoulés) × durée totale du chantier (${totalProj} mois).`
+    : 'Renseignez les dates de début et fin du chantier dans Données → Admin. pour activer la projection.';
+  const trailingCols = [
+    {
+      header: 'FDC',
+      headerTitle: fdcTooltip,
+      className: 'recap-fdc-col',
+      cell: ([code, row], rowTotal) => {
+        if (!canProject) return { text: '—', className: 'recap-empty-cell' };
+        const avg = rowTotal / elapsed;
+        const fdc = avg * totalProj;
+        return { text: fmtEur(fdc) };
+      },
+      footer: (grandTotal) => {
+        if (!canProject) return { text: '—', className: 'recap-empty-cell' };
+        const fdc = (grandTotal / elapsed) * totalProj;
+        return { text: fmtEur(fdc) };
+      }
+    },
+    {
+      header: 'Écart FDC',
+      headerTitle: canProject
+        ? 'Budget − FDC : marge prévisionnelle en fin de chantier (rouge si dépassement)'
+        : fdcTooltip,
+      className: 'recap-ecart-col',
+      cell: ([code, row], rowTotal) => {
+        if (!canProject || !code) return { text: '—', className: 'recap-empty-cell' };
+        const fdc = (rowTotal / elapsed) * totalProj;
+        const ecart = row.budget - fdc;
+        return {
+          text: fmtEur(ecart),
+          className: ecart < 0 ? 'recap-reste-negative' : ''
+        };
+      },
+      footer: (_, rowTotals, allRows) => {
+        if (!canProject) return { text: '—', className: 'recap-empty-cell' };
+        const sumBudget = allRows.reduce((s, [code, r]) => s + (code ? r.budget : 0), 0);
+        const sumFDC = allRows.reduce((s, [code, _r], i) => {
+          if (!code) return s; // exclut « Sans eOTP » comme pour le RAD
+          return s + (rowTotals[i] / elapsed) * totalProj;
+        }, 0);
+        const ecart = sumBudget - sumFDC;
+        return {
+          text: fmtEur(ecart),
+          className: ecart < 0 ? 'recap-reste-negative' : ''
+        };
+      }
+    }
+  ];
+  buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess, extraCols, trailingCols);
 }
 
 // Squelette commun produit×mois / eOTP×mois : un th de ligne, N colonnes
-// extra optionnelles (ex. Budget/Reste pour le mode eOTP), N colonnes
-// mois, un total par ligne et un footer total par mois + grand total.
-function buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess, extraCols = []) {
+// extra (entre row label et mois), N mois, un total, puis N colonnes
+// trailing (après le total — utilisé pour la moyenne mensuelle en mode
+// produit et la projection FDC/Écart en mode eOTP).
+// Format d'une colonne (extra ou trailing) :
+//   { header, headerTitle?, className?, cell(rowEntry, rowTotal) →
+//     { text?, html?, className? }, footer(grand, rowTotals, rows) → ... }
+function buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess, extraCols = [], trailingCols = []) {
   const table = document.createElement('table');
   table.className = 'recap-table conso-recap-table';
+
+  const renderCellLike = (td, out) => {
+    if (!out) return;
+    if (out.html != null)      td.innerHTML = out.html;
+    else if (out.text != null) td.textContent = out.text;
+    if (out.className) td.classList.add(...out.className.split(' ').filter(Boolean));
+  };
 
   const thead = document.createElement('thead');
   const headRow = document.createElement('tr');
@@ -4136,6 +4313,14 @@ function buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess
   totalTh.scope = 'col';
   totalTh.textContent = 'Total';
   headRow.appendChild(totalTh);
+  for (const col of trailingCols) {
+    const th = document.createElement('th');
+    th.scope = 'col';
+    if (col.className) th.className = col.className;
+    if (col.headerTitle) th.title = col.headerTitle;
+    th.textContent = col.header;
+    headRow.appendChild(th);
+  }
   thead.appendChild(headRow);
   table.appendChild(thead);
 
@@ -4176,14 +4361,13 @@ function buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess
     return { tr, monthCells, rowEntry, rowTotal };
   });
   // 2e passage : insère les colonnes extra (avec rowTotal connu) entre
-  // le th de ligne et les mois, puis les cellules mois et le total.
+  // le th de ligne et les mois, puis les cellules mois, le total et
+  // les colonnes trailing.
   for (const { tr, monthCells, rowEntry, rowTotal } of rowFragments) {
     for (const col of extraCols) {
       const td = document.createElement('td');
       if (col.className) td.className = col.className;
-      const out = col.cell(rowEntry, rowTotal) || { text: '' };
-      td.textContent = out.text;
-      if (out.className) td.classList.add(...out.className.split(' ').filter(Boolean));
+      renderCellLike(td, col.cell(rowEntry, rowTotal));
       tr.appendChild(td);
     }
     for (const td of monthCells) tr.appendChild(td);
@@ -4191,6 +4375,12 @@ function buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess
     totalTd.className = 'recap-total-col';
     totalTd.textContent = fmtEur(rowTotal);
     tr.appendChild(totalTd);
+    for (const col of trailingCols) {
+      const td = document.createElement('td');
+      if (col.className) td.className = col.className;
+      renderCellLike(td, col.cell(rowEntry, rowTotal));
+      tr.appendChild(td);
+    }
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
@@ -4205,9 +4395,7 @@ function buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess
   for (const col of extraCols) {
     const td = document.createElement('td');
     if (col.className) td.className = col.className;
-    const out = col.footer ? (col.footer(grandTotal, rowTotals, rows) || { text: '' }) : { text: '' };
-    td.textContent = out.text;
-    if (out.className) td.classList.add(...out.className.split(' ').filter(Boolean));
+    renderCellLike(td, col.footer ? col.footer(grandTotal, rowTotals, rows) : null);
     footRow.appendChild(td);
   }
   for (let i = 0; i < months.length; i++) {
@@ -4219,6 +4407,12 @@ function buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess
   gtTd.className = 'recap-total-col';
   gtTd.textContent = fmtEur(grandTotal);
   footRow.appendChild(gtTd);
+  for (const col of trailingCols) {
+    const td = document.createElement('td');
+    if (col.className) td.className = col.className;
+    renderCellLike(td, col.footer ? col.footer(grandTotal, rowTotals, rows) : null);
+    footRow.appendChild(td);
+  }
   tfoot.appendChild(footRow);
   table.appendChild(tfoot);
 
@@ -4755,6 +4949,8 @@ function importData(file) {
       state.eotps = data.eotps || [];
       state.eotpRegistryInitialized = data.eotpRegistryInitialized === true;
       state.consoRecapMode = (data.consoRecapMode === 'eotp') ? 'eotp' : 'product';
+      state.projectStart = typeof data.projectStart === 'string' ? data.projectStart : '';
+      state.projectEnd   = typeof data.projectEnd   === 'string' ? data.projectEnd   : '';
       state.adminDocs = data.adminDocs || {};
       state.workers = data.workers || [];
       state.workerDocs = data.workerDocs || {};
@@ -4803,6 +4999,8 @@ function resetAll() {
   state.eotps = [];
   state.eotpRegistryInitialized = false;
   state.consoRecapMode = 'product';
+  state.projectStart = '';
+  state.projectEnd = '';
   state.adminDocs = {};
   state.workers = [];
   state.workerDocs = {};
@@ -4939,6 +5137,12 @@ function init() {
   // ----- Données → eOTP : bouton + Ajouter une ligne de budget -----
   const eotpAddBtn = document.getElementById('eotpadd');
   if (eotpAddBtn) eotpAddBtn.addEventListener('click', addEOTP);
+
+  // ----- Données → Admin. : période du chantier -----
+  const projStart = document.getElementById('projectstart');
+  const projEnd   = document.getElementById('projectend');
+  if (projStart) projStart.addEventListener('change', () => setProjectStart(projStart.value));
+  if (projEnd)   projEnd.addEventListener('change',   () => setProjectEnd(projEnd.value));
 
   // ----- Consommable → Récap : bascule produit / eOTP -----
   document.querySelectorAll('.recap-mode-btn').forEach(btn => {

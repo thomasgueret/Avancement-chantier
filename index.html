@@ -154,6 +154,21 @@
       <!-- Sous-page : Administratif (libellés des 4 docs eCheckIn) -->
       <div class="sub-page" id="sub-adminconfig" data-group="donnees">
         <div class="list-section">
+          <h2 class="section-title">Période du chantier</h2>
+          <p class="section-help">Renseignez les dates prévues pour calculer la durée et projeter les dépenses en fin de chantier (FDC).</p>
+          <div class="project-dates-row">
+            <div class="project-date-field">
+              <label for="projectstart">Début</label>
+              <input id="projectstart" type="date" autocomplete="off">
+            </div>
+            <div class="project-date-field">
+              <label for="projectend">Fin</label>
+              <input id="projectend" type="date" autocomplete="off">
+            </div>
+          </div>
+          <p class="project-dates-info" id="projectdatesinfo"></p>
+        </div>
+        <div class="list-section">
           <p class="section-help">Personnalisez le libellé des quatre pièces administratives suivies dans Administratif → eCheckIn.</p>
           <ul class="doc-labels-list" id="doclabelslist"></ul>
         </div>
