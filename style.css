@@ -2452,3 +2452,36 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   .app-header { justify-content: flex-start; padding: 0 24px; }
   .app-title { font-size: 18px; }
 }
+
+/* Consommable → Récapitulatif : sur grand écran, le tableau peut
+   échapper au max-width 720px de la page pour occuper exactement la
+   largeur dont il a besoin (et seulement si nécessaire scroller).
+   Sur téléphone (< 720px) le comportement habituel est conservé :
+   page contrainte, scroll horizontal dans le wrap si trop large. */
+@media (min-width: 720px) {
+  /* Libère la largeur de la page Consommable */
+  #page-consommable { max-width: none; }
+  /* La Saisie et la barre d'onglets restent confortables (720px) */
+  #page-consommable > .segmented,
+  #sub-consaisie {
+    max-width: 720px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  /* Récap : colonne flex centrée pour que la barre de mode et le
+     tableau prennent chacun leur largeur naturelle, centrés. Le
+     sélecteur ID + classe l'emporte sur .sub-page.active. */
+  #sub-conrecap.active {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  #sub-conrecap .recap-table-wrap {
+    width: fit-content;
+    max-width: 100%;
+  }
+  #sub-conrecap .recap-table {
+    min-width: 0;
+    width: max-content;
+  }
+}
