@@ -2280,6 +2280,49 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   margin-top: 2px;
   font-variant-numeric: tabular-nums;
 }
+/* Code eOTP affiché en monospace dans le récap, label optionnel en
+   dessous pour ne pas surcharger la largeur de la première colonne. */
+.conso-eotp-code {
+  font-weight: 700;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.01em;
+}
+.conso-eotp-label {
+  display: block;
+  font-size: 11px; font-weight: 500;
+  color: var(--text-3);
+  margin-top: 2px;
+}
+.conso-eotp-none {
+  font-weight: 700;
+  color: var(--text-3);
+  font-style: italic;
+}
+
+/* Toggle « Par produit / Par eOTP » au-dessus du tableau récap */
+.recap-mode-bar {
+  display: inline-flex;
+  background: var(--surface-2);
+  border-radius: 999px;
+  padding: 3px;
+  margin: 0 0 12px 0;
+  gap: 2px;
+}
+.recap-mode-btn {
+  border: none; background: transparent;
+  padding: 6px 14px;
+  font-size: 13px; font-weight: 600;
+  color: var(--text-2);
+  border-radius: 999px;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.recap-mode-btn.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+}
 
 /* ============ ANIMATIONS ============ */
 @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }

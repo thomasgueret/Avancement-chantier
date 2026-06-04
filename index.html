@@ -271,8 +271,12 @@
         <button class="stock-fab" id="consofab" type="button" aria-label="Nouvelle ligne consommable">+</button>
       </div>
 
-      <!-- Sous-onglet : Récapitulatif (tableau produit × mois) -->
+      <!-- Sous-onglet : Récapitulatif (tableau produit × mois OU eOTP × mois) -->
       <div class="sub-page" id="sub-conrecap" data-group="conso">
+        <div class="recap-mode-bar" role="tablist" aria-label="Regroupement du récapitulatif">
+          <button class="recap-mode-btn active" data-recap-mode="product" type="button" role="tab" aria-selected="true">Par produit</button>
+          <button class="recap-mode-btn" data-recap-mode="eotp" type="button" role="tab" aria-selected="false">Par eOTP</button>
+        </div>
         <div class="recap-table-wrap" id="consorecapwrap"></div>
         <div class="empty-state" id="consorecapempty"></div>
       </div>

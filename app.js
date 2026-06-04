@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.55';
+const APP_VERSION = '0.56';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -56,6 +56,7 @@ const state = {
   consoProducts: [],      // registre canonique : [{ name, reference, unitPrice }]
   eotps: [],              // lignes de budget eOTP : [{ id, code, label, budget }]
   eotpRegistryInitialized: false, // flag de migration douce (une fois)
+  consoRecapMode: 'product', // 'product' | 'eotp' : axe de regroupement du récap Consommable
   currentDate: todayISO(),
   chartHidden: {},        // { [companyId]: true } — entreprises masquées du graphique
   chartRange: 30          // 7 | 30 | 'all'
@@ -106,6 +107,7 @@ function load() {
     if (data.consoProducts) state.consoProducts = data.consoProducts;
     if (data.eotps) state.eotps = data.eotps;
     if (typeof data.eotpRegistryInitialized === 'boolean') state.eotpRegistryInitialized = data.eotpRegistryInitialized;
+    if (data.consoRecapMode === 'product' || data.consoRecapMode === 'eotp') state.consoRecapMode = data.consoRecapMode;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
     // Champs hérités (ancien modèle à liste unique) → migrés ensuite
@@ -145,6 +147,7 @@ function save() {
     consoProducts: state.consoProducts,
     eotps: state.eotps,
     eotpRegistryInitialized: state.eotpRegistryInitialized,
+    consoRecapMode: state.consoRecapMode,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange
   };
@@ -3922,6 +3925,13 @@ function renderConsommableRecap() {
   const wrap = document.getElementById('consorecapwrap');
   const empty = document.getElementById('consorecapempty');
   if (!wrap || !empty) return;
+  // Reflète l'état actif sur les boutons de mode (idempotent)
+  const mode = state.consoRecapMode === 'eotp' ? 'eotp' : 'product';
+  document.querySelectorAll('.recap-mode-btn').forEach(b => {
+    const on = b.dataset.recapMode === mode;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
   wrap.innerHTML = '';
   empty.classList.remove('show');
   const entries = getConsommableEntries();
@@ -3930,6 +3940,11 @@ function renderConsommableRecap() {
     empty.classList.add('show');
     return;
   }
+  if (mode === 'eotp') renderConsommableRecapByEOTP(wrap, empty, entries);
+  else                 renderConsommableRecapByProduct(wrap, empty, entries);
+}
+
+function renderConsommableRecapByProduct(wrap, empty, entries) {
   const monthSet = new Set();
   const productMap = new Map(); // lc → { display, unit, ref }
   const cells = new Map();
@@ -3966,17 +3981,101 @@ function renderConsommableRecap() {
   }
   const products = Array.from(productMap.entries())
     .sort((a, b) => a[1].display.localeCompare(b[1].display, 'fr'));
+  const headerLabel = 'Produit';
+  const rowBuilder = ([, p]) => {
+    const cellTh = document.createElement('th');
+    cellTh.className = 'recap-date-col';
+    cellTh.scope = 'row';
+    const nameDiv = document.createElement('div');
+    nameDiv.className = 'conso-product-name';
+    nameDiv.textContent = p.display;
+    cellTh.appendChild(nameDiv);
+    if (p.ref) {
+      const refDiv = document.createElement('div');
+      refDiv.className = 'conso-product-ref';
+      refDiv.textContent = p.ref;
+      cellTh.appendChild(refDiv);
+    }
+    return cellTh;
+  };
+  const cellAccess = ([pKey], monthKey) => cells.get(pKey + '|' + monthKey);
+  buildRecapTable(wrap, months, products, headerLabel, rowBuilder, cellAccess);
+}
 
+function renderConsommableRecapByEOTP(wrap, empty, entries) {
+  const monthSet = new Set();
+  // key = code eOTP ou '' pour « sans eOTP »
+  const eotpRows = new Map(); // key → { code, label }
+  const cells = new Map();    // key + '|' + month → { qty:0, total, unit:'mixed'|unit }
+  for (const e of entries) {
+    const monthKey = (e.date || '').slice(0, 7);
+    if (!monthKey) continue;
+    const code = (e.eOTP || '').trim();
+    monthSet.add(monthKey);
+    if (!eotpRows.has(code)) {
+      const reg = code ? getEOTP(code) : null;
+      eotpRows.set(code, { code, label: reg?.label || '' });
+    }
+    const cellKey = code + '|' + monthKey;
+    if (!cells.has(cellKey)) cells.set(cellKey, { total: 0 });
+    const cell = cells.get(cellKey);
+    cell.total += (Number(e.qty) || 0) * (Number(e.unitPrice) || 0);
+  }
+  if (eotpRows.size === 0) {
+    empty.innerHTML = '<p>Aucune dépense affectée à un eOTP.</p><p class="hint">Renseigne un eOTP lors de la saisie d\'une commande pour suivre la consommation par ligne de budget.</p>';
+    empty.classList.add('show');
+    return;
+  }
+  const months = Array.from(monthSet).sort();
+  // Tri : codes alphanumériques puis « Sans eOTP » en dernier
+  const rows = Array.from(eotpRows.entries()).sort((a, b) => {
+    if (!a[0] && !b[0]) return 0;
+    if (!a[0]) return 1;
+    if (!b[0]) return -1;
+    return a[0].localeCompare(b[0], 'fr');
+  });
+  const headerLabel = 'eOTP';
+  const rowBuilder = ([code, row]) => {
+    const cellTh = document.createElement('th');
+    cellTh.className = 'recap-date-col';
+    cellTh.scope = 'row';
+    if (code) {
+      const codeDiv = document.createElement('div');
+      codeDiv.className = 'conso-eotp-code';
+      codeDiv.textContent = code;
+      cellTh.appendChild(codeDiv);
+      if (row.label) {
+        const labelDiv = document.createElement('div');
+        labelDiv.className = 'conso-eotp-label';
+        labelDiv.textContent = row.label;
+        cellTh.appendChild(labelDiv);
+      }
+    } else {
+      const noneDiv = document.createElement('div');
+      noneDiv.className = 'conso-eotp-none';
+      noneDiv.textContent = 'Sans eOTP';
+      cellTh.appendChild(noneDiv);
+    }
+    return cellTh;
+  };
+  const cellAccess = ([code], monthKey) => cells.get(code + '|' + monthKey);
+  buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess);
+}
+
+// Squelette commun produit×mois / eOTP×mois : un th de ligne, N colonnes
+// mois (€ uniquement pour le mode eOTP, qty+€ pour le mode produit),
+// un total par ligne et un footer total par mois + grand total.
+function buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess) {
   const table = document.createElement('table');
   table.className = 'recap-table conso-recap-table';
 
   const thead = document.createElement('thead');
   const headRow = document.createElement('tr');
-  const productTh = document.createElement('th');
-  productTh.className = 'recap-date-col';
-  productTh.scope = 'col';
-  productTh.textContent = 'Produit';
-  headRow.appendChild(productTh);
+  const firstTh = document.createElement('th');
+  firstTh.className = 'recap-date-col';
+  firstTh.scope = 'col';
+  firstTh.textContent = headerLabel;
+  headRow.appendChild(firstTh);
   for (const m of months) {
     const th = document.createElement('th');
     th.scope = 'col';
@@ -3994,30 +4093,24 @@ function renderConsommableRecap() {
   const tbody = document.createElement('tbody');
   const monthTotals = months.map(() => 0);
   let grandTotal = 0;
-  for (const [pKey, p] of products) {
+  for (const rowEntry of rows) {
     const tr = document.createElement('tr');
-    const prodCell = document.createElement('th');
-    prodCell.className = 'recap-date-col';
-    prodCell.scope = 'row';
-    const nameDiv = document.createElement('div');
-    nameDiv.className = 'conso-product-name';
-    nameDiv.textContent = p.display;
-    prodCell.appendChild(nameDiv);
-    if (p.ref) {
-      const refDiv = document.createElement('div');
-      refDiv.className = 'conso-product-ref';
-      refDiv.textContent = p.ref;
-      prodCell.appendChild(refDiv);
-    }
-    tr.appendChild(prodCell);
+    tr.appendChild(rowBuilder(rowEntry));
     let rowTotal = 0;
     for (let i = 0; i < months.length; i++) {
       const td = document.createElement('td');
-      const cell = cells.get(pKey + '|' + months[i]);
+      const cell = cellAccess(rowEntry, months[i]);
       if (cell) {
-        td.innerHTML = `<span class="conso-cell-qty"></span><br><span class="conso-cell-eur"></span>`;
-        td.querySelector('.conso-cell-qty').textContent = `${fmtStockQty(cell.qty)} ${cell.unit}`;
-        td.querySelector('.conso-cell-eur').textContent = fmtEur(cell.total);
+        if (cell.qty != null) {
+          // Mode produit : qty (unité) + € HT
+          td.innerHTML = `<span class="conso-cell-qty"></span><br><span class="conso-cell-eur"></span>`;
+          td.querySelector('.conso-cell-qty').textContent = `${fmtStockQty(cell.qty)} ${cell.unit}`;
+          td.querySelector('.conso-cell-eur').textContent = fmtEur(cell.total);
+        } else {
+          // Mode eOTP : montant € seulement (les unités sont hétérogènes)
+          td.innerHTML = `<span class="conso-cell-eur"></span>`;
+          td.querySelector('.conso-cell-eur').textContent = fmtEur(cell.total);
+        }
         rowTotal += cell.total;
         monthTotals[i] += cell.total;
       } else {
@@ -4054,6 +4147,14 @@ function renderConsommableRecap() {
   table.appendChild(tfoot);
 
   wrap.appendChild(table);
+}
+
+function setConsoRecapMode(mode) {
+  const next = (mode === 'eotp') ? 'eotp' : 'product';
+  if (state.consoRecapMode === next) return;
+  state.consoRecapMode = next;
+  save();
+  renderConsommableRecap();
 }
 
 function renderConsommable() {
@@ -4543,6 +4644,7 @@ function importData(file) {
       state.consoProducts = data.consoProducts || [];
       state.eotps = data.eotps || [];
       state.eotpRegistryInitialized = data.eotpRegistryInitialized === true;
+      state.consoRecapMode = (data.consoRecapMode === 'eotp') ? 'eotp' : 'product';
       state.adminDocs = data.adminDocs || {};
       state.workers = data.workers || [];
       state.workerDocs = data.workerDocs || {};
@@ -4590,6 +4692,7 @@ function resetAll() {
   state.consoProducts = [];
   state.eotps = [];
   state.eotpRegistryInitialized = false;
+  state.consoRecapMode = 'product';
   state.adminDocs = {};
   state.workers = [];
   state.workerDocs = {};
@@ -4726,6 +4829,11 @@ function init() {
   // ----- Données → eOTP : bouton + Ajouter une ligne de budget -----
   const eotpAddBtn = document.getElementById('eotpadd');
   if (eotpAddBtn) eotpAddBtn.addEventListener('click', addEOTP);
+
+  // ----- Consommable → Récap : bascule produit / eOTP -----
+  document.querySelectorAll('.recap-mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => setConsoRecapMode(btn.dataset.recapMode));
+  });
 
   // Service worker : enregistrement + rechargement auto à chaque mise à jour
   if ('serviceWorker' in navigator) {
