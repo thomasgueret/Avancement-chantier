@@ -2453,6 +2453,20 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   .app-title { font-size: 18px; }
 }
 
+/* Bottom sheet de saisie d'une commande consommable : plus grand que
+   les autres modales pour accueillir confortablement plusieurs lignes
+   de produits. Sur téléphone, monte presque jusqu'en haut de l'écran ;
+   sur grand écran, devient une modale centrée, plus large et plus haute.
+   Le body interne (.modal-body) scrolle si le contenu dépasse. */
+#consoentrysheet .modal-content {
+  /* Téléphone : on libère la hauteur (jusqu'à un petit écart en haut)
+     pour pouvoir afficher beaucoup de lignes. La barre de boutons reste
+     fixe en bas car .modal-content est flex-column avec .modal-body
+     scrollable. */
+  max-height: calc(100vh - 16px);
+  max-height: calc(100dvh - 16px);
+}
+
 /* Consommable → Récapitulatif : sur grand écran, le tableau peut
    échapper au max-width 720px de la page pour occuper exactement la
    largeur dont il a besoin (et seulement si nécessaire scroller).
@@ -2483,5 +2497,20 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   #sub-conrecap .recap-table {
     min-width: 0;
     width: max-content;
+  }
+  /* Sheet de saisie de commande : devient une modale centrée plus
+     généreuse, avec coins arrondis sur les 4 côtés et marge autour. */
+  #consoentrysheet {
+    align-items: center;
+    padding: 24px;
+  }
+  #consoentrysheet .modal-content {
+    max-width: min(960px, 100%);
+    max-height: min(900px, calc(100vh - 48px));
+    max-height: min(900px, calc(100dvh - 48px));
+    border-radius: var(--radius);
+    padding-bottom: 0;
+    box-shadow: 0 16px 56px rgba(20, 24, 33, 0.25);
+    animation: fadein 0.18s ease-out;
   }
 }
