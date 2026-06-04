@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.56';
+const APP_VERSION = '0.57';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -4005,8 +4005,8 @@ function renderConsommableRecapByProduct(wrap, empty, entries) {
 function renderConsommableRecapByEOTP(wrap, empty, entries) {
   const monthSet = new Set();
   // key = code eOTP ou '' pour « sans eOTP »
-  const eotpRows = new Map(); // key → { code, label }
-  const cells = new Map();    // key + '|' + month → { qty:0, total, unit:'mixed'|unit }
+  const eotpRows = new Map(); // key → { code, label, budget }
+  const cells = new Map();    // key + '|' + month → { total }
   for (const e of entries) {
     const monthKey = (e.date || '').slice(0, 7);
     if (!monthKey) continue;
@@ -4014,12 +4014,15 @@ function renderConsommableRecapByEOTP(wrap, empty, entries) {
     monthSet.add(monthKey);
     if (!eotpRows.has(code)) {
       const reg = code ? getEOTP(code) : null;
-      eotpRows.set(code, { code, label: reg?.label || '' });
+      eotpRows.set(code, {
+        code,
+        label: reg?.label || '',
+        budget: reg && Number.isFinite(reg.budget) ? reg.budget : 0
+      });
     }
     const cellKey = code + '|' + monthKey;
     if (!cells.has(cellKey)) cells.set(cellKey, { total: 0 });
-    const cell = cells.get(cellKey);
-    cell.total += (Number(e.qty) || 0) * (Number(e.unitPrice) || 0);
+    cells.get(cellKey).total += (Number(e.qty) || 0) * (Number(e.unitPrice) || 0);
   }
   if (eotpRows.size === 0) {
     empty.innerHTML = '<p>Aucune dépense affectée à un eOTP.</p><p class="hint">Renseigne un eOTP lors de la saisie d\'une commande pour suivre la consommation par ligne de budget.</p>';
@@ -4059,13 +4062,50 @@ function renderConsommableRecapByEOTP(wrap, empty, entries) {
     return cellTh;
   };
   const cellAccess = ([code], monthKey) => cells.get(code + '|' + monthKey);
-  buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess);
+  // Colonnes Budget et Reste à dépenser, entre eOTP et les mois.
+  // « Sans eOTP » n'a pas de budget : on affiche « — » dans les deux.
+  const extraCols = [
+    {
+      header: 'Budget',
+      className: 'recap-budget-col',
+      cell: ([code, row]) => {
+        if (!code) return { text: '—', className: 'recap-empty-cell' };
+        return { text: fmtEur(row.budget) };
+      },
+      footer: (_, rowTotals, rows) => {
+        const sum = rows.reduce((s, [code, r]) => s + (code ? r.budget : 0), 0);
+        return { text: fmtEur(sum) };
+      }
+    },
+    {
+      header: 'Reste',
+      className: 'recap-reste-col',
+      cell: ([code, row], rowTotal) => {
+        if (!code) return { text: '—', className: 'recap-empty-cell' };
+        const reste = row.budget - rowTotal;
+        return {
+          text: fmtEur(reste),
+          className: reste < 0 ? 'recap-reste-negative' : ''
+        };
+      },
+      footer: (grandTotal, rowTotals, rows) => {
+        const sumBudget = rows.reduce((s, [code, r]) => s + (code ? r.budget : 0), 0);
+        const sumDepenses = rows.reduce((s, [code, r], i) => s + (code ? rowTotals[i] : 0), 0);
+        const reste = sumBudget - sumDepenses;
+        return {
+          text: fmtEur(reste),
+          className: reste < 0 ? 'recap-reste-negative' : ''
+        };
+      }
+    }
+  ];
+  buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess, extraCols);
 }
 
 // Squelette commun produit×mois / eOTP×mois : un th de ligne, N colonnes
-// mois (€ uniquement pour le mode eOTP, qty+€ pour le mode produit),
-// un total par ligne et un footer total par mois + grand total.
-function buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess) {
+// extra optionnelles (ex. Budget/Reste pour le mode eOTP), N colonnes
+// mois, un total par ligne et un footer total par mois + grand total.
+function buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess, extraCols = []) {
   const table = document.createElement('table');
   table.className = 'recap-table conso-recap-table';
 
@@ -4076,6 +4116,13 @@ function buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess
   firstTh.scope = 'col';
   firstTh.textContent = headerLabel;
   headRow.appendChild(firstTh);
+  for (const col of extraCols) {
+    const th = document.createElement('th');
+    th.scope = 'col';
+    if (col.className) th.className = col.className;
+    th.textContent = col.header;
+    headRow.appendChild(th);
+  }
   for (const m of months) {
     const th = document.createElement('th');
     th.scope = 'col';
@@ -4092,10 +4139,14 @@ function buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess
 
   const tbody = document.createElement('tbody');
   const monthTotals = months.map(() => 0);
+  const rowTotals = [];
   let grandTotal = 0;
-  for (const rowEntry of rows) {
+  // 1er passage : calcule les rowTotals et stocke les <tr> pour insérer
+  // les colonnes extra (qui peuvent dépendre du rowTotal) après coup.
+  const rowFragments = rows.map((rowEntry) => {
     const tr = document.createElement('tr');
     tr.appendChild(rowBuilder(rowEntry));
+    const monthCells = [];
     let rowTotal = 0;
     for (let i = 0; i < months.length; i++) {
       const td = document.createElement('td');
@@ -4116,13 +4167,28 @@ function buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess
       } else {
         td.innerHTML = '<span class="recap-empty-cell">—</span>';
       }
+      monthCells.push(td);
+    }
+    rowTotals.push(rowTotal);
+    grandTotal += rowTotal;
+    return { tr, monthCells, rowEntry, rowTotal };
+  });
+  // 2e passage : insère les colonnes extra (avec rowTotal connu) entre
+  // le th de ligne et les mois, puis les cellules mois et le total.
+  for (const { tr, monthCells, rowEntry, rowTotal } of rowFragments) {
+    for (const col of extraCols) {
+      const td = document.createElement('td');
+      if (col.className) td.className = col.className;
+      const out = col.cell(rowEntry, rowTotal) || { text: '' };
+      td.textContent = out.text;
+      if (out.className) td.classList.add(...out.className.split(' ').filter(Boolean));
       tr.appendChild(td);
     }
+    for (const td of monthCells) tr.appendChild(td);
     const totalTd = document.createElement('td');
     totalTd.className = 'recap-total-col';
     totalTd.textContent = fmtEur(rowTotal);
     tr.appendChild(totalTd);
-    grandTotal += rowTotal;
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
@@ -4134,6 +4200,14 @@ function buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess
   footLabel.scope = 'row';
   footLabel.textContent = 'Total';
   footRow.appendChild(footLabel);
+  for (const col of extraCols) {
+    const td = document.createElement('td');
+    if (col.className) td.className = col.className;
+    const out = col.footer ? (col.footer(grandTotal, rowTotals, rows) || { text: '' }) : { text: '' };
+    td.textContent = out.text;
+    if (out.className) td.classList.add(...out.className.split(' ').filter(Boolean));
+    footRow.appendChild(td);
+  }
   for (let i = 0; i < months.length; i++) {
     const td = document.createElement('td');
     td.textContent = fmtEur(monthTotals[i]);

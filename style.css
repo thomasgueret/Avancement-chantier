@@ -435,6 +435,24 @@ input, select { font: inherit; }
   color: var(--text);
   border-left: 1px solid var(--border);
 }
+/* Colonnes Budget / Reste (mode eOTP), entre la 1ère colonne et les mois.
+   Affichage compact, monospace, légèrement contrasté pour les démarquer
+   visuellement des colonnes mensuelles. */
+.recap-table .recap-budget-col,
+.recap-table .recap-reste-col {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  background: var(--surface-2);
+  color: var(--text);
+}
+.recap-table .recap-budget-col { border-left: 1px solid var(--border); }
+.recap-table .recap-reste-col  { border-right: 1px solid var(--border); }
+/* Solde négatif (dépassement) en rouge */
+.recap-table td.recap-reste-negative,
+.recap-table tfoot td.recap-reste-negative {
+  color: var(--danger);
+}
 .recap-table td .recap-count { display: inline-block; }
 .recap-table td.is-weather {
   background: rgba(25, 118, 210, 0.08);
