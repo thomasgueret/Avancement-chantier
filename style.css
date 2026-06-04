@@ -2238,6 +2238,45 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   cursor: default;
   border-style: dashed;
 }
+/* PU déverrouillé via le crayon : remet en évidence (bordure pleine
+   accent, fond surface-2 pour distinguer la saisie en cours) */
+.conso-line-price.is-unlocked {
+  border-style: solid;
+  border-color: var(--accent);
+  background: var(--surface-2);
+  color: var(--text);
+}
+/* Wrapper autour du PU pour héberger le crayon de mise à jour du prix
+   canonique (visible uniquement pour les produits déjà au registre) */
+.conso-price-wrap {
+  position: relative;
+}
+.conso-price-wrap .conso-line-price {
+  padding-right: 30px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.conso-price-edit {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 26px; height: 26px;
+  border: none; background: transparent;
+  color: var(--text-3);
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+}
+.conso-price-edit svg { width: 14px; height: 14px; fill: currentColor; }
+.conso-price-edit:active {
+  background: var(--surface-2);
+  color: var(--accent);
+}
+/* `display: inline-flex` ci-dessus prend le pas sur le `display: none`
+   implicite de l'attribut [hidden] — il faut le rétablir explicitement. */
+.conso-price-edit[hidden] { display: none; }
 .conso-add-line {
   width: 100%;
   margin-top: 6px;

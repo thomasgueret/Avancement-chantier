@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.57';
+const APP_VERSION = '0.58';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -4078,7 +4078,8 @@ function renderConsommableRecapByEOTP(wrap, empty, entries) {
       }
     },
     {
-      header: 'Reste',
+      header: 'RAD',
+      headerTitle: 'Reste à dépenser (Budget − Total)',
       className: 'recap-reste-col',
       cell: ([code, row], rowTotal) => {
         if (!code) return { text: '—', className: 'recap-empty-cell' };
@@ -4120,6 +4121,7 @@ function buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess
     const th = document.createElement('th');
     th.scope = 'col';
     if (col.className) th.className = col.className;
+    if (col.headerTitle) th.title = col.headerTitle;
     th.textContent = col.header;
     headRow.appendChild(th);
   }
@@ -4377,7 +4379,12 @@ function buildOrderLine() {
       </div>
       <div>
         <label class="stock-form-label">Prix unitaire (€ HT)</label>
-        <input class="stock-form-input conso-line-price" type="text" inputmode="decimal" placeholder="0,00">
+        <div class="conso-price-wrap">
+          <input class="stock-form-input conso-line-price" type="text" inputmode="decimal" placeholder="0,00">
+          <button class="conso-price-edit" type="button" aria-label="Mettre à jour le prix unitaire du produit dans le registre (n'affecte pas les commandes précédentes)" hidden>
+            <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25Zm17.71-10.04a1 1 0 0 0 0-1.41l-2.51-2.51a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 2-2.0Z"/></svg>
+          </button>
+        </div>
       </div>
     </div>
     <div class="stock-qty-row">
@@ -4415,8 +4422,24 @@ function buildOrderLine() {
 
   const refInp   = details.querySelector('.conso-line-ref');
   const priceInp = details.querySelector('.conso-line-price');
+  const priceEdit = details.querySelector('.conso-price-edit');
+
+  // Clic crayon : ré-active la saisie du PU et mémorise l'intention de
+  // mettre à jour le prix canonique au prochain submit. Les anciennes
+  // entrées (autres commandes) conservent leur unitPrice historique.
+  priceEdit.addEventListener('click', () => {
+    line.dataset.priceUnlocked = '1';
+    priceInp.readOnly = false;
+    priceInp.classList.add('is-unlocked');
+    priceEdit.hidden = true;
+    setTimeout(() => { priceInp.focus(); priceInp.select(); }, 50);
+  });
 
   sel.addEventListener('change', () => {
+    // À tout changement de produit, on remet à zéro le déverrouillage
+    delete line.dataset.priceUnlocked;
+    priceInp.classList.remove('is-unlocked');
+    priceEdit.hidden = true;
     if (sel.value === NEW_ARTICLE_SENTINEL) {
       // Nouveau produit : nom à saisir, ref et PU éditables et vides
       newInp.hidden = false;
@@ -4435,8 +4458,11 @@ function buildOrderLine() {
       const canonical = getConsoProduct(sel.value);
       refInp.value    = canonical?.reference || '';
       refInp.readOnly = !!(canonical && canonical.reference);
-      priceInp.value  = canonical && canonical.unitPrice ? fmtPriceForInput(canonical.unitPrice) : '';
-      priceInp.readOnly = !!(canonical && canonical.unitPrice > 0);
+      const hasCanonPrice = !!(canonical && canonical.unitPrice > 0);
+      priceInp.value  = hasCanonPrice ? fmtPriceForInput(canonical.unitPrice) : '';
+      priceInp.readOnly = hasCanonPrice;
+      // Crayon visible uniquement quand un prix canonique est verrouillé
+      priceEdit.hidden = !hasCanonPrice;
       unitSel.value   = getMostRecentUnitForProduct(sel.value);
       details.hidden = false;
     } else {
@@ -4531,15 +4557,18 @@ function submitConsommableOrder() {
     // on respecte le registre canonique (ref + PU) pour ne pas
     // diverger silencieusement. Sinon on enregistre les valeurs
     // saisies dans le registre pour les futurs réemplois.
+    // Exception : si le crayon PU a été cliqué, on accepte le prix
+    // saisi et on marquera la ligne pour MAJ du registre au commit.
     const canonical = getConsoProduct(product);
+    const priceUnlocked = el.dataset.priceUnlocked === '1';
     let finalRef = ref;
     let finalPrice = p;
     if (canonical) {
       if (canonical.reference) finalRef = canonical.reference;
-      if (canonical.unitPrice > 0) finalPrice = canonical.unitPrice;
+      if (canonical.unitPrice > 0 && !priceUnlocked) finalPrice = canonical.unitPrice;
     }
 
-    parsed.push({ product, reference: finalRef, qty: q, unit: unit || 'u', unitPrice: finalPrice, eOTP });
+    parsed.push({ product, reference: finalRef, qty: q, unit: unit || 'u', unitPrice: finalPrice, eOTP, priceOverride: priceUnlocked });
   }
   if (parsed.length === 0) { showToast('Aucune ligne à enregistrer', 'error'); return; }
 
@@ -4553,8 +4582,15 @@ function submitConsommableOrder() {
   }
   for (const line of parsed) {
     // Insère ou complète le registre canonique (n'écrase pas les
-    // valeurs déjà saisies)
+    // valeurs déjà saisies). Si l'utilisateur a explicitement mis à
+    // jour le prix via le crayon, on FORCE l'écrasement du PU canonique
+    // (les anciennes entrées d'autres commandes conservent leur prix
+    // historique, déjà stocké dans entry.unitPrice).
     upsertConsoProduct({ name: line.product, reference: line.reference, unitPrice: line.unitPrice });
+    if (line.priceOverride) {
+      const canonical = getConsoProduct(line.product);
+      if (canonical) canonical.unitPrice = line.unitPrice;
+    }
     // Enregistre un nouveau code eOTP s'il n'est pas connu (sans budget
     // ni libellé, à compléter dans Données → eOTP)
     if (line.eOTP && !getEOTP(line.eOTP)) {
