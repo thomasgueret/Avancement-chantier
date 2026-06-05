@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.63';
+const APP_VERSION = '0.64';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -60,11 +60,19 @@ const state = {
   projectStart: '',          // date ISO YYYY-MM-DD : début prévu du chantier
   projectEnd: '',            // date ISO YYYY-MM-DD : fin prévue du chantier
   workBatches: [],           // Proto : lots de travaux [{ id, name, color }]
-  protoPlan: '',             // Proto : data URL du plan JPEG (ou '' si aucun)
-  protoPlanW: 0,             // largeur naturelle du plan en pixels (pour viewBox SVG)
-  protoPlanH: 0,             // hauteur naturelle du plan en pixels
+  // Proto : plans organisés en dossiers (multi-plans).
+  // Les anciens champs protoPlan/W/H sont migrés au 1er load.
+  protoFolders: [],          // [{ id, name }]
+  protoPlans: [],            // [{ id, folderId, name, dataUrl, w, h }]
+  protoActivePlanId: '',     // id du plan affiché (vide = aucun plan actif)
+  protoFilterLotId: '',      // filtre par lot ('' = tous)
+  protoFilterStatuses: ['todo', 'doing', 'done'], // statuts affichés
+  // Champs hérités (v0.63) — gardés pour migration douce, ignorés ensuite
+  protoPlan: '',
+  protoPlanW: 0,
+  protoPlanH: 0,
   // Proto : formes posées sur le plan
-  // [{ id, type:'point'|'line'|'rect',
+  // [{ id, planId, type:'point'|'line'|'rect',
   //    coords:{cx,cy} | {x1,y1,x2,y2} | {x,y,w,h},
   //    lotId, title, date, status:'todo'|'doing'|'done' }]
   protoShapes: [],
@@ -122,6 +130,11 @@ function load() {
     if (typeof data.projectStart === 'string') state.projectStart = data.projectStart;
     if (typeof data.projectEnd === 'string') state.projectEnd = data.projectEnd;
     if (Array.isArray(data.workBatches)) state.workBatches = data.workBatches;
+    if (Array.isArray(data.protoFolders)) state.protoFolders = data.protoFolders;
+    if (Array.isArray(data.protoPlans))   state.protoPlans   = data.protoPlans;
+    if (typeof data.protoActivePlanId === 'string') state.protoActivePlanId = data.protoActivePlanId;
+    if (typeof data.protoFilterLotId   === 'string') state.protoFilterLotId  = data.protoFilterLotId;
+    if (Array.isArray(data.protoFilterStatuses)) state.protoFilterStatuses = data.protoFilterStatuses;
     if (typeof data.protoPlan === 'string') state.protoPlan = data.protoPlan;
     if (Number.isFinite(data.protoPlanW)) state.protoPlanW = data.protoPlanW;
     if (Number.isFinite(data.protoPlanH)) state.protoPlanH = data.protoPlanH;
@@ -140,6 +153,7 @@ function load() {
   // Migrations post-load
   migrateConsoProductsFromEntries();
   migrateEOTPsFromConsoEntries();
+  migrateProtoPlansFromLegacy();
 }
 function save() {
   const data = {
@@ -169,9 +183,11 @@ function save() {
     projectStart: state.projectStart,
     projectEnd: state.projectEnd,
     workBatches: state.workBatches,
-    protoPlan: state.protoPlan,
-    protoPlanW: state.protoPlanW,
-    protoPlanH: state.protoPlanH,
+    protoFolders: state.protoFolders,
+    protoPlans: state.protoPlans,
+    protoActivePlanId: state.protoActivePlanId,
+    protoFilterLotId: state.protoFilterLotId,
+    protoFilterStatuses: state.protoFilterStatuses,
     protoShapes: state.protoShapes,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange
@@ -5111,10 +5127,16 @@ function importData(file) {
       state.projectStart = typeof data.projectStart === 'string' ? data.projectStart : '';
       state.projectEnd   = typeof data.projectEnd   === 'string' ? data.projectEnd   : '';
       state.workBatches  = Array.isArray(data.workBatches) ? data.workBatches : [];
+      state.protoFolders = Array.isArray(data.protoFolders) ? data.protoFolders : [];
+      state.protoPlans   = Array.isArray(data.protoPlans) ? data.protoPlans : [];
+      state.protoActivePlanId   = typeof data.protoActivePlanId === 'string' ? data.protoActivePlanId : '';
+      state.protoFilterLotId    = typeof data.protoFilterLotId  === 'string' ? data.protoFilterLotId  : '';
+      state.protoFilterStatuses = Array.isArray(data.protoFilterStatuses) ? data.protoFilterStatuses : ['todo','doing','done'];
       state.protoPlan    = typeof data.protoPlan === 'string' ? data.protoPlan : '';
       state.protoPlanW   = Number.isFinite(data.protoPlanW) ? data.protoPlanW : 0;
       state.protoPlanH   = Number.isFinite(data.protoPlanH) ? data.protoPlanH : 0;
       state.protoShapes  = Array.isArray(data.protoShapes) ? data.protoShapes : [];
+      migrateProtoPlansFromLegacy();
       state.adminDocs = data.adminDocs || {};
       state.workers = data.workers || [];
       state.workerDocs = data.workerDocs || {};
@@ -5166,6 +5188,11 @@ function resetAll() {
   state.projectStart = '';
   state.projectEnd = '';
   state.workBatches = [];
+  state.protoFolders = [];
+  state.protoPlans = [];
+  state.protoActivePlanId = '';
+  state.protoFilterLotId = '';
+  state.protoFilterStatuses = ['todo', 'doing', 'done'];
   state.protoPlan = '';
   state.protoPlanW = 0;
   state.protoPlanH = 0;
@@ -5279,20 +5306,153 @@ function buildLotRow(lot) {
   return li;
 }
 
+// ---------- Dossiers + plans (multi-plans) ----------
+function getProtoFolders() { return Array.isArray(state.protoFolders) ? state.protoFolders : []; }
+function getProtoPlans()   { return Array.isArray(state.protoPlans)   ? state.protoPlans   : []; }
+function getProtoFolder(id){ return getProtoFolders().find(f => f.id === id) || null; }
+function getProtoPlan(id)  { return getProtoPlans().find(p => p.id === id) || null; }
+function getActiveProtoPlan() {
+  const id = state.protoActivePlanId;
+  if (!id) return null;
+  return getProtoPlan(id);
+}
+function getPlansInFolder(folderId) {
+  return getProtoPlans().filter(p => p.folderId === folderId);
+}
+function ensureDefaultFolder() {
+  if (getProtoFolders().length > 0) return getProtoFolders()[0];
+  if (!Array.isArray(state.protoFolders)) state.protoFolders = [];
+  const folder = { id: 'fld_' + uid(), name: 'Mes plans' };
+  state.protoFolders.push(folder);
+  return folder;
+}
+function addProtoFolder() {
+  if (!Array.isArray(state.protoFolders)) state.protoFolders = [];
+  const folder = { id: 'fld_' + uid(), name: 'Nouveau dossier' };
+  state.protoFolders.push(folder);
+  save();
+  renderProtoManager();
+  renderProtoPlanSelector();
+}
+function renameProtoFolder(id, name) {
+  const f = getProtoFolder(id);
+  if (!f) return;
+  f.name = (name || '').trim();
+  save();
+  renderProtoPlanSelector();
+}
+function removeProtoFolder(id) {
+  const f = getProtoFolder(id);
+  if (!f) return;
+  const plansInside = getPlansInFolder(id);
+  const nbShapes = state.protoShapes.filter(s => plansInside.some(p => p.id === s.planId)).length;
+  const msg = `Supprimer le dossier « ${f.name || 'sans nom'} » avec ${plansInside.length} plan(s) et ${nbShapes} forme(s) ?`;
+  if (!confirm(msg)) return;
+  const ids = new Set(plansInside.map(p => p.id));
+  state.protoPlans = getProtoPlans().filter(p => p.folderId !== id);
+  state.protoShapes = state.protoShapes.filter(s => !ids.has(s.planId));
+  state.protoFolders = getProtoFolders().filter(x => x.id !== id);
+  // Si le plan actif a disparu, en choisit un autre
+  if (!getActiveProtoPlan()) state.protoActivePlanId = (getProtoPlans()[0]?.id) || '';
+  save();
+  renderProtoManager();
+  renderProto();
+}
+function renameProtoPlan(id, name) {
+  const p = getProtoPlan(id);
+  if (!p) return;
+  p.name = (name || '').trim();
+  save();
+  renderProtoPlanSelector();
+}
+function removeProtoPlan(id) {
+  const p = getProtoPlan(id);
+  if (!p) return;
+  const nb = state.protoShapes.filter(s => s.planId === id).length;
+  if (!confirm(`Supprimer le plan « ${p.name || 'sans nom'} » et ses ${nb} forme(s) ?`)) return;
+  state.protoPlans = getProtoPlans().filter(x => x.id !== id);
+  state.protoShapes = state.protoShapes.filter(s => s.planId !== id);
+  if (state.protoActivePlanId === id) {
+    state.protoActivePlanId = (getProtoPlans()[0]?.id) || '';
+  }
+  save();
+  renderProtoManager();
+  renderProto();
+}
+function setActiveProtoPlan(id) {
+  const p = getProtoPlan(id);
+  if (!p) return;
+  state.protoActivePlanId = id;
+  save();
+  renderProto();
+}
+// Migration douce : si l'utilisateur avait un plan via les anciens
+// champs protoPlan/W/H (v0.63), on le déplace dans un dossier par
+// défaut et on associe les formes existantes au nouveau plan.
+function migrateProtoPlansFromLegacy() {
+  if (!state.protoPlan) return;            // rien à migrer
+  if (getProtoPlans().length > 0) return;  // déjà migré
+  const folder = ensureDefaultFolder();
+  const plan = {
+    id: 'pln_' + uid(), folderId: folder.id, name: 'Plan',
+    dataUrl: state.protoPlan, w: state.protoPlanW, h: state.protoPlanH
+  };
+  state.protoPlans.push(plan);
+  state.protoActivePlanId = plan.id;
+  // Associe les formes orphelines au plan migré
+  for (const sh of (state.protoShapes || [])) {
+    if (!sh.planId) sh.planId = plan.id;
+  }
+  // Vide les champs hérités pour libérer la place (le contenu est
+  // désormais dans state.protoPlans[0].dataUrl)
+  state.protoPlan = '';
+  state.protoPlanW = 0;
+  state.protoPlanH = 0;
+}
+
+// ---------- Filtres ----------
+function shapeMatchesFilters(sh) {
+  if (state.protoFilterLotId && sh.lotId !== state.protoFilterLotId) return false;
+  if (Array.isArray(state.protoFilterStatuses) && !state.protoFilterStatuses.includes(sh.status || 'todo')) return false;
+  return true;
+}
+function setProtoFilterLot(id) {
+  state.protoFilterLotId = id || '';
+  save();
+  renderProtoSVG();
+}
+function toggleProtoFilterStatus(status) {
+  if (!Array.isArray(state.protoFilterStatuses)) state.protoFilterStatuses = ['todo', 'doing', 'done'];
+  const idx = state.protoFilterStatuses.indexOf(status);
+  if (idx >= 0) state.protoFilterStatuses.splice(idx, 1);
+  else state.protoFilterStatuses.push(status);
+  save();
+  refreshProtoFilterStatusBar();
+  renderProtoSVG();
+}
+
 // ---------- Rendu de la page Proto ----------
 function renderProto() {
   const empty  = document.getElementById('protoempty');
   const editor = document.getElementById('protoeditor');
   if (!empty || !editor) return;
-  const hasPlan = !!state.protoPlan;
-  empty.hidden  = hasPlan;
-  editor.hidden = !hasPlan;
-  if (!hasPlan) return;
+  const activePlan = getActiveProtoPlan();
+  // S'il existe au moins un plan mais qu'aucun n'est actif, en active un.
+  if (!activePlan && getProtoPlans().length > 0) {
+    state.protoActivePlanId = getProtoPlans()[0].id;
+    save();
+  }
+  const plan = getActiveProtoPlan();
+  empty.hidden  = !!plan;
+  editor.hidden = !plan;
+  if (!plan) return;
   // Image + SVG calés sur la même viewBox = dimensions naturelles px
   const img = document.getElementById('protoimage');
-  img.src = state.protoPlan;
+  img.src = plan.dataUrl;
   const svg = document.getElementById('protosvg');
-  svg.setAttribute('viewBox', `0 0 ${state.protoPlanW} ${state.protoPlanH}`);
+  svg.setAttribute('viewBox', `0 0 ${plan.w} ${plan.h}`);
+  renderProtoPlanSelector();
+  renderProtoFilterBar();
   renderProtoSVG();
   renderProtoLegend();
   refreshProtoToolbar();
@@ -5302,17 +5462,28 @@ function renderProtoSVG() {
   const svg = document.getElementById('protosvg');
   if (!svg) return;
   svg.innerHTML = '';
-  for (const sh of (state.protoShapes || [])) {
-    svg.appendChild(buildShapeElement(sh));
-  }
+  const planId = state.protoActivePlanId;
+  if (!planId) return;
+  // Ordre z : rectangles en bas, lignes au milieu, points au-dessus.
+  // Filtres lot + statut appliqués ici (les formes filtrées
+  // disparaissent du DOM, donc ne reçoivent pas non plus de clic).
+  const orderRank = { rect: 0, line: 1, point: 2 };
+  const shapes = (state.protoShapes || [])
+    .filter(s => s.planId === planId)
+    .filter(shapeMatchesFilters)
+    .slice()
+    .sort((a, b) => (orderRank[a.type] ?? 0) - (orderRank[b.type] ?? 0));
+  for (const sh of shapes) svg.appendChild(buildShapeElement(sh));
 }
 
 function buildShapeElement(sh) {
   const ns = 'http://www.w3.org/2000/svg';
+  const plan = getActiveProtoPlan();
+  if (!plan) return document.createElementNS(ns, 'g');
   const lot = getWorkBatch(sh.lotId);
   const lotColor = lot ? lot.color : '#888';
   const statusColor = PROTO_STATUS_COLOR[sh.status] || PROTO_STATUS_COLOR.todo;
-  const sw = Math.max(state.protoPlanW, state.protoPlanH) / 200; // stroke ~ 0.5% du plan
+  const sw = Math.max(plan.w, plan.h) / 200; // stroke ~ 0.5% du plan
   let el;
   if (sh.type === 'point') {
     el = document.createElementNS(ns, 'circle');
@@ -5356,7 +5527,9 @@ function renderProtoLegend() {
   const el = document.getElementById('protolegend');
   if (!el) return;
   const counts = { todo: 0, doing: 0, done: 0 };
+  const planId = state.protoActivePlanId;
   for (const sh of (state.protoShapes || [])) {
+    if (sh.planId !== planId) continue;
     if (counts[sh.status] != null) counts[sh.status]++;
   }
   el.innerHTML = '';
@@ -5366,6 +5539,61 @@ function renderProtoLegend() {
     chip.innerHTML = `<span class="proto-legend-dot" style="background:${PROTO_STATUS_COLOR[s]}"></span><span>${PROTO_STATUS_LABEL[s]} : <strong>${counts[s]}</strong></span>`;
     el.appendChild(chip);
   }
+}
+
+function renderProtoPlanSelector() {
+  const sel = document.getElementById('protoplanselect');
+  if (!sel) return;
+  sel.innerHTML = '';
+  const folders = getProtoFolders();
+  const plans = getProtoPlans();
+  if (plans.length === 0) {
+    sel.appendChild(new Option('Aucun plan', ''));
+    return;
+  }
+  // Groupe par dossier (avec <optgroup> pour la lisibilité)
+  for (const folder of folders) {
+    const fplans = getPlansInFolder(folder.id);
+    if (fplans.length === 0) continue;
+    const group = document.createElement('optgroup');
+    group.label = folder.name || '(dossier sans nom)';
+    for (const p of fplans) {
+      const opt = new Option(p.name || '(plan sans nom)', p.id);
+      group.appendChild(opt);
+    }
+    sel.appendChild(group);
+  }
+  // Plans orphelins (folderId inconnu)
+  const orphans = plans.filter(p => !getProtoFolder(p.folderId));
+  if (orphans.length > 0) {
+    const group = document.createElement('optgroup');
+    group.label = '(sans dossier)';
+    for (const p of orphans) group.appendChild(new Option(p.name || '(sans nom)', p.id));
+    sel.appendChild(group);
+  }
+  sel.value = state.protoActivePlanId || '';
+}
+
+function renderProtoFilterBar() {
+  const lotSel = document.getElementById('protofilterlot');
+  if (lotSel) {
+    lotSel.innerHTML = '';
+    lotSel.appendChild(new Option('Tous les lots', ''));
+    for (const lot of getWorkBatches()) {
+      if (!lot.name) continue;
+      lotSel.appendChild(new Option(lot.name, lot.id));
+    }
+    lotSel.value = state.protoFilterLotId || '';
+  }
+  refreshProtoFilterStatusBar();
+}
+function refreshProtoFilterStatusBar() {
+  const active = new Set(state.protoFilterStatuses || []);
+  document.querySelectorAll('.proto-filter-status[data-proto-filter-status]').forEach(btn => {
+    const on = active.has(btn.dataset.protoFilterStatus);
+    btn.classList.toggle('is-active', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
 }
 
 function refreshProtoToolbar() {
@@ -5384,7 +5612,9 @@ function setProtoTool(tool) {
 }
 
 // ---------- Upload du plan (avec compression) ----------
-function handleProtoUpload(file) {
+// folderId : dossier de destination (créé si nécessaire). Si vide,
+// on utilise le dossier par défaut.
+function handleProtoUpload(file, folderId) {
   if (!file) return;
   if (!/^image\/jpe?g$/i.test(file.type) && !/\.jpe?g$/i.test(file.name)) {
     showToast('Format invalide : JPG/JPEG uniquement', 'error');
@@ -5405,15 +5635,25 @@ function handleProtoUpload(file) {
       ctx.drawImage(img, 0, 0, tw, th);
       const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
       try {
-        state.protoPlan = dataUrl;
-        state.protoPlanW = tw;
-        state.protoPlanH = th;
-        // Si on remplace un plan, on garde les formes (coords relatives)
+        const folder = (folderId && getProtoFolder(folderId)) || ensureDefaultFolder();
+        // Nom : "Plan 1", "Plan 2"…
+        const usedNames = new Set(getProtoPlans().map(p => p.name));
+        let n = 1, name = 'Plan 1';
+        while (usedNames.has(name)) { n++; name = 'Plan ' + n; }
+        // Reprend le nom du fichier si court et propre
+        const baseName = (file.name || '').replace(/\.[a-z]+$/i, '').trim();
+        if (baseName && baseName.length <= 40 && !usedNames.has(baseName)) name = baseName;
+        const plan = {
+          id: 'pln_' + uid(), folderId: folder.id, name,
+          dataUrl, w: tw, h: th
+        };
+        state.protoPlans.push(plan);
+        state.protoActivePlanId = plan.id;
         save();
         renderProto();
-        showToast('Plan chargé');
+        renderProtoManager();
+        showToast('Plan ajouté');
       } catch (err) {
-        // Quota localStorage exceeded
         showToast('Plan trop lourd (quota navigateur). Essayez un fichier plus petit.', 'error');
       }
     };
@@ -5425,16 +5665,102 @@ function handleProtoUpload(file) {
 }
 
 function clearProtoShapes() {
-  if ((state.protoShapes || []).length === 0) return;
-  if (!confirm(`Supprimer les ${state.protoShapes.length} forme(s) du plan ?`)) return;
-  state.protoShapes = [];
+  const planId = state.protoActivePlanId;
+  const shapes = (state.protoShapes || []).filter(s => s.planId === planId);
+  if (shapes.length === 0) return;
+  if (!confirm(`Supprimer les ${shapes.length} forme(s) du plan affiché ?`)) return;
+  state.protoShapes = state.protoShapes.filter(s => s.planId !== planId);
   save();
   renderProtoSVG();
   renderProtoLegend();
 }
-function replaceProtoPlan() {
-  const inp = document.getElementById('protoupload');
-  if (inp) inp.click();
+
+// ---------- Manager (modal de gestion des dossiers + plans) ----------
+let protoUploadTargetFolderId = '';
+function openProtoManager() {
+  const m = document.getElementById('protomanager');
+  if (!m) return;
+  renderProtoManager();
+  m.hidden = false;
+  document.body.style.overflow = 'hidden';
+}
+function closeProtoManager() {
+  const m = document.getElementById('protomanager');
+  if (m) m.hidden = true;
+  document.body.style.overflow = '';
+}
+function renderProtoManager() {
+  const list = document.getElementById('protomanagerlist');
+  if (!list) return;
+  list.innerHTML = '';
+  const folders = getProtoFolders();
+  if (folders.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'eotp-empty';
+    p.textContent = 'Aucun dossier. Tapez « + Dossier » pour en créer un.';
+    list.appendChild(p);
+    return;
+  }
+  for (const folder of folders) {
+    list.appendChild(buildProtoFolderRow(folder));
+  }
+}
+function buildProtoFolderRow(folder) {
+  const wrap = document.createElement('div');
+  wrap.className = 'proto-folder';
+  wrap.dataset.folderId = folder.id;
+  wrap.innerHTML = `
+    <div class="proto-folder-head">
+      <span class="proto-folder-icon" aria-hidden="true">📁</span>
+      <input class="proto-folder-name" type="text" maxlength="40">
+      <button class="proto-folder-add-plan" type="button" aria-label="Ajouter un plan dans ce dossier">+ Plan</button>
+      <button class="proto-folder-delete" type="button" aria-label="Supprimer ce dossier">
+        <svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+      </button>
+    </div>
+    <ul class="proto-plans-list"></ul>
+  `;
+  const nameInp = wrap.querySelector('.proto-folder-name');
+  nameInp.value = folder.name || '';
+  nameInp.addEventListener('input', () => renameProtoFolder(folder.id, nameInp.value));
+  wrap.querySelector('.proto-folder-delete').addEventListener('click', () => removeProtoFolder(folder.id));
+  wrap.querySelector('.proto-folder-add-plan').addEventListener('click', () => {
+    protoUploadTargetFolderId = folder.id;
+    const inp = document.getElementById('protoupload');
+    if (inp) inp.click();
+  });
+  const ul = wrap.querySelector('.proto-plans-list');
+  const plans = getPlansInFolder(folder.id);
+  if (plans.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'proto-plan-empty';
+    li.textContent = 'Aucun plan. Tapez « + Plan » pour téléverser.';
+    ul.appendChild(li);
+  } else {
+    for (const p of plans) ul.appendChild(buildProtoPlanRow(p));
+  }
+  return wrap;
+}
+function buildProtoPlanRow(plan) {
+  const li = document.createElement('li');
+  li.className = 'proto-plan-row' + (plan.id === state.protoActivePlanId ? ' is-active' : '');
+  li.innerHTML = `
+    <span class="proto-plan-icon" aria-hidden="true">📄</span>
+    <input class="proto-plan-name" type="text" maxlength="40">
+    <button class="proto-plan-load" type="button">Ouvrir</button>
+    <button class="proto-plan-delete" type="button" aria-label="Supprimer ce plan">
+      <svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+    </button>
+  `;
+  const nameInp = li.querySelector('.proto-plan-name');
+  nameInp.value = plan.name || '';
+  nameInp.addEventListener('input', () => renameProtoPlan(plan.id, nameInp.value));
+  li.querySelector('.proto-plan-load').addEventListener('click', () => {
+    setActiveProtoPlan(plan.id);
+    closeProtoManager();
+  });
+  li.querySelector('.proto-plan-delete').addEventListener('click', () => removeProtoPlan(plan.id));
+  return li;
 }
 
 // ---------- Dessin sur le SVG ----------
@@ -5456,10 +5782,12 @@ function startProtoDraw(evt) {
   if (protoTool === 'select') return;
   // Ignore les clics sur une forme existante
   if (evt.target && evt.target.classList && evt.target.classList.contains('proto-shape')) return;
+  const plan = getActiveProtoPlan();
+  if (!plan) return;
   const c = protoSvgCoords(evt);
   if (!c) return;
   if (protoTool === 'point') {
-    const sh = { id: 's_' + uid(), type: 'point', coords: { cx: c.x, cy: c.y },
+    const sh = { id: 's_' + uid(), planId: plan.id, type: 'point', coords: { cx: c.x, cy: c.y },
       lotId: '', title: '', date: '', status: 'todo' };
     state.protoShapes.push(sh);
     save();
@@ -5468,22 +5796,33 @@ function startProtoDraw(evt) {
     openProtoShapeSheet(sh.id);
     return;
   }
-  // Pour line + rect : on commence un dessin avec drag
-  protoDrawing = { startX: c.x, startY: c.y, type: protoTool, previewEl: null };
+  // Pour line + rect : on commence un dessin avec drag.
+  // setPointerCapture : crucial sur mobile pour recevoir les
+  // pointermove/up même si le doigt sort temporairement du SVG.
+  const svg = document.getElementById('protosvg');
+  if (svg && evt.pointerId != null && svg.setPointerCapture) {
+    try { svg.setPointerCapture(evt.pointerId); } catch (_) {}
+  }
+  protoDrawing = { startX: c.x, startY: c.y, type: protoTool, previewEl: null, pointerId: evt.pointerId };
   evt.preventDefault();
 }
 function moveProtoDraw(evt) {
   if (!protoDrawing) return;
+  // Sur certains navigateurs, on reçoit aussi des pointermove pour
+  // d'autres pointers que celui qui a démarré le drag — on ignore.
+  if (protoDrawing.pointerId != null && evt.pointerId != null && evt.pointerId !== protoDrawing.pointerId) return;
   const c = protoSvgCoords(evt);
   if (!c) return;
+  const plan = getActiveProtoPlan();
+  if (!plan) return;
   const ns = 'http://www.w3.org/2000/svg';
   const svg = document.getElementById('protosvg');
   if (!protoDrawing.previewEl) {
     const el = document.createElementNS(ns, protoDrawing.type === 'line' ? 'line' : 'rect');
     el.classList.add('proto-shape-preview');
     el.setAttribute('stroke', PROTO_STATUS_COLOR.todo);
-    el.setAttribute('stroke-width', Math.max(state.protoPlanW, state.protoPlanH) / 100);
-    el.setAttribute('stroke-dasharray', Math.max(state.protoPlanW, state.protoPlanH) / 50);
+    el.setAttribute('stroke-width', Math.max(plan.w, plan.h) / 100);
+    el.setAttribute('stroke-dasharray', Math.max(plan.w, plan.h) / 50);
     el.setAttribute('fill', protoDrawing.type === 'rect' ? 'rgba(211,47,47,0.15)' : 'none');
     svg.appendChild(el);
     protoDrawing.previewEl = el;
@@ -5503,17 +5842,25 @@ function moveProtoDraw(evt) {
     protoDrawing.previewEl.setAttribute('width', w);
     protoDrawing.previewEl.setAttribute('height', h);
   }
+  evt.preventDefault();
 }
 function endProtoDraw(evt) {
   if (!protoDrawing) return;
+  if (protoDrawing.pointerId != null && evt.pointerId != null && evt.pointerId !== protoDrawing.pointerId) return;
+  const plan = getActiveProtoPlan();
   const c = protoSvgCoords(evt) || { x: protoDrawing.startX, y: protoDrawing.startY };
   if (protoDrawing.previewEl) protoDrawing.previewEl.remove();
-  const minSize = Math.max(state.protoPlanW, state.protoPlanH) / 100;
+  const svg = document.getElementById('protosvg');
+  if (svg && protoDrawing.pointerId != null && svg.releasePointerCapture) {
+    try { svg.releasePointerCapture(protoDrawing.pointerId); } catch (_) {}
+  }
+  if (!plan) { protoDrawing = null; return; }
+  const minSize = Math.max(plan.w, plan.h) / 100;
   let sh = null;
   if (protoDrawing.type === 'line') {
     const dist = Math.hypot(c.x - protoDrawing.startX, c.y - protoDrawing.startY);
     if (dist < minSize) { protoDrawing = null; return; } // trop court → ignore
-    sh = { id: 's_' + uid(), type: 'line',
+    sh = { id: 's_' + uid(), planId: plan.id, type: 'line',
       coords: { x1: protoDrawing.startX, y1: protoDrawing.startY, x2: c.x, y2: c.y },
       lotId: '', title: '', date: '', status: 'todo' };
   } else {
@@ -5522,7 +5869,7 @@ function endProtoDraw(evt) {
     const w = Math.abs(c.x - protoDrawing.startX);
     const h = Math.abs(c.y - protoDrawing.startY);
     if (w < minSize || h < minSize) { protoDrawing = null; return; }
-    sh = { id: 's_' + uid(), type: 'rect', coords: { x, y, w, h },
+    sh = { id: 's_' + uid(), planId: plan.id, type: 'rect', coords: { x, y, w, h },
       lotId: '', title: '', date: '', status: 'todo' };
   }
   protoDrawing = null;
@@ -5728,7 +6075,8 @@ function init() {
   const protoUpload = document.getElementById('protoupload');
   if (protoUpload) protoUpload.addEventListener('change', (e) => {
     const f = e.target.files && e.target.files[0];
-    handleProtoUpload(f);
+    handleProtoUpload(f, protoUploadTargetFolderId);
+    protoUploadTargetFolderId = '';
     e.target.value = ''; // permet de re-uploader le même fichier
   });
   document.querySelectorAll('.proto-tool-btn[data-proto-tool]').forEach(btn => {
@@ -5736,14 +6084,30 @@ function init() {
   });
   const protoClear = document.getElementById('protoclear');
   if (protoClear) protoClear.addEventListener('click', clearProtoShapes);
-  const protoReup = document.getElementById('protoreupload');
-  if (protoReup) protoReup.addEventListener('click', replaceProtoPlan);
+  const protoOpenManager = document.getElementById('protoopenmanager');
+  if (protoOpenManager) protoOpenManager.addEventListener('click', openProtoManager);
+  const protoEmptyManager = document.getElementById('protoemptymanager');
+  if (protoEmptyManager) protoEmptyManager.addEventListener('click', openProtoManager);
+  const protoPlanSel = document.getElementById('protoplanselect');
+  if (protoPlanSel) protoPlanSel.addEventListener('change', (e) => setActiveProtoPlan(e.target.value));
+  const protoFilterLot = document.getElementById('protofilterlot');
+  if (protoFilterLot) protoFilterLot.addEventListener('change', (e) => setProtoFilterLot(e.target.value));
+  document.querySelectorAll('.proto-filter-status[data-proto-filter-status]').forEach(btn => {
+    btn.addEventListener('click', () => toggleProtoFilterStatus(btn.dataset.protoFilterStatus));
+  });
+  // Manager modal
+  const protoMgr = document.getElementById('protomanager');
+  if (protoMgr) {
+    document.getElementById('protomanagerclose').addEventListener('click', closeProtoManager);
+    protoMgr.addEventListener('click', (e) => { if (e.target === protoMgr) closeProtoManager(); });
+    document.getElementById('protomanageraddfolder').addEventListener('click', addProtoFolder);
+  }
   const protoSvg = document.getElementById('protosvg');
   if (protoSvg) {
     protoSvg.addEventListener('pointerdown', startProtoDraw);
     protoSvg.addEventListener('pointermove', moveProtoDraw);
     protoSvg.addEventListener('pointerup',   endProtoDraw);
-    protoSvg.addEventListener('pointerleave', (e) => { if (protoDrawing) endProtoDraw(e); });
+    protoSvg.addEventListener('pointercancel', (e) => { if (protoDrawing) endProtoDraw(e); });
   }
   const protoSheet = document.getElementById('protoshapesheet');
   if (protoSheet) {

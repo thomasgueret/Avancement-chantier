@@ -312,24 +312,48 @@
     <section class="page" id="page-proto">
       <p class="section-help" id="protohelp">Téléversez un plan (JPG/JPEG) puis ajoutez points, lignes ou rectangles pour localiser les tâches. Tapez sur une forme pour la documenter (lot, intitulé, date, statut). <em>Prototype expérimental — vos retours sont les bienvenus.</em></p>
 
+      <!-- Input de fichier partagé (caché). Le ciblage du dossier se
+           fait via la variable JS protoUploadTargetFolderId, mise à
+           jour par le bouton qui déclenche le picker. -->
+      <input type="file" id="protoupload" accept="image/jpeg,image/jpg,.jpg,.jpeg" hidden>
+
       <div class="proto-empty" id="protoempty">
         <p>Aucun plan chargé.</p>
-        <label class="btn-primary proto-upload-btn">
-          Téléverser un plan (JPG)
-          <input type="file" id="protoupload" accept="image/jpeg,image/jpg,.jpg,.jpeg" hidden>
-        </label>
-        <p class="hint" id="protouploadhint">Le plan est compressé à 1920px max pour rester sous la limite du navigateur.</p>
+        <button class="btn-primary proto-upload-btn" id="protoemptymanager" type="button">Gérer mes dossiers et plans</button>
+        <p class="hint">Créez un dossier puis téléversez des plans (JPG, compressés à 1920px max).</p>
       </div>
 
       <div class="proto-editor" id="protoeditor" hidden>
+        <!-- Sélecteur de plan + bouton « Gérer » -->
+        <div class="proto-plan-bar">
+          <label for="protoplanselect" class="proto-plan-bar-label">Plan</label>
+          <select id="protoplanselect" class="stock-form-input proto-plan-select"></select>
+          <button class="proto-tool-btn proto-tool-secondary" id="protoopenmanager" type="button">📁<span> Gérer</span></button>
+        </div>
+
+        <!-- Filtres lot + statut -->
+        <div class="proto-filter-bar">
+          <div class="proto-filter-group">
+            <label for="protofilterlot" class="proto-filter-label">Lot</label>
+            <select id="protofilterlot" class="stock-form-input proto-filter-select"></select>
+          </div>
+          <div class="proto-filter-group proto-filter-group-status">
+            <span class="proto-filter-label">Statut</span>
+            <div class="proto-filter-status-bar" role="group" aria-label="Filtrer par statut">
+              <button class="proto-filter-status" data-proto-filter-status="todo"  type="button" aria-pressed="true">À faire</button>
+              <button class="proto-filter-status" data-proto-filter-status="doing" type="button" aria-pressed="true">En cours</button>
+              <button class="proto-filter-status" data-proto-filter-status="done"  type="button" aria-pressed="true">Réalisée</button>
+            </div>
+          </div>
+        </div>
+
         <div class="proto-toolbar" role="toolbar" aria-label="Outils de dessin">
           <button class="proto-tool-btn" data-proto-tool="select" type="button" aria-pressed="true" title="Sélectionner / éditer une forme">↖<span> Sélection</span></button>
           <button class="proto-tool-btn" data-proto-tool="point" type="button" aria-pressed="false" title="Ajouter un point">●<span> Point</span></button>
           <button class="proto-tool-btn" data-proto-tool="line" type="button" aria-pressed="false" title="Tracer une ligne">／<span> Ligne</span></button>
-          <button class="proto-tool-btn" data-proto-tool="rect" type="button" aria-pressed="false" title="Tracer un rectangle">▭<span> Rectangle</span></button>
+          <button class="proto-tool-btn" data-proto-tool="rect" type="button" aria-pressed="false" title="Tracer un rectangle (tape + glisser)">▭<span> Rectangle</span></button>
           <div class="proto-toolbar-sep"></div>
-          <button class="proto-tool-btn proto-tool-secondary" id="protoreupload" type="button" title="Charger un autre plan">⇅<span> Plan</span></button>
-          <button class="proto-tool-btn proto-tool-danger" id="protoclear" type="button" title="Supprimer toutes les formes">🗑<span> Tout effacer</span></button>
+          <button class="proto-tool-btn proto-tool-danger" id="protoclear" type="button" title="Supprimer toutes les formes de ce plan">🗑<span> Effacer</span></button>
         </div>
         <div class="proto-canvas-wrap" id="protocanvaswrap">
           <img id="protoimage" alt="Plan du bâtiment">
@@ -466,6 +490,21 @@
         <button class="btn-secondary conso-add-line" id="consoaddline" type="button">+ Ajouter une ligne</button>
 
         <button class="btn-primary stock-submit-btn" id="consoentrysave" type="button">Enregistrer la commande</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== Modale : gestion des dossiers et plans du Proto ============== -->
+  <div class="modal-overlay" id="protomanager" hidden>
+    <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="protomanagertitle">
+      <div class="modal-header">
+        <h3 class="modal-title" id="protomanagertitle">Mes plans</h3>
+        <button class="modal-close" id="protomanagerclose" type="button" aria-label="Fermer">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="section-help">Organisez vos plans en dossiers. Cliquez sur le nom d'un dossier ou d'un plan pour le renommer, sur « Ouvrir » pour basculer dessus, sur ✕ pour supprimer.</p>
+        <div id="protomanagerlist" class="proto-manager-list"></div>
+        <button class="btn-primary proto-folder-add-btn" id="protomanageraddfolder" type="button">+ Dossier</button>
       </div>
     </div>
   </div>
