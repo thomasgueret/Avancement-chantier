@@ -352,12 +352,24 @@
           <button class="proto-tool-btn" data-proto-tool="point" type="button" aria-pressed="false" title="Ajouter un point">●<span> Point</span></button>
           <button class="proto-tool-btn" data-proto-tool="line" type="button" aria-pressed="false" title="Tracer une ligne">／<span> Ligne</span></button>
           <button class="proto-tool-btn" data-proto-tool="rect" type="button" aria-pressed="false" title="Tracer un rectangle (tape + glisser)">▭<span> Rectangle</span></button>
+          <button class="proto-tool-btn" data-proto-tool="polygon" type="button" aria-pressed="false" title="Tracer un polygone (clic par clic, refermer en cliquant le premier point)">⬠<span> Polygone</span></button>
           <div class="proto-toolbar-sep"></div>
           <button class="proto-tool-btn proto-tool-danger" id="protoclear" type="button" title="Supprimer toutes les formes de ce plan">🗑<span> Effacer</span></button>
         </div>
         <div class="proto-canvas-wrap" id="protocanvaswrap">
-          <img id="protoimage" alt="Plan du bâtiment">
-          <svg id="protosvg" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"></svg>
+          <div class="proto-canvas-inner" id="protocanvasinner">
+            <img id="protoimage" alt="Plan du bâtiment">
+            <svg id="protosvg" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"></svg>
+          </div>
+          <div class="proto-zoom-bar" role="toolbar" aria-label="Zoom">
+            <button class="proto-zoom-btn" id="protozoomin"    type="button" title="Zoomer">+</button>
+            <button class="proto-zoom-btn" id="protozoomout"   type="button" title="Dézoomer">−</button>
+            <button class="proto-zoom-btn" id="protozoomreset" type="button" title="Réinitialiser le zoom">⟲</button>
+          </div>
+          <div class="proto-poly-hint" id="protopolyhint" hidden>
+            <span id="protopolyhinttext">Cliquez pour placer un sommet — fermez en cliquant sur le premier point.</span>
+            <button class="proto-poly-cancel" id="protopolycancel" type="button">Annuler</button>
+          </div>
         </div>
         <div class="proto-legend" id="protolegend"></div>
       </div>

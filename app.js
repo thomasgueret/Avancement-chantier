@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.64';
+const APP_VERSION = '0.65';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -5234,9 +5234,18 @@ const PROTO_MAX_PLAN_DIM = 1920; // px max sur le plus grand côté
 const PROTO_DEFAULT_LOT_COLORS = ['#0a84ff', '#ff9500', '#5856d6', '#34c759', '#ff2d55', '#af52de'];
 
 // État UI (non persisté) du Proto
-let protoTool = 'select';   // 'select' | 'point' | 'line' | 'rect'
-let protoDrawing = null;    // { id, startX, startY } pendant un dessin
+let protoTool = 'select';   // 'select' | 'point' | 'line' | 'rect' | 'polygon'
+let protoDrawing = null;    // état pendant un dessin (rect/line)
+let protoPolyDraw = null;   // état pendant un dessin de polygone (multi-clics)
 let protoEditingShapeId = null;
+// État du viewport (zoom/pan). Non persisté — réinitialisé au reload.
+let protoView = { scale: 1, tx: 0, ty: 0 };
+const PROTO_ZOOM_MIN = 0.5;
+const PROTO_ZOOM_MAX = 8;
+// Suivi des pointers actifs pour différencier draw/pan/pinch.
+const protoActivePointers = new Map(); // pointerId → { x, y }
+let protoPinch = null;      // { lastDist, lastCx, lastCy }
+let protoPan = null;        // { startClientX, startClientY, startTx, startTy, pointerId }
 
 // ---------- Lots de travaux (Données → Lots) ----------
 function getWorkBatches() { return Array.isArray(state.workBatches) ? state.workBatches : []; }
@@ -5383,8 +5392,12 @@ function setActiveProtoPlan(id) {
   const p = getProtoPlan(id);
   if (!p) return;
   state.protoActivePlanId = id;
+  // Reset du viewport pour ne pas garder le zoom du plan précédent
+  protoView = { scale: 1, tx: 0, ty: 0 };
+  cancelProtoInProgress();
   save();
   renderProto();
+  applyProtoView();
 }
 // Migration douce : si l'utilisateur avait un plan via les anciens
 // champs protoPlan/W/H (v0.63), on le déplace dans un dossier par
@@ -5420,6 +5433,7 @@ function setProtoFilterLot(id) {
   state.protoFilterLotId = id || '';
   save();
   renderProtoSVG();
+  renderProtoLegend();
 }
 function toggleProtoFilterStatus(status) {
   if (!Array.isArray(state.protoFilterStatuses)) state.protoFilterStatuses = ['todo', 'doing', 'done'];
@@ -5429,6 +5443,7 @@ function toggleProtoFilterStatus(status) {
   save();
   refreshProtoFilterStatusBar();
   renderProtoSVG();
+  renderProtoLegend();
 }
 
 // ---------- Rendu de la page Proto ----------
@@ -5456,6 +5471,8 @@ function renderProto() {
   renderProtoSVG();
   renderProtoLegend();
   refreshProtoToolbar();
+  refreshProtoPolyHint();
+  applyProtoView();
 }
 
 function renderProtoSVG() {
@@ -5464,10 +5481,10 @@ function renderProtoSVG() {
   svg.innerHTML = '';
   const planId = state.protoActivePlanId;
   if (!planId) return;
-  // Ordre z : rectangles en bas, lignes au milieu, points au-dessus.
-  // Filtres lot + statut appliqués ici (les formes filtrées
-  // disparaissent du DOM, donc ne reçoivent pas non plus de clic).
-  const orderRank = { rect: 0, line: 1, point: 2 };
+  // Ordre z : surfaces (rect/polygon) en bas, lignes au milieu,
+  // points au-dessus. Filtres lot + statut appliqués ici (les formes
+  // filtrées disparaissent du DOM, donc ne reçoivent pas non plus de clic).
+  const orderRank = { rect: 0, polygon: 0, line: 1, point: 2 };
   const shapes = (state.protoShapes || [])
     .filter(s => s.planId === planId)
     .filter(shapeMatchesFilters)
@@ -5502,6 +5519,14 @@ function buildShapeElement(sh) {
     el.setAttribute('stroke', statusColor);
     el.setAttribute('stroke-width', sw * 2);
     el.setAttribute('stroke-linecap', 'round');
+  } else if (sh.type === 'polygon') {
+    el = document.createElementNS(ns, 'polygon');
+    el.setAttribute('points', (sh.coords.points || []).map(p => `${p.x},${p.y}`).join(' '));
+    el.setAttribute('fill', statusColor);
+    el.setAttribute('fill-opacity', '0.25');
+    el.setAttribute('stroke', statusColor);
+    el.setAttribute('stroke-width', sw);
+    el.setAttribute('stroke-linejoin', 'round');
   } else { // rect
     el = document.createElementNS(ns, 'rect');
     el.setAttribute('x', sh.coords.x);
@@ -5526,16 +5551,22 @@ function buildShapeElement(sh) {
 function renderProtoLegend() {
   const el = document.getElementById('protolegend');
   if (!el) return;
+  // Compteurs filtrés : reflètent les formes effectivement visibles
+  // (filtres lot + statut appliqués). Une catégorie peut afficher 0
+  // si elle est filtrée hors-vue.
   const counts = { todo: 0, doing: 0, done: 0 };
   const planId = state.protoActivePlanId;
   for (const sh of (state.protoShapes || [])) {
     if (sh.planId !== planId) continue;
+    if (!shapeMatchesFilters(sh)) continue;
     if (counts[sh.status] != null) counts[sh.status]++;
   }
+  const activeStatuses = new Set(state.protoFilterStatuses || []);
   el.innerHTML = '';
   for (const s of PROTO_STATUS_LIST) {
     const chip = document.createElement('span');
     chip.className = 'proto-legend-chip';
+    if (!activeStatuses.has(s)) chip.classList.add('is-muted');
     chip.innerHTML = `<span class="proto-legend-dot" style="background:${PROTO_STATUS_COLOR[s]}"></span><span>${PROTO_STATUS_LABEL[s]} : <strong>${counts[s]}</strong></span>`;
     el.appendChild(chip);
   }
@@ -5606,9 +5637,18 @@ function refreshProtoToolbar() {
   if (wrap) wrap.dataset.protoTool = protoTool;
 }
 function setProtoTool(tool) {
-  if (!['select', 'point', 'line', 'rect'].includes(tool)) return;
+  if (!['select', 'point', 'line', 'rect', 'polygon'].includes(tool)) return;
+  // Annule tout dessin en cours quand on change d'outil
+  cancelProtoInProgress();
   protoTool = tool;
   refreshProtoToolbar();
+  refreshProtoPolyHint();
+}
+
+function refreshProtoPolyHint() {
+  const hint = document.getElementById('protopolyhint');
+  if (!hint) return;
+  hint.hidden = !(protoTool === 'polygon' && protoPolyDraw);
 }
 
 // ---------- Upload du plan (avec compression) ----------
@@ -5763,6 +5803,43 @@ function buildProtoPlanRow(plan) {
   return li;
 }
 
+// ---------- Zoom / Pan ----------
+// Le zoom s'applique via CSS transform sur .proto-canvas-inner (qui
+// contient l'image + le SVG). Cela laisse intacts les coords du SVG
+// : getScreenCTM() retourne la matrice complète (CSS transform inclus),
+// donc protoSvgCoords convertit toujours correctement vers les px
+// naturels du plan.
+function applyProtoView() {
+  const inner = document.getElementById('protocanvasinner');
+  if (!inner) return;
+  inner.style.transform = `translate(${protoView.tx}px, ${protoView.ty}px) scale(${protoView.scale})`;
+}
+function zoomByAtClient(factor, clientX, clientY) {
+  const wrap = document.getElementById('protocanvaswrap');
+  if (!wrap) return;
+  const rect = wrap.getBoundingClientRect();
+  const cx = clientX - rect.left;
+  const cy = clientY - rect.top;
+  const newScale = Math.max(PROTO_ZOOM_MIN, Math.min(PROTO_ZOOM_MAX, protoView.scale * factor));
+  if (newScale === protoView.scale) return;
+  // Garde le point (cx, cy) immobile pendant le zoom
+  const sx = (cx - protoView.tx) / protoView.scale;
+  const sy = (cy - protoView.ty) / protoView.scale;
+  protoView.scale = newScale;
+  protoView.tx = cx - sx * newScale;
+  protoView.ty = cy - sy * newScale;
+  applyProtoView();
+}
+function protoZoomIn()    { zoomCentered(1.25); }
+function protoZoomOut()   { zoomCentered(1 / 1.25); }
+function protoZoomReset() { protoView = { scale: 1, tx: 0, ty: 0 }; applyProtoView(); }
+function zoomCentered(factor) {
+  const wrap = document.getElementById('protocanvaswrap');
+  if (!wrap) return;
+  const rect = wrap.getBoundingClientRect();
+  zoomByAtClient(factor, rect.left + rect.width / 2, rect.top + rect.height / 2);
+}
+
 // ---------- Dessin sur le SVG ----------
 // Convertit un événement pointer en coords SVG (= px naturels du plan).
 function protoSvgCoords(evt) {
@@ -5778,10 +5855,139 @@ function protoSvgCoords(evt) {
   return { x: local.x, y: local.y };
 }
 
-function startProtoDraw(evt) {
-  if (protoTool === 'select') return;
-  // Ignore les clics sur une forme existante
-  if (evt.target && evt.target.classList && evt.target.classList.contains('proto-shape')) return;
+function cancelProtoInProgress() {
+  if (protoDrawing) {
+    if (protoDrawing.previewEl) protoDrawing.previewEl.remove();
+    protoDrawing = null;
+  }
+  if (protoPolyDraw) {
+    clearPolygonPreview();
+    protoPolyDraw = null;
+  }
+  protoPan = null;
+}
+function isProtoShape(target) {
+  return target && target.classList && target.classList.contains('proto-shape');
+}
+
+// ---------- Dispatcher pointer (draw vs pan vs pinch vs polygon) ----------
+function protoPointerDown(evt) {
+  protoActivePointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY });
+  if (protoActivePointers.size === 2) {
+    // 2 doigts → pinch-pan (annule tout dessin en cours)
+    cancelProtoInProgress();
+    protoPinch = null; // sera (re)initialisé au prochain move
+    captureProtoPointers();
+    evt.preventDefault();
+    return;
+  }
+  // Mode Sélection : si zoom > 1, démarre un pan en touchant le fond ;
+  // sinon ne fait rien (clic sur forme géré par le listener de la forme)
+  if (protoTool === 'select') {
+    if (protoView.scale > 1 && !isProtoShape(evt.target)) {
+      startProtoPan(evt);
+    }
+    return;
+  }
+  // Mode polygone : clic = ajouter un sommet (ou refermer)
+  if (protoTool === 'polygon') {
+    if (isProtoShape(evt.target)) return; // ne pas placer un sommet sur une forme
+    handlePolygonClick(evt);
+    return;
+  }
+  // Modes point / line / rect
+  if (isProtoShape(evt.target)) return;
+  startSimpleDraw(evt);
+}
+function protoPointerMove(evt) {
+  if (protoActivePointers.has(evt.pointerId)) {
+    protoActivePointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY });
+  }
+  if (protoActivePointers.size === 2) {
+    updateProtoPinch();
+    evt.preventDefault();
+    return;
+  }
+  if (protoPan && evt.pointerId === protoPan.pointerId) {
+    updateProtoPan(evt);
+    evt.preventDefault();
+    return;
+  }
+  if (protoPolyDraw) {
+    updatePolygonHintLine(evt);
+    return;
+  }
+  if (protoDrawing && evt.pointerId === protoDrawing.pointerId) {
+    updateSimpleDraw(evt);
+    return;
+  }
+}
+function protoPointerUp(evt) {
+  protoActivePointers.delete(evt.pointerId);
+  if (protoActivePointers.size < 2) protoPinch = null;
+  if (protoPan && evt.pointerId === protoPan.pointerId) {
+    endProtoPan(evt);
+    return;
+  }
+  if (protoDrawing && evt.pointerId === protoDrawing.pointerId) {
+    endSimpleDraw(evt);
+  }
+}
+
+function captureProtoPointers() {
+  const svg = document.getElementById('protosvg');
+  if (!svg || !svg.setPointerCapture) return;
+  for (const id of protoActivePointers.keys()) {
+    try { svg.setPointerCapture(id); } catch (_) {}
+  }
+}
+
+// ---------- Pinch (2 doigts) ----------
+function updateProtoPinch() {
+  if (protoActivePointers.size !== 2) return;
+  const pts = Array.from(protoActivePointers.values());
+  const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+  const cx = (pts[0].x + pts[1].x) / 2;
+  const cy = (pts[0].y + pts[1].y) / 2;
+  if (!protoPinch) {
+    protoPinch = { lastDist: dist, lastCx: cx, lastCy: cy };
+    return;
+  }
+  const factor = dist / protoPinch.lastDist;
+  // Pan = déplacement du centroïde
+  protoView.tx += cx - protoPinch.lastCx;
+  protoView.ty += cy - protoPinch.lastCy;
+  applyProtoView();
+  // Zoom centré sur le centroïde
+  if (factor > 0.01) zoomByAtClient(factor, cx, cy);
+  protoPinch.lastDist = dist;
+  protoPinch.lastCx = cx;
+  protoPinch.lastCy = cy;
+}
+
+// ---------- Pan (déplacement quand zoom > 1) ----------
+function startProtoPan(evt) {
+  const svg = document.getElementById('protosvg');
+  if (svg && svg.setPointerCapture) {
+    try { svg.setPointerCapture(evt.pointerId); } catch (_) {}
+  }
+  protoPan = {
+    startClientX: evt.clientX, startClientY: evt.clientY,
+    startTx: protoView.tx, startTy: protoView.ty,
+    pointerId: evt.pointerId
+  };
+  evt.preventDefault();
+}
+function updateProtoPan(evt) {
+  if (!protoPan) return;
+  protoView.tx = protoPan.startTx + (evt.clientX - protoPan.startClientX);
+  protoView.ty = protoPan.startTy + (evt.clientY - protoPan.startClientY);
+  applyProtoView();
+}
+function endProtoPan() { protoPan = null; }
+
+// ---------- Drawing simple : point / line / rect ----------
+function startSimpleDraw(evt) {
   const plan = getActiveProtoPlan();
   if (!plan) return;
   const c = protoSvgCoords(evt);
@@ -5796,9 +6002,6 @@ function startProtoDraw(evt) {
     openProtoShapeSheet(sh.id);
     return;
   }
-  // Pour line + rect : on commence un dessin avec drag.
-  // setPointerCapture : crucial sur mobile pour recevoir les
-  // pointermove/up même si le doigt sort temporairement du SVG.
   const svg = document.getElementById('protosvg');
   if (svg && evt.pointerId != null && svg.setPointerCapture) {
     try { svg.setPointerCapture(evt.pointerId); } catch (_) {}
@@ -5806,11 +6009,8 @@ function startProtoDraw(evt) {
   protoDrawing = { startX: c.x, startY: c.y, type: protoTool, previewEl: null, pointerId: evt.pointerId };
   evt.preventDefault();
 }
-function moveProtoDraw(evt) {
+function updateSimpleDraw(evt) {
   if (!protoDrawing) return;
-  // Sur certains navigateurs, on reçoit aussi des pointermove pour
-  // d'autres pointers que celui qui a démarré le drag — on ignore.
-  if (protoDrawing.pointerId != null && evt.pointerId != null && evt.pointerId !== protoDrawing.pointerId) return;
   const c = protoSvgCoords(evt);
   if (!c) return;
   const plan = getActiveProtoPlan();
@@ -5844,9 +6044,8 @@ function moveProtoDraw(evt) {
   }
   evt.preventDefault();
 }
-function endProtoDraw(evt) {
+function endSimpleDraw(evt) {
   if (!protoDrawing) return;
-  if (protoDrawing.pointerId != null && evt.pointerId != null && evt.pointerId !== protoDrawing.pointerId) return;
   const plan = getActiveProtoPlan();
   const c = protoSvgCoords(evt) || { x: protoDrawing.startX, y: protoDrawing.startY };
   if (protoDrawing.previewEl) protoDrawing.previewEl.remove();
@@ -5859,7 +6058,7 @@ function endProtoDraw(evt) {
   let sh = null;
   if (protoDrawing.type === 'line') {
     const dist = Math.hypot(c.x - protoDrawing.startX, c.y - protoDrawing.startY);
-    if (dist < minSize) { protoDrawing = null; return; } // trop court → ignore
+    if (dist < minSize) { protoDrawing = null; return; }
     sh = { id: 's_' + uid(), planId: plan.id, type: 'line',
       coords: { x1: protoDrawing.startX, y1: protoDrawing.startY, x2: c.x, y2: c.y },
       lotId: '', title: '', date: '', status: 'todo' };
@@ -5878,6 +6077,133 @@ function endProtoDraw(evt) {
   renderProtoSVG();
   renderProtoLegend();
   openProtoShapeSheet(sh.id);
+}
+
+// ---------- Drawing polygone (clic par clic) ----------
+function handlePolygonClick(evt) {
+  const plan = getActiveProtoPlan();
+  if (!plan) return;
+  const c = protoSvgCoords(evt);
+  if (!c) return;
+  const closeThreshold = Math.max(plan.w, plan.h) / 40; // ~2.5 % du plan
+  if (!protoPolyDraw) {
+    protoPolyDraw = { points: [{ x: c.x, y: c.y }], previewEl: null, firstVertexEl: null, hintLineEl: null, closeLineEl: null };
+  } else {
+    const first = protoPolyDraw.points[0];
+    const distToFirst = Math.hypot(c.x - first.x, c.y - first.y);
+    if (protoPolyDraw.points.length >= 3 && distToFirst <= closeThreshold) {
+      finishPolygon();
+      return;
+    }
+    protoPolyDraw.points.push({ x: c.x, y: c.y });
+  }
+  drawPolygonPreview();
+  refreshProtoPolyHint();
+  evt.preventDefault();
+}
+function clearPolygonPreview() {
+  if (!protoPolyDraw) return;
+  ['previewEl', 'firstVertexEl', 'hintLineEl', 'closeLineEl'].forEach(k => {
+    if (protoPolyDraw[k]) { protoPolyDraw[k].remove(); protoPolyDraw[k] = null; }
+  });
+}
+function drawPolygonPreview() {
+  if (!protoPolyDraw) return;
+  clearPolygonPreview();
+  const plan = getActiveProtoPlan();
+  if (!plan) return;
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('protosvg');
+  const sw = Math.max(plan.w, plan.h) / 100;
+  // Polyline des sommets placés
+  if (protoPolyDraw.points.length > 1) {
+    const pl = document.createElementNS(ns, 'polyline');
+    pl.classList.add('proto-shape-preview');
+    pl.setAttribute('points', protoPolyDraw.points.map(p => `${p.x},${p.y}`).join(' '));
+    pl.setAttribute('stroke', PROTO_STATUS_COLOR.todo);
+    pl.setAttribute('stroke-width', sw);
+    pl.setAttribute('fill', 'none');
+    svg.appendChild(pl);
+    protoPolyDraw.previewEl = pl;
+  }
+  // Marqueur du premier sommet (cible pour refermer)
+  const first = protoPolyDraw.points[0];
+  const dot = document.createElementNS(ns, 'circle');
+  dot.classList.add('proto-shape-preview');
+  dot.setAttribute('cx', first.x);
+  dot.setAttribute('cy', first.y);
+  dot.setAttribute('r', sw * 1.8);
+  dot.setAttribute('fill', PROTO_STATUS_COLOR.todo);
+  dot.setAttribute('fill-opacity', '0.4');
+  dot.setAttribute('stroke', PROTO_STATUS_COLOR.todo);
+  dot.setAttribute('stroke-width', sw / 2);
+  svg.appendChild(dot);
+  protoPolyDraw.firstVertexEl = dot;
+}
+function updatePolygonHintLine(evt) {
+  if (!protoPolyDraw) return;
+  const c = protoSvgCoords(evt);
+  if (!c) return;
+  const plan = getActiveProtoPlan();
+  if (!plan) return;
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('protosvg');
+  const sw = Math.max(plan.w, plan.h) / 100;
+  const last = protoPolyDraw.points[protoPolyDraw.points.length - 1];
+  const first = protoPolyDraw.points[0];
+  // Ligne pointillée du dernier sommet au curseur
+  if (!protoPolyDraw.hintLineEl) {
+    const ln = document.createElementNS(ns, 'line');
+    ln.classList.add('proto-shape-preview');
+    ln.setAttribute('stroke', PROTO_STATUS_COLOR.todo);
+    ln.setAttribute('stroke-width', sw);
+    ln.setAttribute('stroke-dasharray', Math.max(plan.w, plan.h) / 80);
+    svg.appendChild(ln);
+    protoPolyDraw.hintLineEl = ln;
+  }
+  protoPolyDraw.hintLineEl.setAttribute('x1', last.x);
+  protoPolyDraw.hintLineEl.setAttribute('y1', last.y);
+  protoPolyDraw.hintLineEl.setAttribute('x2', c.x);
+  protoPolyDraw.hintLineEl.setAttribute('y2', c.y);
+  // Ligne de fermeture (du curseur au premier sommet) quand on a déjà
+  // au moins 3 sommets — pour visualiser le polygone fini
+  if (protoPolyDraw.points.length >= 2) {
+    if (!protoPolyDraw.closeLineEl) {
+      const ln2 = document.createElementNS(ns, 'line');
+      ln2.classList.add('proto-shape-preview');
+      ln2.setAttribute('stroke', PROTO_STATUS_COLOR.todo);
+      ln2.setAttribute('stroke-width', sw / 2);
+      ln2.setAttribute('stroke-dasharray', Math.max(plan.w, plan.h) / 120);
+      ln2.setAttribute('opacity', '0.5');
+      svg.appendChild(ln2);
+      protoPolyDraw.closeLineEl = ln2;
+    }
+    protoPolyDraw.closeLineEl.setAttribute('x1', c.x);
+    protoPolyDraw.closeLineEl.setAttribute('y1', c.y);
+    protoPolyDraw.closeLineEl.setAttribute('x2', first.x);
+    protoPolyDraw.closeLineEl.setAttribute('y2', first.y);
+  }
+}
+function finishPolygon() {
+  if (!protoPolyDraw) return;
+  const plan = getActiveProtoPlan();
+  const pts = protoPolyDraw.points.slice();
+  clearPolygonPreview();
+  protoPolyDraw = null;
+  refreshProtoPolyHint();
+  if (!plan || pts.length < 3) return;
+  const sh = { id: 's_' + uid(), planId: plan.id, type: 'polygon',
+    coords: { points: pts },
+    lotId: '', title: '', date: '', status: 'todo' };
+  state.protoShapes.push(sh);
+  save();
+  renderProtoSVG();
+  renderProtoLegend();
+  openProtoShapeSheet(sh.id);
+}
+function cancelPolygon() {
+  cancelProtoInProgress();
+  refreshProtoPolyHint();
 }
 
 // ---------- Bottom sheet d'édition d'une forme ----------
@@ -6104,11 +6430,33 @@ function init() {
   }
   const protoSvg = document.getElementById('protosvg');
   if (protoSvg) {
-    protoSvg.addEventListener('pointerdown', startProtoDraw);
-    protoSvg.addEventListener('pointermove', moveProtoDraw);
-    protoSvg.addEventListener('pointerup',   endProtoDraw);
-    protoSvg.addEventListener('pointercancel', (e) => { if (protoDrawing) endProtoDraw(e); });
+    protoSvg.addEventListener('pointerdown', protoPointerDown);
+    protoSvg.addEventListener('pointermove', protoPointerMove);
+    protoSvg.addEventListener('pointerup',   protoPointerUp);
+    protoSvg.addEventListener('pointercancel', protoPointerUp);
   }
+  // Zoom : boutons + molette (centrée sur le curseur).
+  const protoWrap = document.getElementById('protocanvaswrap');
+  if (protoWrap) {
+    protoWrap.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      zoomByAtClient(f, e.clientX, e.clientY);
+    }, { passive: false });
+  }
+  const protoZIn  = document.getElementById('protozoomin');
+  const protoZOut = document.getElementById('protozoomout');
+  const protoZRst = document.getElementById('protozoomreset');
+  if (protoZIn)  protoZIn.addEventListener('click', protoZoomIn);
+  if (protoZOut) protoZOut.addEventListener('click', protoZoomOut);
+  if (protoZRst) protoZRst.addEventListener('click', protoZoomReset);
+  // Polygone : bouton « Annuler » du hint
+  const protoPolyCancel = document.getElementById('protopolycancel');
+  if (protoPolyCancel) protoPolyCancel.addEventListener('click', cancelPolygon);
+  // Escape annule un polygone en cours
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && protoPolyDraw) cancelPolygon();
+  });
   const protoSheet = document.getElementById('protoshapesheet');
   if (protoSheet) {
     document.getElementById('protoshapesheetclose').addEventListener('click', closeProtoShapeSheet);
