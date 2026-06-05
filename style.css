@@ -96,6 +96,7 @@ input, select { font: inherit; }
 .segmented[data-position="2"] .segmented-thumb { transform: translateX(200%); }
 .segmented[data-position="3"] .segmented-thumb { transform: translateX(300%); }
 .segmented[data-position="4"] .segmented-thumb { transform: translateX(400%); }
+.segmented[data-position="5"] .segmented-thumb { transform: translateX(500%); }
 .seg-btn {
   position: relative; z-index: 1;
   flex: 1; min-width: 0;
@@ -2594,3 +2595,165 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
     animation: fadein 0.18s ease-out;
   }
 }
+
+/* ============================================================
+   PROTO — Plans + tâches géolocalisées (prototype expérimental)
+   ============================================================ */
+
+/* Lots de travaux (Données → Lots) — réutilise le pattern eOTP */
+.lots-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.lot-row {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.lot-color {
+  flex-shrink: 0;
+  width: 36px; height: 36px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.lot-color::-webkit-color-swatch-wrapper { padding: 0; }
+.lot-color::-webkit-color-swatch { border: none; border-radius: 50%; }
+.lot-name {
+  flex: 1; min-width: 0;
+  border: none; background: transparent;
+  border-bottom: 1px solid var(--border);
+  font-size: 15px; font-weight: 600;
+  color: var(--text);
+  padding: 6px 2px;
+}
+.lot-name::placeholder { color: var(--text-3); font-style: italic; font-weight: 500; }
+.lot-name:focus { outline: none; border-bottom-color: var(--accent); }
+.lots-add-btn { margin-top: 6px; }
+
+/* Page Proto : pleine largeur sur desktop pour confort de dessin */
+#page-proto { max-width: none; }
+
+/* Empty state d'upload */
+.proto-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: 32px 16px;
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  text-align: center;
+}
+.proto-empty[hidden] { display: none; }
+.proto-empty p { margin: 0; color: var(--text-2); }
+.proto-empty .hint { color: var(--text-3); font-size: 12px; }
+.proto-upload-btn { cursor: pointer; display: inline-flex; align-items: center; }
+
+/* Toolbar */
+.proto-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin-bottom: 10px;
+  padding: 6px;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+}
+.proto-tool-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 600;
+  color: var(--text-2);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.proto-tool-btn.is-active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+}
+.proto-tool-btn.proto-tool-secondary { background: transparent; }
+.proto-tool-btn.proto-tool-danger:active { color: var(--danger); }
+.proto-toolbar-sep {
+  flex: 1; min-width: 8px;
+}
+@media (max-width: 480px) {
+  .proto-tool-btn span { display: none; } /* sur petit écran : juste l'icône */
+  .proto-tool-btn { padding: 8px 10px; font-size: 16px; }
+}
+
+/* Canvas (image + svg superposés). Le SVG occupe le même espace que
+   l'image pour que les coords correspondent. L'image définit la taille
+   intrinsèque (responsive via max-width). */
+.proto-canvas-wrap {
+  position: relative;
+  width: 100%;
+  background: #f5f5f7;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  /* Le curseur indique l'outil actif */
+}
+.proto-canvas-wrap[data-proto-tool="point"],
+.proto-canvas-wrap[data-proto-tool="line"],
+.proto-canvas-wrap[data-proto-tool="rect"] { cursor: crosshair; }
+.proto-canvas-wrap[data-proto-tool="select"] { cursor: default; }
+.proto-canvas-wrap img {
+  display: block;
+  width: 100%; height: auto;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none; /* le svg reçoit les events */
+}
+.proto-canvas-wrap svg {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  touch-action: none; /* évite que le pinch interfère pendant un dessin */
+}
+.proto-shape {
+  cursor: pointer;
+  transition: filter 0.12s;
+}
+.proto-canvas-wrap[data-proto-tool="select"] .proto-shape:hover {
+  filter: brightness(1.15) drop-shadow(0 0 4px rgba(0,0,0,0.3));
+}
+.proto-canvas-wrap[data-proto-tool="point"] .proto-shape,
+.proto-canvas-wrap[data-proto-tool="line"] .proto-shape,
+.proto-canvas-wrap[data-proto-tool="rect"] .proto-shape {
+  pointer-events: none; /* en mode dessin, les clics passent au SVG */
+}
+
+/* Légende (compteurs par statut) */
+.proto-legend {
+  display: flex; flex-wrap: wrap; gap: 12px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.proto-legend-chip { display: inline-flex; align-items: center; gap: 6px; }
+.proto-legend-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+
+/* Barre de statut dans le sheet d'édition d'une forme */
+.proto-status-bar {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
+  margin: 4px 0 12px;
+}
+.proto-status-btn {
+  padding: 10px 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 600;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.proto-status-btn[data-proto-status="todo"].is-active  { background: rgba(211,47,47,0.10);  border-color: #d32f2f; color: #b71c1c; }
+.proto-status-btn[data-proto-status="doing"].is-active { background: rgba(237,108,2,0.10);  border-color: #ed6c02; color: #b54708; }
+.proto-status-btn[data-proto-status="done"].is-active  { background: rgba(46,125,50,0.10);  border-color: #2e7d32; color: #1b5e20; }

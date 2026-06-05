@@ -104,13 +104,14 @@
 
     <!-- ============== ONGLET : DONNÉES ============== -->
     <section class="page" id="page-donnees">
-      <div class="segmented" role="tablist" data-group="donnees" style="--count:5;">
+      <div class="segmented" role="tablist" data-group="donnees" style="--count:6;">
         <div class="segmented-thumb"></div>
         <button class="seg-btn active" data-group="donnees" data-sub="entreprises" role="tab">Entreprises</button>
         <button class="seg-btn" data-group="donnees" data-sub="zones" role="tab">Zones</button>
         <button class="seg-btn" data-group="donnees" data-sub="taches" role="tab">Tâches</button>
         <button class="seg-btn" data-group="donnees" data-sub="adminconfig" role="tab">Admin.</button>
         <button class="seg-btn" data-group="donnees" data-sub="eotp" role="tab">eOTP</button>
+        <button class="seg-btn" data-group="donnees" data-sub="lots" role="tab">Lots</button>
       </div>
 
       <!-- Sous-page : Entreprises -->
@@ -182,6 +183,15 @@
           <p class="section-help">Lignes de budget proposées dans le menu déroulant eOTP de Consommable → Saisie. Le budget indique la dotation totale de chaque ligne.</p>
           <ul class="eotp-list" id="eotplist"></ul>
           <button class="btn-primary eotp-add-btn" id="eotpadd" type="button">+ Ajouter une ligne de budget</button>
+        </div>
+      </div>
+
+      <!-- Sous-page : Lots de travaux (utilisés par Proto) -->
+      <div class="sub-page" id="sub-lots" data-group="donnees">
+        <div class="list-section">
+          <p class="section-help">Lots de travaux proposés dans Proto pour catégoriser chaque tâche localisée sur le plan. La couleur permet de distinguer les lots d'un coup d'œil sur le plan.</p>
+          <ul class="lots-list" id="lotslist"></ul>
+          <button class="btn-primary lots-add-btn" id="lotsadd" type="button">+ Ajouter un lot</button>
         </div>
       </div>
 
@@ -298,6 +308,36 @@
         <div class="empty-state" id="consorecapempty"></div>
       </div>
     </section>
+    <!-- ============== ONGLET : PROTO (plan + tâches géolocalisées) ============== -->
+    <section class="page" id="page-proto">
+      <p class="section-help" id="protohelp">Téléversez un plan (JPG/JPEG) puis ajoutez points, lignes ou rectangles pour localiser les tâches. Tapez sur une forme pour la documenter (lot, intitulé, date, statut). <em>Prototype expérimental — vos retours sont les bienvenus.</em></p>
+
+      <div class="proto-empty" id="protoempty">
+        <p>Aucun plan chargé.</p>
+        <label class="btn-primary proto-upload-btn">
+          Téléverser un plan (JPG)
+          <input type="file" id="protoupload" accept="image/jpeg,image/jpg,.jpg,.jpeg" hidden>
+        </label>
+        <p class="hint" id="protouploadhint">Le plan est compressé à 1920px max pour rester sous la limite du navigateur.</p>
+      </div>
+
+      <div class="proto-editor" id="protoeditor" hidden>
+        <div class="proto-toolbar" role="toolbar" aria-label="Outils de dessin">
+          <button class="proto-tool-btn" data-proto-tool="select" type="button" aria-pressed="true" title="Sélectionner / éditer une forme">↖<span> Sélection</span></button>
+          <button class="proto-tool-btn" data-proto-tool="point" type="button" aria-pressed="false" title="Ajouter un point">●<span> Point</span></button>
+          <button class="proto-tool-btn" data-proto-tool="line" type="button" aria-pressed="false" title="Tracer une ligne">／<span> Ligne</span></button>
+          <button class="proto-tool-btn" data-proto-tool="rect" type="button" aria-pressed="false" title="Tracer un rectangle">▭<span> Rectangle</span></button>
+          <div class="proto-toolbar-sep"></div>
+          <button class="proto-tool-btn proto-tool-secondary" id="protoreupload" type="button" title="Charger un autre plan">⇅<span> Plan</span></button>
+          <button class="proto-tool-btn proto-tool-danger" id="protoclear" type="button" title="Supprimer toutes les formes">🗑<span> Tout effacer</span></button>
+        </div>
+        <div class="proto-canvas-wrap" id="protocanvaswrap">
+          <img id="protoimage" alt="Plan du bâtiment">
+          <svg id="protosvg" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"></svg>
+        </div>
+        <div class="proto-legend" id="protolegend"></div>
+      </div>
+    </section>
   </main>
 
   <!-- ============== TAB BAR ============== -->
@@ -329,6 +369,10 @@
     <button class="tab-btn" data-page="donnees" role="tab">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94a7.07 7.07 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.14.55-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.65 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.39 1.04.7 1.63.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54c.59-.24 1.14-.55 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z"/></svg>
       <span>Données</span>
+    </button>
+    <button class="tab-btn" data-page="proto" role="tab">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17v4h4l11-11-4-4L3 17Zm17.7-11.6-2.1-2.1a1 1 0 0 0-1.4 0l-1.8 1.8 3.5 3.5 1.8-1.8a1 1 0 0 0 0-1.4Z"/></svg>
+      <span>Proto</span>
     </button>
   </nav>
 
@@ -422,6 +466,36 @@
         <button class="btn-secondary conso-add-line" id="consoaddline" type="button">+ Ajouter une ligne</button>
 
         <button class="btn-primary stock-submit-btn" id="consoentrysave" type="button">Enregistrer la commande</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== Bottom sheet : édition d'une forme du Proto ============== -->
+  <div class="modal-overlay" id="protoshapesheet" hidden>
+    <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="protoshapesheettitle">
+      <div class="modal-header">
+        <h3 class="modal-title" id="protoshapesheettitle">Tâche sur plan</h3>
+        <button class="modal-close" id="protoshapesheetclose" type="button" aria-label="Fermer">×</button>
+      </div>
+      <div class="modal-body">
+        <label class="stock-form-label" for="protoshapelot">Lot de travaux</label>
+        <select id="protoshapelot" class="stock-form-input"></select>
+
+        <label class="stock-form-label" for="protoshapetitle">Intitulé de la tâche</label>
+        <input id="protoshapetitle" class="stock-form-input" type="text" maxlength="80" placeholder="Pose des plinthes côté est…">
+
+        <label class="stock-form-label" for="protoshapedate">Date de réalisation</label>
+        <input id="protoshapedate" class="stock-form-input" type="date">
+
+        <label class="stock-form-label">Statut</label>
+        <div class="proto-status-bar" role="radiogroup" aria-label="Statut">
+          <button class="proto-status-btn" data-proto-status="todo"  type="button" role="radio">À faire</button>
+          <button class="proto-status-btn" data-proto-status="doing" type="button" role="radio">En cours</button>
+          <button class="proto-status-btn" data-proto-status="done"  type="button" role="radio">Réalisée</button>
+        </div>
+
+        <button class="btn-danger" id="protoshapedelete" type="button">Supprimer cette forme</button>
+        <button class="btn-primary stock-submit-btn" id="protoshapesave" type="button">Enregistrer</button>
       </div>
     </div>
   </div>

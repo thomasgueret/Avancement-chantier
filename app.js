@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.62';
+const APP_VERSION = '0.63';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -59,6 +59,15 @@ const state = {
   consoRecapMode: 'product', // 'product' | 'eotp' : axe de regroupement du récap Consommable
   projectStart: '',          // date ISO YYYY-MM-DD : début prévu du chantier
   projectEnd: '',            // date ISO YYYY-MM-DD : fin prévue du chantier
+  workBatches: [],           // Proto : lots de travaux [{ id, name, color }]
+  protoPlan: '',             // Proto : data URL du plan JPEG (ou '' si aucun)
+  protoPlanW: 0,             // largeur naturelle du plan en pixels (pour viewBox SVG)
+  protoPlanH: 0,             // hauteur naturelle du plan en pixels
+  // Proto : formes posées sur le plan
+  // [{ id, type:'point'|'line'|'rect',
+  //    coords:{cx,cy} | {x1,y1,x2,y2} | {x,y,w,h},
+  //    lotId, title, date, status:'todo'|'doing'|'done' }]
+  protoShapes: [],
   currentDate: todayISO(),
   chartHidden: {},        // { [companyId]: true } — entreprises masquées du graphique
   chartRange: 30          // 7 | 30 | 'all'
@@ -112,6 +121,11 @@ function load() {
     if (data.consoRecapMode === 'product' || data.consoRecapMode === 'eotp') state.consoRecapMode = data.consoRecapMode;
     if (typeof data.projectStart === 'string') state.projectStart = data.projectStart;
     if (typeof data.projectEnd === 'string') state.projectEnd = data.projectEnd;
+    if (Array.isArray(data.workBatches)) state.workBatches = data.workBatches;
+    if (typeof data.protoPlan === 'string') state.protoPlan = data.protoPlan;
+    if (Number.isFinite(data.protoPlanW)) state.protoPlanW = data.protoPlanW;
+    if (Number.isFinite(data.protoPlanH)) state.protoPlanH = data.protoPlanH;
+    if (Array.isArray(data.protoShapes)) state.protoShapes = data.protoShapes;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
     // Champs hérités (ancien modèle à liste unique) → migrés ensuite
@@ -154,6 +168,11 @@ function save() {
     consoRecapMode: state.consoRecapMode,
     projectStart: state.projectStart,
     projectEnd: state.projectEnd,
+    workBatches: state.workBatches,
+    protoPlan: state.protoPlan,
+    protoPlanW: state.protoPlanW,
+    protoPlanH: state.protoPlanH,
+    protoShapes: state.protoShapes,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange
   };
@@ -297,6 +316,8 @@ function renderAll() {
   renderDocLabelsConfig();
   renderEOTPsConfig();
   renderProjectDates();
+  renderWorkBatchesConfig();
+  renderProto();
   renderStock();
   renderConsommable();
   renderDashboard();
@@ -5029,6 +5050,7 @@ function switchPage(name) {
   if (name === 'stock') renderStock();
   if (name === 'consommable') renderConsommable();
   if (name === 'dashboard') renderDashboard();
+  if (name === 'proto') renderProto();
 }
 
 // ---------- Import / Export ----------
@@ -5088,6 +5110,11 @@ function importData(file) {
       state.consoRecapMode = (data.consoRecapMode === 'eotp') ? 'eotp' : 'product';
       state.projectStart = typeof data.projectStart === 'string' ? data.projectStart : '';
       state.projectEnd   = typeof data.projectEnd   === 'string' ? data.projectEnd   : '';
+      state.workBatches  = Array.isArray(data.workBatches) ? data.workBatches : [];
+      state.protoPlan    = typeof data.protoPlan === 'string' ? data.protoPlan : '';
+      state.protoPlanW   = Number.isFinite(data.protoPlanW) ? data.protoPlanW : 0;
+      state.protoPlanH   = Number.isFinite(data.protoPlanH) ? data.protoPlanH : 0;
+      state.protoShapes  = Array.isArray(data.protoShapes) ? data.protoShapes : [];
       state.adminDocs = data.adminDocs || {};
       state.workers = data.workers || [];
       state.workerDocs = data.workerDocs || {};
@@ -5138,6 +5165,11 @@ function resetAll() {
   state.consoRecapMode = 'product';
   state.projectStart = '';
   state.projectEnd = '';
+  state.workBatches = [];
+  state.protoPlan = '';
+  state.protoPlanW = 0;
+  state.protoPlanH = 0;
+  state.protoShapes = [];
   state.adminDocs = {};
   state.workers = [];
   state.workerDocs = {};
@@ -5152,6 +5184,408 @@ function resetAll() {
   save();
   renderAll();
   showToast('Données effacées');
+}
+
+// ====================================================================
+//   PROTO — Plans + tâches géolocalisées (prototype expérimental)
+// ====================================================================
+//
+// Modèle : un plan (data URL JPEG, compressé à 1920px max) + des
+// formes vectorielles dessinées par-dessus dans un SVG calé sur les
+// dimensions naturelles de l'image (viewBox = px naturels). Cela
+// rend le rendu résolution-indépendant : la même forme à la même
+// position que le plan soit affiché à 100 % ou redimensionné.
+//
+// Chaque forme porte des métadonnées (lot de travaux, intitulé, date,
+// statut) éditables via un bottom sheet. Le statut détermine la
+// couleur de remplissage (todo=rouge, doing=orange, done=vert).
+
+const PROTO_STATUS_LIST = ['todo', 'doing', 'done'];
+const PROTO_STATUS_LABEL = { todo: 'À faire', doing: 'En cours', done: 'Réalisée' };
+const PROTO_STATUS_COLOR = { todo: '#d32f2f', doing: '#ed6c02', done: '#2e7d32' };
+const PROTO_MAX_PLAN_DIM = 1920; // px max sur le plus grand côté
+const PROTO_DEFAULT_LOT_COLORS = ['#0a84ff', '#ff9500', '#5856d6', '#34c759', '#ff2d55', '#af52de'];
+
+// État UI (non persisté) du Proto
+let protoTool = 'select';   // 'select' | 'point' | 'line' | 'rect'
+let protoDrawing = null;    // { id, startX, startY } pendant un dessin
+let protoEditingShapeId = null;
+
+// ---------- Lots de travaux (Données → Lots) ----------
+function getWorkBatches() { return Array.isArray(state.workBatches) ? state.workBatches : []; }
+function getWorkBatch(id) { return getWorkBatches().find(l => l.id === id) || null; }
+function addWorkBatch() {
+  if (!Array.isArray(state.workBatches)) state.workBatches = [];
+  const used = new Set(state.workBatches.map(l => l.color));
+  const color = PROTO_DEFAULT_LOT_COLORS.find(c => !used.has(c)) || PROTO_DEFAULT_LOT_COLORS[state.workBatches.length % PROTO_DEFAULT_LOT_COLORS.length];
+  state.workBatches.push({ id: 'lot_' + uid(), name: '', color });
+  save();
+  renderWorkBatchesConfig();
+}
+function removeWorkBatch(id) {
+  const lot = getWorkBatch(id);
+  if (!lot) return;
+  if (!confirm(`Supprimer le lot « ${lot.name || 'sans nom'} » ?\nLes formes du Proto qui le référencent garderont leur couleur historique mais le lot ne sera plus proposé.`)) return;
+  state.workBatches = getWorkBatches().filter(l => l.id !== id);
+  save();
+  renderWorkBatchesConfig();
+}
+function setWorkBatchName(id, name) {
+  const lot = getWorkBatch(id);
+  if (!lot) return;
+  lot.name = (name || '').trim();
+  save();
+}
+function setWorkBatchColor(id, color) {
+  const lot = getWorkBatch(id);
+  if (!lot) return;
+  lot.color = color;
+  save();
+  renderProtoSVG(); // les formes du plan changent de couleur
+}
+
+function renderWorkBatchesConfig() {
+  const list = document.getElementById('lotslist');
+  if (!list) return;
+  list.innerHTML = '';
+  const lots = getWorkBatches();
+  if (lots.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'eotp-empty';
+    empty.textContent = 'Aucun lot de travaux. Tapez « + Ajouter » pour en créer.';
+    list.appendChild(empty);
+    return;
+  }
+  for (const lot of lots) list.appendChild(buildLotRow(lot));
+}
+function buildLotRow(lot) {
+  const li = document.createElement('li');
+  li.className = 'lot-row';
+  li.setAttribute('data-lot-id', lot.id);
+  li.innerHTML = `
+    <input class="lot-color" type="color" aria-label="Couleur du lot">
+    <input class="lot-name" type="text" maxlength="40" placeholder="Plomberie, Électricité, Cloisons…">
+    <button class="eotp-remove lot-remove" type="button" aria-label="Supprimer ce lot">
+      <svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+    </button>
+  `;
+  const color = li.querySelector('.lot-color');
+  const name  = li.querySelector('.lot-name');
+  color.value = lot.color || '#0a84ff';
+  name.value  = lot.name  || '';
+  color.addEventListener('input', () => setWorkBatchColor(lot.id, color.value));
+  name.addEventListener('input',  () => setWorkBatchName(lot.id, name.value));
+  li.querySelector('.lot-remove').addEventListener('click', () => removeWorkBatch(lot.id));
+  return li;
+}
+
+// ---------- Rendu de la page Proto ----------
+function renderProto() {
+  const empty  = document.getElementById('protoempty');
+  const editor = document.getElementById('protoeditor');
+  if (!empty || !editor) return;
+  const hasPlan = !!state.protoPlan;
+  empty.hidden  = hasPlan;
+  editor.hidden = !hasPlan;
+  if (!hasPlan) return;
+  // Image + SVG calés sur la même viewBox = dimensions naturelles px
+  const img = document.getElementById('protoimage');
+  img.src = state.protoPlan;
+  const svg = document.getElementById('protosvg');
+  svg.setAttribute('viewBox', `0 0 ${state.protoPlanW} ${state.protoPlanH}`);
+  renderProtoSVG();
+  renderProtoLegend();
+  refreshProtoToolbar();
+}
+
+function renderProtoSVG() {
+  const svg = document.getElementById('protosvg');
+  if (!svg) return;
+  svg.innerHTML = '';
+  for (const sh of (state.protoShapes || [])) {
+    svg.appendChild(buildShapeElement(sh));
+  }
+}
+
+function buildShapeElement(sh) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const lot = getWorkBatch(sh.lotId);
+  const lotColor = lot ? lot.color : '#888';
+  const statusColor = PROTO_STATUS_COLOR[sh.status] || PROTO_STATUS_COLOR.todo;
+  const sw = Math.max(state.protoPlanW, state.protoPlanH) / 200; // stroke ~ 0.5% du plan
+  let el;
+  if (sh.type === 'point') {
+    el = document.createElementNS(ns, 'circle');
+    el.setAttribute('cx', sh.coords.cx);
+    el.setAttribute('cy', sh.coords.cy);
+    el.setAttribute('r',  Math.max(sw * 2.5, 8));
+    el.setAttribute('fill', statusColor);
+    el.setAttribute('stroke', lotColor);
+    el.setAttribute('stroke-width', sw);
+  } else if (sh.type === 'line') {
+    el = document.createElementNS(ns, 'line');
+    el.setAttribute('x1', sh.coords.x1);
+    el.setAttribute('y1', sh.coords.y1);
+    el.setAttribute('x2', sh.coords.x2);
+    el.setAttribute('y2', sh.coords.y2);
+    el.setAttribute('stroke', statusColor);
+    el.setAttribute('stroke-width', sw * 2);
+    el.setAttribute('stroke-linecap', 'round');
+  } else { // rect
+    el = document.createElementNS(ns, 'rect');
+    el.setAttribute('x', sh.coords.x);
+    el.setAttribute('y', sh.coords.y);
+    el.setAttribute('width',  sh.coords.w);
+    el.setAttribute('height', sh.coords.h);
+    el.setAttribute('fill', statusColor);
+    el.setAttribute('fill-opacity', '0.25');
+    el.setAttribute('stroke', statusColor);
+    el.setAttribute('stroke-width', sw);
+  }
+  el.classList.add('proto-shape');
+  el.setAttribute('data-shape-id', sh.id);
+  el.addEventListener('click', (e) => {
+    if (protoTool !== 'select') return;
+    e.stopPropagation();
+    openProtoShapeSheet(sh.id);
+  });
+  return el;
+}
+
+function renderProtoLegend() {
+  const el = document.getElementById('protolegend');
+  if (!el) return;
+  const counts = { todo: 0, doing: 0, done: 0 };
+  for (const sh of (state.protoShapes || [])) {
+    if (counts[sh.status] != null) counts[sh.status]++;
+  }
+  el.innerHTML = '';
+  for (const s of PROTO_STATUS_LIST) {
+    const chip = document.createElement('span');
+    chip.className = 'proto-legend-chip';
+    chip.innerHTML = `<span class="proto-legend-dot" style="background:${PROTO_STATUS_COLOR[s]}"></span><span>${PROTO_STATUS_LABEL[s]} : <strong>${counts[s]}</strong></span>`;
+    el.appendChild(chip);
+  }
+}
+
+function refreshProtoToolbar() {
+  document.querySelectorAll('.proto-tool-btn[data-proto-tool]').forEach(btn => {
+    const on = btn.dataset.protoTool === protoTool;
+    btn.classList.toggle('is-active', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  const wrap = document.getElementById('protocanvaswrap');
+  if (wrap) wrap.dataset.protoTool = protoTool;
+}
+function setProtoTool(tool) {
+  if (!['select', 'point', 'line', 'rect'].includes(tool)) return;
+  protoTool = tool;
+  refreshProtoToolbar();
+}
+
+// ---------- Upload du plan (avec compression) ----------
+function handleProtoUpload(file) {
+  if (!file) return;
+  if (!/^image\/jpe?g$/i.test(file.type) && !/\.jpe?g$/i.test(file.name)) {
+    showToast('Format invalide : JPG/JPEG uniquement', 'error');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      // Redimensionne à 1920px max pour rester sous la limite localStorage
+      let w = img.naturalWidth, h = img.naturalHeight;
+      const ratio = Math.min(1, PROTO_MAX_PLAN_DIM / Math.max(w, h));
+      const tw = Math.round(w * ratio);
+      const th = Math.round(h * ratio);
+      const canvas = document.createElement('canvas');
+      canvas.width = tw; canvas.height = th;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, tw, th);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      try {
+        state.protoPlan = dataUrl;
+        state.protoPlanW = tw;
+        state.protoPlanH = th;
+        // Si on remplace un plan, on garde les formes (coords relatives)
+        save();
+        renderProto();
+        showToast('Plan chargé');
+      } catch (err) {
+        // Quota localStorage exceeded
+        showToast('Plan trop lourd (quota navigateur). Essayez un fichier plus petit.', 'error');
+      }
+    };
+    img.onerror = () => showToast('Image illisible', 'error');
+    img.src = reader.result;
+  };
+  reader.onerror = () => showToast('Lecture du fichier impossible', 'error');
+  reader.readAsDataURL(file);
+}
+
+function clearProtoShapes() {
+  if ((state.protoShapes || []).length === 0) return;
+  if (!confirm(`Supprimer les ${state.protoShapes.length} forme(s) du plan ?`)) return;
+  state.protoShapes = [];
+  save();
+  renderProtoSVG();
+  renderProtoLegend();
+}
+function replaceProtoPlan() {
+  const inp = document.getElementById('protoupload');
+  if (inp) inp.click();
+}
+
+// ---------- Dessin sur le SVG ----------
+// Convertit un événement pointer en coords SVG (= px naturels du plan).
+function protoSvgCoords(evt) {
+  const svg = document.getElementById('protosvg');
+  if (!svg) return null;
+  const pt = svg.createSVGPoint();
+  pt.x = evt.clientX;
+  pt.y = evt.clientY;
+  const ctm = svg.getScreenCTM();
+  if (!ctm) return null;
+  const inv = ctm.inverse();
+  const local = pt.matrixTransform(inv);
+  return { x: local.x, y: local.y };
+}
+
+function startProtoDraw(evt) {
+  if (protoTool === 'select') return;
+  // Ignore les clics sur une forme existante
+  if (evt.target && evt.target.classList && evt.target.classList.contains('proto-shape')) return;
+  const c = protoSvgCoords(evt);
+  if (!c) return;
+  if (protoTool === 'point') {
+    const sh = { id: 's_' + uid(), type: 'point', coords: { cx: c.x, cy: c.y },
+      lotId: '', title: '', date: '', status: 'todo' };
+    state.protoShapes.push(sh);
+    save();
+    renderProtoSVG();
+    renderProtoLegend();
+    openProtoShapeSheet(sh.id);
+    return;
+  }
+  // Pour line + rect : on commence un dessin avec drag
+  protoDrawing = { startX: c.x, startY: c.y, type: protoTool, previewEl: null };
+  evt.preventDefault();
+}
+function moveProtoDraw(evt) {
+  if (!protoDrawing) return;
+  const c = protoSvgCoords(evt);
+  if (!c) return;
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('protosvg');
+  if (!protoDrawing.previewEl) {
+    const el = document.createElementNS(ns, protoDrawing.type === 'line' ? 'line' : 'rect');
+    el.classList.add('proto-shape-preview');
+    el.setAttribute('stroke', PROTO_STATUS_COLOR.todo);
+    el.setAttribute('stroke-width', Math.max(state.protoPlanW, state.protoPlanH) / 100);
+    el.setAttribute('stroke-dasharray', Math.max(state.protoPlanW, state.protoPlanH) / 50);
+    el.setAttribute('fill', protoDrawing.type === 'rect' ? 'rgba(211,47,47,0.15)' : 'none');
+    svg.appendChild(el);
+    protoDrawing.previewEl = el;
+  }
+  if (protoDrawing.type === 'line') {
+    protoDrawing.previewEl.setAttribute('x1', protoDrawing.startX);
+    protoDrawing.previewEl.setAttribute('y1', protoDrawing.startY);
+    protoDrawing.previewEl.setAttribute('x2', c.x);
+    protoDrawing.previewEl.setAttribute('y2', c.y);
+  } else {
+    const x = Math.min(protoDrawing.startX, c.x);
+    const y = Math.min(protoDrawing.startY, c.y);
+    const w = Math.abs(c.x - protoDrawing.startX);
+    const h = Math.abs(c.y - protoDrawing.startY);
+    protoDrawing.previewEl.setAttribute('x', x);
+    protoDrawing.previewEl.setAttribute('y', y);
+    protoDrawing.previewEl.setAttribute('width', w);
+    protoDrawing.previewEl.setAttribute('height', h);
+  }
+}
+function endProtoDraw(evt) {
+  if (!protoDrawing) return;
+  const c = protoSvgCoords(evt) || { x: protoDrawing.startX, y: protoDrawing.startY };
+  if (protoDrawing.previewEl) protoDrawing.previewEl.remove();
+  const minSize = Math.max(state.protoPlanW, state.protoPlanH) / 100;
+  let sh = null;
+  if (protoDrawing.type === 'line') {
+    const dist = Math.hypot(c.x - protoDrawing.startX, c.y - protoDrawing.startY);
+    if (dist < minSize) { protoDrawing = null; return; } // trop court → ignore
+    sh = { id: 's_' + uid(), type: 'line',
+      coords: { x1: protoDrawing.startX, y1: protoDrawing.startY, x2: c.x, y2: c.y },
+      lotId: '', title: '', date: '', status: 'todo' };
+  } else {
+    const x = Math.min(protoDrawing.startX, c.x);
+    const y = Math.min(protoDrawing.startY, c.y);
+    const w = Math.abs(c.x - protoDrawing.startX);
+    const h = Math.abs(c.y - protoDrawing.startY);
+    if (w < minSize || h < minSize) { protoDrawing = null; return; }
+    sh = { id: 's_' + uid(), type: 'rect', coords: { x, y, w, h },
+      lotId: '', title: '', date: '', status: 'todo' };
+  }
+  protoDrawing = null;
+  state.protoShapes.push(sh);
+  save();
+  renderProtoSVG();
+  renderProtoLegend();
+  openProtoShapeSheet(sh.id);
+}
+
+// ---------- Bottom sheet d'édition d'une forme ----------
+function openProtoShapeSheet(shapeId) {
+  const sh = state.protoShapes.find(s => s.id === shapeId);
+  if (!sh) return;
+  protoEditingShapeId = shapeId;
+  const sheet = document.getElementById('protoshapesheet');
+  if (!sheet) return;
+  // Peuple le dropdown des lots
+  const sel = document.getElementById('protoshapelot');
+  sel.innerHTML = '';
+  sel.appendChild(new Option('— Aucun —', ''));
+  for (const lot of getWorkBatches()) {
+    if (!lot.name) continue;
+    sel.appendChild(new Option(lot.name, lot.id));
+  }
+  sel.value = sh.lotId || '';
+  document.getElementById('protoshapetitle').value = sh.title || '';
+  document.getElementById('protoshapedate').value  = sh.date  || '';
+  document.querySelectorAll('.proto-status-btn').forEach(b => {
+    b.classList.toggle('is-active', b.dataset.protoStatus === (sh.status || 'todo'));
+  });
+  sheet.hidden = false;
+  document.body.style.overflow = 'hidden';
+}
+function closeProtoShapeSheet() {
+  const sheet = document.getElementById('protoshapesheet');
+  if (sheet) sheet.hidden = true;
+  document.body.style.overflow = '';
+  protoEditingShapeId = null;
+}
+function saveProtoShapeSheet() {
+  const sh = state.protoShapes.find(s => s.id === protoEditingShapeId);
+  if (!sh) { closeProtoShapeSheet(); return; }
+  sh.lotId = document.getElementById('protoshapelot').value || '';
+  sh.title = document.getElementById('protoshapetitle').value.trim();
+  sh.date  = document.getElementById('protoshapedate').value || '';
+  const active = document.querySelector('.proto-status-btn.is-active');
+  sh.status = active ? active.dataset.protoStatus : 'todo';
+  save();
+  renderProtoSVG();
+  renderProtoLegend();
+  closeProtoShapeSheet();
+  showToast('Tâche enregistrée');
+}
+function deleteProtoShape() {
+  const sh = state.protoShapes.find(s => s.id === protoEditingShapeId);
+  if (!sh) { closeProtoShapeSheet(); return; }
+  if (!confirm('Supprimer cette forme ?')) return;
+  state.protoShapes = state.protoShapes.filter(s => s.id !== protoEditingShapeId);
+  save();
+  renderProtoSVG();
+  renderProtoLegend();
+  closeProtoShapeSheet();
 }
 
 // ---------- Init ----------
@@ -5285,6 +5719,44 @@ function init() {
   document.querySelectorAll('.recap-mode-btn').forEach(btn => {
     btn.addEventListener('click', () => setConsoRecapMode(btn.dataset.recapMode));
   });
+
+  // ----- Données → Lots : bouton + ajouter -----
+  const lotsAddBtn = document.getElementById('lotsadd');
+  if (lotsAddBtn) lotsAddBtn.addEventListener('click', addWorkBatch);
+
+  // ----- Proto : upload + outils + dessin + bottom sheet -----
+  const protoUpload = document.getElementById('protoupload');
+  if (protoUpload) protoUpload.addEventListener('change', (e) => {
+    const f = e.target.files && e.target.files[0];
+    handleProtoUpload(f);
+    e.target.value = ''; // permet de re-uploader le même fichier
+  });
+  document.querySelectorAll('.proto-tool-btn[data-proto-tool]').forEach(btn => {
+    btn.addEventListener('click', () => setProtoTool(btn.dataset.protoTool));
+  });
+  const protoClear = document.getElementById('protoclear');
+  if (protoClear) protoClear.addEventListener('click', clearProtoShapes);
+  const protoReup = document.getElementById('protoreupload');
+  if (protoReup) protoReup.addEventListener('click', replaceProtoPlan);
+  const protoSvg = document.getElementById('protosvg');
+  if (protoSvg) {
+    protoSvg.addEventListener('pointerdown', startProtoDraw);
+    protoSvg.addEventListener('pointermove', moveProtoDraw);
+    protoSvg.addEventListener('pointerup',   endProtoDraw);
+    protoSvg.addEventListener('pointerleave', (e) => { if (protoDrawing) endProtoDraw(e); });
+  }
+  const protoSheet = document.getElementById('protoshapesheet');
+  if (protoSheet) {
+    document.getElementById('protoshapesheetclose').addEventListener('click', closeProtoShapeSheet);
+    protoSheet.addEventListener('click', (e) => { if (e.target === protoSheet) closeProtoShapeSheet(); });
+    document.getElementById('protoshapesave').addEventListener('click', saveProtoShapeSheet);
+    document.getElementById('protoshapedelete').addEventListener('click', deleteProtoShape);
+    document.querySelectorAll('.proto-status-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.proto-status-btn').forEach(b => b.classList.toggle('is-active', b === btn));
+      });
+    });
+  }
 
   // Service worker : enregistrement + rechargement auto à chaque mise à jour
   if ('serviceWorker' in navigator) {
