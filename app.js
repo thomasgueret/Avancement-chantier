@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.61';
+const APP_VERSION = '0.62';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -558,6 +558,8 @@ function renderDashboard() {
   renderDashboardToday();
   renderDashboardDocAlerts();
   renderDashboardStockAlerts();
+  renderDashboardConsommable();
+  renderDashboardEOTPAlerts();
   renderDashboardCompaniesPresence();
   renderDashboardBuildings();
 }
@@ -723,6 +725,141 @@ function renderDashboardStockAlerts() {
     }
     body.appendChild(ul);
   }
+  el.appendChild(body);
+}
+
+// --- Widget « Consommable ce mois » ---
+// Stats simples : total dépensé sur le mois courant + nombre de
+// commandes + total cumulé depuis le début du chantier. Donne une
+// vue d'ensemble du rythme de consommation.
+function renderDashboardConsommable() {
+  const el = document.getElementById('dashconsommable');
+  if (!el) return;
+  el.innerHTML = '';
+  el.appendChild(dashboardCardHeader('Consommable ce mois', 'consommable'));
+
+  const entries = getConsommableEntries();
+  const body = document.createElement('div');
+  body.className = 'dashboard-conso-body';
+  if (entries.length === 0) {
+    body.innerHTML = '<p class="dashboard-empty">Aucune commande enregistrée.</p>';
+    el.appendChild(body);
+    return;
+  }
+  const monthKey = (state.currentDate || todayISO()).slice(0, 7);
+  let monthTotal = 0, cumulTotal = 0;
+  const monthOrders = new Set();
+  for (const e of entries) {
+    const eur = (Number(e.qty) || 0) * (Number(e.unitPrice) || 0);
+    cumulTotal += eur;
+    if ((e.date || '').slice(0, 7) === monthKey) {
+      monthTotal += eur;
+      monthOrders.add(getEntryOrderId(e));
+    }
+  }
+  const nbOrders = monthOrders.size;
+  body.innerHTML = `
+    <div class="dashboard-conso-stats">
+      <div class="dashboard-conso-stat is-primary">
+        <div class="dashboard-conso-value" id="dc-month"></div>
+        <div class="dashboard-conso-label">ce mois HT</div>
+      </div>
+      <div class="dashboard-conso-stat">
+        <div class="dashboard-conso-value" id="dc-orders"></div>
+        <div class="dashboard-conso-label" id="dc-orders-label"></div>
+      </div>
+      <div class="dashboard-conso-stat">
+        <div class="dashboard-conso-value" id="dc-cumul"></div>
+        <div class="dashboard-conso-label">cumul HT</div>
+      </div>
+    </div>
+  `;
+  body.querySelector('#dc-month').textContent  = fmtEur(monthTotal);
+  body.querySelector('#dc-orders').textContent = nbOrders;
+  body.querySelector('#dc-orders-label').textContent = nbOrders > 1 ? 'commandes ce mois' : 'commande ce mois';
+  body.querySelector('#dc-cumul').textContent  = fmtEur(cumulTotal);
+  el.appendChild(body);
+}
+
+// --- Widget « Budget eOTP » (alertes de dépassement projeté) ---
+// Liste les lignes de budget eOTP dont la projection FDC dépasse ou
+// approche du budget. Ne s'active que si les dates projet sont
+// renseignées (sinon pas de FDC calculable).
+function renderDashboardEOTPAlerts() {
+  const el = document.getElementById('dasheotpalerts');
+  if (!el) return;
+  el.innerHTML = '';
+  el.appendChild(dashboardCardHeader('Budget eOTP', 'consommable'));
+
+  const body = document.createElement('div');
+  body.className = 'dashboard-eotp-body';
+  const elapsed   = getProjectMonthsElapsed();
+  const totalProj = getProjectMonthsTotal();
+  // Pas de projection possible → on guide l'utilisateur
+  if (elapsed <= 0 || totalProj <= 0) {
+    body.innerHTML = '<p class="dashboard-empty">Renseignez les dates du chantier (Données → Admin.) pour activer la projection des dépenses.</p>';
+    el.appendChild(body);
+    return;
+  }
+  const eotps = getEOTPs().filter(e => (e.code || '').trim() && (e.budget || 0) > 0);
+  if (eotps.length === 0) {
+    body.innerHTML = '<p class="dashboard-empty">Aucune ligne de budget eOTP renseignée.</p>';
+    el.appendChild(body);
+    return;
+  }
+  // Agrège les dépenses par code eOTP
+  const spentByCode = new Map();
+  for (const e of getConsommableEntries()) {
+    const code = (e.eOTP || '').trim();
+    if (!code) continue;
+    spentByCode.set(code, (spentByCode.get(code) || 0) + (Number(e.qty) || 0) * (Number(e.unitPrice) || 0));
+  }
+  // Calcule FDC et écart pour chaque eOTP, garde ceux en alerte
+  const alerts = [];
+  for (const eotp of eotps) {
+    const spent = spentByCode.get(eotp.code) || 0;
+    const fdc = (spent / elapsed) * totalProj;
+    const ratio = fdc / eotp.budget; // 1 = budget pile atteint
+    if (ratio < 0.80) continue; // pas d'alerte sous 80 %
+    let level = 'warning';
+    if (ratio >= 1) level = 'danger';
+    alerts.push({ code: eotp.code, label: eotp.label, budget: eotp.budget, fdc, ecart: eotp.budget - fdc, level });
+  }
+  // Tri : dépassements d'abord, puis ratio décroissant
+  alerts.sort((a, b) => {
+    if (a.level !== b.level) return a.level === 'danger' ? -1 : 1;
+    return (b.fdc / b.budget) - (a.fdc / a.budget);
+  });
+  if (alerts.length === 0) {
+    body.innerHTML = '<p class="dashboard-empty">Aucun dépassement projeté. ✓</p>';
+    el.appendChild(body);
+    return;
+  }
+  const ul = document.createElement('ul');
+  ul.className = 'dashboard-eotp-list';
+  for (const a of alerts) {
+    const li = document.createElement('li');
+    li.className = 'dashboard-eotp-row is-' + a.level;
+    li.innerHTML = `
+      <span class="dashboard-eotp-code-wrap">
+        <span class="dashboard-eotp-code"></span>
+        <span class="dashboard-eotp-label"></span>
+      </span>
+      <span class="dashboard-eotp-ecart"></span>
+    `;
+    li.querySelector('.dashboard-eotp-code').textContent = a.code;
+    const lbl = li.querySelector('.dashboard-eotp-label');
+    if (a.label) lbl.textContent = a.label; else lbl.remove();
+    li.querySelector('.dashboard-eotp-ecart').textContent = a.level === 'danger'
+      ? `${fmtEur(a.ecart)} FDC`
+      : `${Math.round((a.fdc / a.budget) * 100)} % FDC`;
+    li.addEventListener('click', () => {
+      switchPage('consommable'); switchSubPage('conso', 'conrecap');
+      state.consoRecapMode = 'eotp'; save(); renderConsommableRecap();
+    });
+    ul.appendChild(li);
+  }
+  body.appendChild(ul);
   el.appendChild(body);
 }
 
