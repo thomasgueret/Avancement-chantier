@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.67';
+const APP_VERSION = '0.68';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -5855,17 +5855,21 @@ function zoomCentered(factor) {
 
 // ---------- Dessin sur le SVG ----------
 // Convertit un événement pointer en coords SVG (= px naturels du plan).
+// On utilise getBoundingClientRect() plutôt que getScreenCTM() : la
+// rect prend en compte de manière fiable les transforms CSS appliqués
+// aux ancêtres HTML (le scale/translate sur .proto-canvas-inner),
+// alors que getScreenCTM() les ignore sur iOS Safari (les formes se
+// posaient alors à plusieurs centimètres du doigt en mode zoomé).
 function protoSvgCoords(evt) {
   const svg = document.getElementById('protosvg');
-  if (!svg) return null;
-  const pt = svg.createSVGPoint();
-  pt.x = evt.clientX;
-  pt.y = evt.clientY;
-  const ctm = svg.getScreenCTM();
-  if (!ctm) return null;
-  const inv = ctm.inverse();
-  const local = pt.matrixTransform(inv);
-  return { x: local.x, y: local.y };
+  const plan = getActiveProtoPlan();
+  if (!svg || !plan) return null;
+  const rect = svg.getBoundingClientRect();
+  if (!rect.width || !rect.height) return null;
+  return {
+    x: (evt.clientX - rect.left) * (plan.w / rect.width),
+    y: (evt.clientY - rect.top)  * (plan.h / rect.height)
+  };
 }
 
 function cancelProtoInProgress() {
