@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.65';
+const APP_VERSION = '0.66';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -5540,11 +5540,8 @@ function buildShapeElement(sh) {
   }
   el.classList.add('proto-shape');
   el.setAttribute('data-shape-id', sh.id);
-  el.addEventListener('click', (e) => {
-    if (protoTool !== 'select') return;
-    e.stopPropagation();
-    openProtoShapeSheet(sh.id);
-  });
+  // L'ouverture du sheet est gérée dans protoPointerDown (réponse
+  // immédiate au tap mobile, plus rapide qu'un événement 'click').
   return el;
 }
 
@@ -5871,7 +5868,17 @@ function isProtoShape(target) {
 }
 
 // ---------- Dispatcher pointer (draw vs pan vs pinch vs polygon) ----------
+// Les listeners sont attachés sur .proto-canvas-wrap (HTMLElement) plutôt
+// que sur le SVG : setPointerCapture est plus fiable sur un élément
+// HTML, et l'événement reste capté même quand le doigt sort de la zone
+// de l'SVG, ce qui résout le bug du drag tactile sur iOS Safari.
 function protoPointerDown(evt) {
+  // Ignore les pointers qui démarrent sur les contrôles flottants
+  // (zoom, hint polygone) — ils ont leur propre handler de click.
+  if (evt.target && evt.target.closest &&
+      (evt.target.closest('.proto-zoom-bar') || evt.target.closest('.proto-poly-hint'))) {
+    return;
+  }
   protoActivePointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY });
   if (protoActivePointers.size === 2) {
     // 2 doigts → pinch-pan (annule tout dessin en cours)
@@ -5881,12 +5888,17 @@ function protoPointerDown(evt) {
     evt.preventDefault();
     return;
   }
-  // Mode Sélection : si zoom > 1, démarre un pan en touchant le fond ;
-  // sinon ne fait rien (clic sur forme géré par le listener de la forme)
+  // Mode Sélection : tap sur une forme = ouvre son sheet (réponse
+  // immédiate au pointerdown, plus rapide qu'attendre le click sur
+  // mobile). Sinon, démarre un pan (à n'importe quel zoom, pour
+  // pouvoir recentrer l'image).
   if (protoTool === 'select') {
-    if (protoView.scale > 1 && !isProtoShape(evt.target)) {
-      startProtoPan(evt);
+    if (isProtoShape(evt.target)) {
+      const id = evt.target.getAttribute('data-shape-id');
+      if (id) openProtoShapeSheet(id);
+      return;
     }
+    startProtoPan(evt);
     return;
   }
   // Mode polygone : clic = ajouter un sommet (ou refermer)
@@ -5935,10 +5947,10 @@ function protoPointerUp(evt) {
 }
 
 function captureProtoPointers() {
-  const svg = document.getElementById('protosvg');
-  if (!svg || !svg.setPointerCapture) return;
+  const wrap = document.getElementById('protocanvaswrap');
+  if (!wrap || !wrap.setPointerCapture) return;
   for (const id of protoActivePointers.keys()) {
-    try { svg.setPointerCapture(id); } catch (_) {}
+    try { wrap.setPointerCapture(id); } catch (_) {}
   }
 }
 
@@ -5967,9 +5979,9 @@ function updateProtoPinch() {
 
 // ---------- Pan (déplacement quand zoom > 1) ----------
 function startProtoPan(evt) {
-  const svg = document.getElementById('protosvg');
-  if (svg && svg.setPointerCapture) {
-    try { svg.setPointerCapture(evt.pointerId); } catch (_) {}
+  const wrap = document.getElementById('protocanvaswrap');
+  if (wrap && wrap.setPointerCapture) {
+    try { wrap.setPointerCapture(evt.pointerId); } catch (_) {}
   }
   protoPan = {
     startClientX: evt.clientX, startClientY: evt.clientY,
@@ -6002,9 +6014,9 @@ function startSimpleDraw(evt) {
     openProtoShapeSheet(sh.id);
     return;
   }
-  const svg = document.getElementById('protosvg');
-  if (svg && evt.pointerId != null && svg.setPointerCapture) {
-    try { svg.setPointerCapture(evt.pointerId); } catch (_) {}
+  const wrap = document.getElementById('protocanvaswrap');
+  if (wrap && evt.pointerId != null && wrap.setPointerCapture) {
+    try { wrap.setPointerCapture(evt.pointerId); } catch (_) {}
   }
   protoDrawing = { startX: c.x, startY: c.y, type: protoTool, previewEl: null, pointerId: evt.pointerId };
   evt.preventDefault();
@@ -6049,9 +6061,9 @@ function endSimpleDraw(evt) {
   const plan = getActiveProtoPlan();
   const c = protoSvgCoords(evt) || { x: protoDrawing.startX, y: protoDrawing.startY };
   if (protoDrawing.previewEl) protoDrawing.previewEl.remove();
-  const svg = document.getElementById('protosvg');
-  if (svg && protoDrawing.pointerId != null && svg.releasePointerCapture) {
-    try { svg.releasePointerCapture(protoDrawing.pointerId); } catch (_) {}
+  const wrap = document.getElementById('protocanvaswrap');
+  if (wrap && protoDrawing.pointerId != null && wrap.releasePointerCapture) {
+    try { wrap.releasePointerCapture(protoDrawing.pointerId); } catch (_) {}
   }
   if (!plan) { protoDrawing = null; return; }
   const minSize = Math.max(plan.w, plan.h) / 100;
@@ -6428,16 +6440,15 @@ function init() {
     protoMgr.addEventListener('click', (e) => { if (e.target === protoMgr) closeProtoManager(); });
     document.getElementById('protomanageraddfolder').addEventListener('click', addProtoFolder);
   }
-  const protoSvg = document.getElementById('protosvg');
-  if (protoSvg) {
-    protoSvg.addEventListener('pointerdown', protoPointerDown);
-    protoSvg.addEventListener('pointermove', protoPointerMove);
-    protoSvg.addEventListener('pointerup',   protoPointerUp);
-    protoSvg.addEventListener('pointercancel', protoPointerUp);
-  }
-  // Zoom : boutons + molette (centrée sur le curseur).
+  // Listeners pointer attachés sur le wrap HTMLElement plutôt que le
+  // SVG : setPointerCapture est plus fiable et le drag continue de
+  // fonctionner même si le doigt sort de la zone du SVG (iOS Safari).
   const protoWrap = document.getElementById('protocanvaswrap');
   if (protoWrap) {
+    protoWrap.addEventListener('pointerdown',   protoPointerDown);
+    protoWrap.addEventListener('pointermove',   protoPointerMove);
+    protoWrap.addEventListener('pointerup',     protoPointerUp);
+    protoWrap.addEventListener('pointercancel', protoPointerUp);
     protoWrap.addEventListener('wheel', (e) => {
       e.preventDefault();
       const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;

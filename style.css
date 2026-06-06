@@ -2696,7 +2696,14 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
-  /* Le curseur indique l'outil actif */
+  /* Sur téléphone : on consomme tous les gestes tactiles ici pour
+     que le scroll de la page ne vienne pas interférer avec le
+     dessin / zoom / pinch / pan. Les contrôles +/-/⟲ flottants
+     conservent leur propre touch-action via auto plus loin. */
+  touch-action: none;
+  overscroll-behavior: contain;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .proto-canvas-wrap[data-proto-tool="point"],
 .proto-canvas-wrap[data-proto-tool="line"],
@@ -2745,7 +2752,12 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   line-height: 1;
+  /* Restaure le touch-action par défaut sur les boutons : on veut
+     que la tape sur +/-/⟲ déclenche un click normal, sans être
+     interceptée par le canvas qui consomme tous les gestes. */
+  touch-action: auto;
 }
+.proto-poly-hint, .proto-poly-cancel { touch-action: auto; }
 .proto-zoom-btn:active { background: var(--surface-2); color: var(--accent); }
 /* Hint visible quand un polygone est en cours de tracé */
 .proto-poly-hint {
