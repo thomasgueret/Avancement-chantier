@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.66';
+const APP_VERSION = '0.67';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -5243,9 +5243,24 @@ let protoView = { scale: 1, tx: 0, ty: 0 };
 const PROTO_ZOOM_MIN = 0.5;
 const PROTO_ZOOM_MAX = 8;
 // Suivi des pointers actifs pour différencier draw/pan/pinch.
-const protoActivePointers = new Map(); // pointerId → { x, y }
+// Chaque entrée porte un timestamp `t` rafraîchi à chaque pointermove —
+// permet d'évincer les pointers fantômes (iOS Safari peut oublier
+// d'émettre un pointerup quand l'OS intercepte la séquence ou qu'un
+// modal s'ouvre, laissant une entrée stale qui fait croire à un pinch
+// avec un seul doigt).
+const protoActivePointers = new Map(); // pointerId → { x, y, t }
+const PROTO_POINTER_STALE_MS = 2000;
 let protoPinch = null;      // { lastDist, lastCx, lastCy }
 let protoPan = null;        // { startClientX, startClientY, startTx, startTy, pointerId }
+function evictStaleProtoPointers() {
+  const now = Date.now();
+  for (const [id, info] of Array.from(protoActivePointers.entries())) {
+    if (now - (info.t || 0) > PROTO_POINTER_STALE_MS) {
+      protoActivePointers.delete(id);
+    }
+  }
+  if (protoActivePointers.size < 2) protoPinch = null;
+}
 
 // ---------- Lots de travaux (Données → Lots) ----------
 function getWorkBatches() { return Array.isArray(state.workBatches) ? state.workBatches : []; }
@@ -5717,6 +5732,7 @@ let protoUploadTargetFolderId = '';
 function openProtoManager() {
   const m = document.getElementById('protomanager');
   if (!m) return;
+  protoResetGestureState(); // évite que des pointers en cours « bavent » dans la modale
   renderProtoManager();
   m.hidden = false;
   document.body.style.overflow = 'hidden';
@@ -5827,9 +5843,9 @@ function zoomByAtClient(factor, clientX, clientY) {
   protoView.ty = cy - sy * newScale;
   applyProtoView();
 }
-function protoZoomIn()    { zoomCentered(1.25); }
-function protoZoomOut()   { zoomCentered(1 / 1.25); }
-function protoZoomReset() { protoView = { scale: 1, tx: 0, ty: 0 }; applyProtoView(); }
+function protoZoomIn()    { protoResetGestureState(); zoomCentered(1.25); }
+function protoZoomOut()   { protoResetGestureState(); zoomCentered(1 / 1.25); }
+function protoZoomReset() { protoResetGestureState(); protoView = { scale: 1, tx: 0, ty: 0 }; applyProtoView(); }
 function zoomCentered(factor) {
   const wrap = document.getElementById('protocanvaswrap');
   if (!wrap) return;
@@ -5879,7 +5895,24 @@ function protoPointerDown(evt) {
       (evt.target.closest('.proto-zoom-bar') || evt.target.closest('.proto-poly-hint'))) {
     return;
   }
-  protoActivePointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY });
+  // Tap sur une forme en mode Sélection : on ouvre directement le
+  // sheet sans tracker le pointer. Important : ne PAS l'ajouter à
+  // activePointers, sinon l'ouverture de la modale empêche le
+  // pointerup correspondant d'atteindre le wrap et on laisse une
+  // entrée fantôme (cause du bug « zoom à 1 doigt + dessin impossible »).
+  if (protoTool === 'select' && isProtoShape(evt.target)) {
+    const id = evt.target.getAttribute('data-shape-id');
+    if (id) {
+      protoResetGestureState();
+      openProtoShapeSheet(id);
+    }
+    return;
+  }
+  // Évince tout pointer fantôme avant d'évaluer le nombre de doigts.
+  // Sans cette purge, une entrée stale fait basculer en pinch alors
+  // qu'un seul vrai doigt est posé.
+  evictStaleProtoPointers();
+  protoActivePointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY, t: Date.now() });
   if (protoActivePointers.size === 2) {
     // 2 doigts → pinch-pan (annule tout dessin en cours)
     cancelProtoInProgress();
@@ -5888,32 +5921,40 @@ function protoPointerDown(evt) {
     evt.preventDefault();
     return;
   }
-  // Mode Sélection : tap sur une forme = ouvre son sheet (réponse
-  // immédiate au pointerdown, plus rapide qu'attendre le click sur
-  // mobile). Sinon, démarre un pan (à n'importe quel zoom, pour
+  // Mode Sélection : démarre un pan (à n'importe quel zoom, pour
   // pouvoir recentrer l'image).
   if (protoTool === 'select') {
-    if (isProtoShape(evt.target)) {
-      const id = evt.target.getAttribute('data-shape-id');
-      if (id) openProtoShapeSheet(id);
-      return;
-    }
     startProtoPan(evt);
     return;
   }
   // Mode polygone : clic = ajouter un sommet (ou refermer)
   if (protoTool === 'polygon') {
-    if (isProtoShape(evt.target)) return; // ne pas placer un sommet sur une forme
+    if (isProtoShape(evt.target)) {
+      protoActivePointers.delete(evt.pointerId);
+      return;
+    }
     handlePolygonClick(evt);
     return;
   }
   // Modes point / line / rect
-  if (isProtoShape(evt.target)) return;
+  if (isProtoShape(evt.target)) {
+    protoActivePointers.delete(evt.pointerId);
+    return;
+  }
   startSimpleDraw(evt);
+}
+
+// Reset complet de l'état des gestes — utilisé quand on ouvre une
+// modale ou qu'on clique sur un bouton de zoom (situations où les
+// pointerup peuvent ne pas revenir au wrap, laissant des fantômes).
+function protoResetGestureState() {
+  protoActivePointers.clear();
+  protoPinch = null;
+  cancelProtoInProgress();
 }
 function protoPointerMove(evt) {
   if (protoActivePointers.has(evt.pointerId)) {
-    protoActivePointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY });
+    protoActivePointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY, t: Date.now() });
   }
   if (protoActivePointers.size === 2) {
     updateProtoPinch();
@@ -6455,6 +6496,26 @@ function init() {
       zoomByAtClient(f, e.clientX, e.clientY);
     }, { passive: false });
   }
+  // Filet de sécurité : tout pointerup/cancel au niveau du document
+  // nettoie activePointers, même si l'événement n'a pas été délivré au
+  // wrap (cas iOS Safari où un pointerup peut être manqué quand un
+  // modal s'ouvre ou que l'OS intercepte le toucher). Sans ce filet,
+  // des entrées fantômes restaient en mémoire et faisaient basculer
+  // par erreur en mode pinch (size = 2) au prochain touch — empêchant
+  // tout dessin de fonctionner jusqu'au reload.
+  const releaseGhostPointer = (e) => {
+    if (protoActivePointers.has(e.pointerId)) {
+      protoActivePointers.delete(e.pointerId);
+      if (protoActivePointers.size < 2) protoPinch = null;
+    }
+  };
+  document.addEventListener('pointerup',     releaseGhostPointer, true);
+  document.addEventListener('pointercancel', releaseGhostPointer, true);
+  // Si l'utilisateur quitte la fenêtre (changement d'onglet, retour au
+  // shell iOS…), on remet les compteurs à zéro à son retour.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') protoResetGestureState();
+  });
   const protoZIn  = document.getElementById('protozoomin');
   const protoZOut = document.getElementById('protozoomout');
   const protoZRst = document.getElementById('protozoomreset');
