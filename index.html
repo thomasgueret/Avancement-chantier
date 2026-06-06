@@ -310,68 +310,83 @@
     </section>
     <!-- ============== ONGLET : PROTO (plan + tâches géolocalisées) ============== -->
     <section class="page" id="page-proto">
-      <p class="section-help" id="protohelp">Téléversez un plan (JPG/JPEG) puis ajoutez points, lignes ou rectangles pour localiser les tâches. Tapez sur une forme pour la documenter (lot, intitulé, date, statut). <em>Prototype expérimental — vos retours sont les bienvenus.</em></p>
-
-      <!-- Input de fichier partagé (caché). Le ciblage du dossier se
-           fait via la variable JS protoUploadTargetFolderId, mise à
-           jour par le bouton qui déclenche le picker. -->
-      <input type="file" id="protoupload" accept="image/jpeg,image/jpg,.jpg,.jpeg" hidden>
-
-      <div class="proto-empty" id="protoempty">
-        <p>Aucun plan chargé.</p>
-        <button class="btn-primary proto-upload-btn" id="protoemptymanager" type="button">Gérer mes dossiers et plans</button>
-        <p class="hint">Créez un dossier puis téléversez des plans (JPG, compressés à 1920px max).</p>
+      <div class="segmented" role="tablist" data-group="proto" data-position="0" style="--count:2;">
+        <div class="segmented-thumb"></div>
+        <button class="seg-btn active" data-group="proto" data-sub="plans" role="tab">Plans</button>
+        <button class="seg-btn" data-group="proto" data-sub="recap" role="tab">Récap</button>
       </div>
 
-      <div class="proto-editor" id="protoeditor" hidden>
-        <!-- Sélecteur de plan + bouton « Gérer » -->
-        <div class="proto-plan-bar">
-          <label for="protoplanselect" class="proto-plan-bar-label">Plan</label>
-          <select id="protoplanselect" class="stock-form-input proto-plan-select"></select>
-          <button class="proto-tool-btn proto-tool-secondary" id="protoopenmanager" type="button">📁<span> Gérer</span></button>
+      <!-- Sous-onglet : Plans (éditeur de plan + dessin) -->
+      <div class="sub-page active" id="sub-plans" data-group="proto">
+        <p class="section-help" id="protohelp">Téléversez un plan (JPG/JPEG) puis ajoutez points, lignes ou rectangles pour localiser les tâches. Tapez sur une forme pour la documenter (lot, intitulé, date, statut). <em>Prototype expérimental — vos retours sont les bienvenus.</em></p>
+
+        <!-- Input de fichier partagé (caché). Le ciblage du dossier se
+             fait via la variable JS protoUploadTargetFolderId, mise à
+             jour par le bouton qui déclenche le picker. -->
+        <input type="file" id="protoupload" accept="image/jpeg,image/jpg,.jpeg,.jpg" hidden>
+
+        <div class="proto-empty" id="protoempty">
+          <p>Aucun plan chargé.</p>
+          <button class="btn-primary proto-upload-btn" id="protoemptymanager" type="button">Gérer mes dossiers et plans</button>
+          <p class="hint">Créez un dossier puis téléversez des plans (JPG, compressés à 1920px max).</p>
         </div>
 
-        <!-- Filtres lot + statut -->
-        <div class="proto-filter-bar">
-          <div class="proto-filter-group">
-            <label for="protofilterlot" class="proto-filter-label">Lot</label>
-            <select id="protofilterlot" class="stock-form-input proto-filter-select"></select>
+        <div class="proto-editor" id="protoeditor" hidden>
+          <!-- Sélecteur de plan + bouton « Gérer » -->
+          <div class="proto-plan-bar">
+            <label for="protoplanselect" class="proto-plan-bar-label">Plan</label>
+            <select id="protoplanselect" class="stock-form-input proto-plan-select"></select>
+            <button class="proto-tool-btn proto-tool-secondary" id="protoopenmanager" type="button">📁<span> Gérer</span></button>
           </div>
-          <div class="proto-filter-group proto-filter-group-status">
-            <span class="proto-filter-label">Statut</span>
-            <div class="proto-filter-status-bar" role="group" aria-label="Filtrer par statut">
-              <button class="proto-filter-status" data-proto-filter-status="todo"  type="button" aria-pressed="true">À faire</button>
-              <button class="proto-filter-status" data-proto-filter-status="doing" type="button" aria-pressed="true">En cours</button>
-              <button class="proto-filter-status" data-proto-filter-status="done"  type="button" aria-pressed="true">Réalisée</button>
+
+          <!-- Filtres lot + statut -->
+          <div class="proto-filter-bar">
+            <div class="proto-filter-group">
+              <label for="protofilterlot" class="proto-filter-label">Lot</label>
+              <select id="protofilterlot" class="stock-form-input proto-filter-select"></select>
+            </div>
+            <div class="proto-filter-group proto-filter-group-status">
+              <span class="proto-filter-label">Statut</span>
+              <div class="proto-filter-status-bar" role="group" aria-label="Filtrer par statut">
+                <button class="proto-filter-status" data-proto-filter-status="todo"  type="button" aria-pressed="true">À faire</button>
+                <button class="proto-filter-status" data-proto-filter-status="doing" type="button" aria-pressed="true">En cours</button>
+                <button class="proto-filter-status" data-proto-filter-status="done"  type="button" aria-pressed="true">Réalisée</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="proto-toolbar" role="toolbar" aria-label="Outils de dessin">
+            <button class="proto-tool-btn" data-proto-tool="select" type="button" aria-pressed="true" title="Sélectionner / éditer une forme">↖<span> Sélection</span></button>
+            <button class="proto-tool-btn" data-proto-tool="point" type="button" aria-pressed="false" title="Ajouter un point">●<span> Point</span></button>
+            <button class="proto-tool-btn" data-proto-tool="line" type="button" aria-pressed="false" title="Tracer une ligne">／<span> Ligne</span></button>
+            <button class="proto-tool-btn" data-proto-tool="rect" type="button" aria-pressed="false" title="Tracer un rectangle (tape + glisser)">▭<span> Rectangle</span></button>
+            <button class="proto-tool-btn" data-proto-tool="polygon" type="button" aria-pressed="false" title="Tracer un polygone (clic par clic, refermer en cliquant le premier point)">⬠<span> Polygone</span></button>
+            <button class="proto-tool-btn proto-tool-danger" id="protoclear" type="button" title="Supprimer toutes les formes de ce plan">🗑<span> Effacer</span></button>
+          </div>
+          <div class="proto-legend" id="protolegend"></div>
+          <div class="proto-canvas-wrap" id="protocanvaswrap">
+            <div class="proto-canvas-inner" id="protocanvasinner">
+              <img id="protoimage" alt="Plan du bâtiment">
+              <svg id="protosvg" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"></svg>
+            </div>
+            <div class="proto-zoom-bar" role="toolbar" aria-label="Zoom">
+              <button class="proto-zoom-btn" id="protozoomin"    type="button" title="Zoomer">+</button>
+              <button class="proto-zoom-btn" id="protozoomout"   type="button" title="Dézoomer">−</button>
+              <button class="proto-zoom-btn" id="protozoomreset" type="button" title="Réinitialiser le zoom">⟲</button>
+            </div>
+            <div class="proto-poly-hint" id="protopolyhint" hidden>
+              <span id="protopolyhinttext">Cliquez pour placer un sommet — fermez en cliquant sur le premier point.</span>
+              <button class="proto-poly-cancel" id="protopolycancel" type="button">Annuler</button>
             </div>
           </div>
         </div>
+      </div>
 
-        <div class="proto-toolbar" role="toolbar" aria-label="Outils de dessin">
-          <button class="proto-tool-btn" data-proto-tool="select" type="button" aria-pressed="true" title="Sélectionner / éditer une forme">↖<span> Sélection</span></button>
-          <button class="proto-tool-btn" data-proto-tool="point" type="button" aria-pressed="false" title="Ajouter un point">●<span> Point</span></button>
-          <button class="proto-tool-btn" data-proto-tool="line" type="button" aria-pressed="false" title="Tracer une ligne">／<span> Ligne</span></button>
-          <button class="proto-tool-btn" data-proto-tool="rect" type="button" aria-pressed="false" title="Tracer un rectangle (tape + glisser)">▭<span> Rectangle</span></button>
-          <button class="proto-tool-btn" data-proto-tool="polygon" type="button" aria-pressed="false" title="Tracer un polygone (clic par clic, refermer en cliquant le premier point)">⬠<span> Polygone</span></button>
-          <div class="proto-toolbar-sep"></div>
-          <button class="proto-tool-btn proto-tool-danger" id="protoclear" type="button" title="Supprimer toutes les formes de ce plan">🗑<span> Effacer</span></button>
-        </div>
-        <div class="proto-canvas-wrap" id="protocanvaswrap">
-          <div class="proto-canvas-inner" id="protocanvasinner">
-            <img id="protoimage" alt="Plan du bâtiment">
-            <svg id="protosvg" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"></svg>
-          </div>
-          <div class="proto-zoom-bar" role="toolbar" aria-label="Zoom">
-            <button class="proto-zoom-btn" id="protozoomin"    type="button" title="Zoomer">+</button>
-            <button class="proto-zoom-btn" id="protozoomout"   type="button" title="Dézoomer">−</button>
-            <button class="proto-zoom-btn" id="protozoomreset" type="button" title="Réinitialiser le zoom">⟲</button>
-          </div>
-          <div class="proto-poly-hint" id="protopolyhint" hidden>
-            <span id="protopolyhinttext">Cliquez pour placer un sommet — fermez en cliquant sur le premier point.</span>
-            <button class="proto-poly-cancel" id="protopolycancel" type="button">Annuler</button>
-          </div>
-        </div>
-        <div class="proto-legend" id="protolegend"></div>
+      <!-- Sous-onglet : Récap (avancement des tâches par lot / plan) -->
+      <div class="sub-page" id="sub-recap" data-group="proto">
+        <p class="section-help">Avancement des tâches calculé d'après les formes posées sur chaque plan. Surfaces (rect + polygones) en u², lignes en u, points par compte. Sélectionnez un plan pour voir son récap.</p>
+        <div class="proto-recap-plan-slider" id="protorecapsliders" role="tablist" aria-label="Choisir un plan"></div>
+        <div class="proto-recap-body" id="protorecapbody"></div>
       </div>
     </section>
   </main>

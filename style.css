@@ -2787,6 +2787,178 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 }
 /* Chip de légende grisée quand le statut est désactivé via le filtre */
 .proto-legend-chip.is-muted { opacity: 0.4; }
+
+/* ============================================================
+   PROTO → Récap : avancement des tâches par lot / plan
+   ============================================================ */
+
+/* Slider horizontal de plans (chips défilantes) */
+.proto-recap-plan-slider {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px 2px 8px;
+  scroll-snap-type: x proximity;
+  margin-bottom: 10px;
+}
+.proto-recap-plan-slider::-webkit-scrollbar { height: 4px; }
+.proto-recap-plan-slider::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.proto-recap-plan-chip {
+  flex-shrink: 0;
+  display: inline-flex; flex-direction: column;
+  padding: 8px 14px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  border-radius: var(--radius);
+  font-size: 13px; font-weight: 600;
+  color: var(--text-2);
+  cursor: pointer;
+  scroll-snap-align: start;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+  text-align: left;
+}
+.proto-recap-plan-chip .proto-recap-plan-chip-folder {
+  font-size: 10px; font-weight: 600;
+  color: var(--text-3);
+  text-transform: uppercase; letter-spacing: 0.04em;
+  line-height: 1.2;
+}
+.proto-recap-plan-chip .proto-recap-plan-chip-name {
+  font-size: 13px; font-weight: 700;
+  color: inherit;
+  line-height: 1.2;
+}
+.proto-recap-plan-chip.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  box-shadow: 0 1px 3px rgba(255, 103, 29, 0.3);
+}
+.proto-recap-plan-chip.is-active .proto-recap-plan-chip-folder {
+  color: rgba(255,255,255,0.75);
+}
+
+/* Corps du récap : pile de cartes par lot */
+.proto-recap-body {
+  display: flex; flex-direction: column;
+  gap: 12px;
+}
+.proto-recap-empty {
+  padding: 32px 16px;
+  text-align: center;
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+}
+.proto-recap-empty p { margin: 0 0 4px; color: var(--text-2); }
+.proto-recap-empty .hint { color: var(--text-3); font-size: 12px; }
+
+/* Stats globales du plan (en haut, sous le slider) */
+.proto-recap-plan-stats {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.proto-recap-plan-stat {
+  display: flex; flex-direction: column;
+  font-variant-numeric: tabular-nums;
+}
+.proto-recap-plan-stat-value {
+  font-size: 18px; font-weight: 800; color: var(--text);
+  line-height: 1.1;
+}
+.proto-recap-plan-stat-label {
+  font-size: 10px; font-weight: 600; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: 0.04em;
+  margin-top: 2px;
+}
+
+/* Carte lot — bordure colorée à gauche selon la couleur du lot */
+.proto-recap-lot {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+.proto-recap-lot-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px;
+}
+.proto-recap-lot-name {
+  font-size: 15px; font-weight: 700; color: var(--text);
+  letter-spacing: 0.01em;
+}
+.proto-recap-lot-aggregate {
+  font-size: 12px; font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Rangée tâche */
+.proto-recap-task-list {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.proto-recap-task {
+  display: flex; flex-direction: column; gap: 4px;
+}
+.proto-recap-task-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 8px;
+}
+.proto-recap-task-title {
+  font-size: 14px; font-weight: 600; color: var(--text);
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.proto-recap-task-meta {
+  font-size: 11px; color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+/* Barre d'avancement stackée 3 couleurs */
+.proto-recap-bar {
+  display: flex;
+  height: 12px;
+  background: var(--surface-2);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.proto-recap-bar-seg {
+  height: 100%;
+  transition: flex 0.2s ease;
+}
+.proto-recap-bar-seg.is-done  { background: #2e7d32; }
+.proto-recap-bar-seg.is-doing { background: #ed6c02; }
+.proto-recap-bar-seg.is-todo  { background: #d32f2f; }
+/* Légende sous la barre */
+.proto-recap-task-legend {
+  display: flex; flex-wrap: wrap; gap: 10px;
+  font-size: 11px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.proto-recap-task-legend-item { display: inline-flex; align-items: center; gap: 4px; }
+.proto-recap-task-legend-dot {
+  width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+}
+.proto-recap-task-legend-dot.is-done  { background: #2e7d32; }
+.proto-recap-task-legend-dot.is-doing { background: #ed6c02; }
+.proto-recap-task-legend-dot.is-todo  { background: #d32f2f; }
+.proto-recap-task-legend-pct { font-weight: 700; color: var(--text); }
+
+/* Tâches sans lot ou sans intitulé */
+.proto-recap-lot.is-none {
+  border-left-color: var(--text-3);
+}
+.proto-recap-lot.is-none .proto-recap-lot-name { color: var(--text-3); font-style: italic; }
 .proto-shape {
   cursor: pointer;
   transition: filter 0.12s;

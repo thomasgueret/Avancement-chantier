@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.68';
+const APP_VERSION = '0.69';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -3312,6 +3312,7 @@ function switchSubPage(group, name) {
   }
   // Garantit un récap toujours frais à l'ouverture du sous-onglet
   if (group === 'avancement' && name === 'recap') renderRecap();
+  if (group === 'proto' && name === 'recap') renderProtoRecap();
 }
 
 function renderCompanies() {
@@ -5485,6 +5486,7 @@ function renderProto() {
   renderProtoFilterBar();
   renderProtoSVG();
   renderProtoLegend();
+  renderProtoRecap();
   refreshProtoToolbar();
   refreshProtoPolyHint();
   applyProtoView();
@@ -5581,6 +5583,288 @@ function renderProtoLegend() {
     if (!activeStatuses.has(s)) chip.classList.add('is-muted');
     chip.innerHTML = `<span class="proto-legend-dot" style="background:${PROTO_STATUS_COLOR[s]}"></span><span>${PROTO_STATUS_LABEL[s]} : <strong>${counts[s]}</strong></span>`;
     el.appendChild(chip);
+  }
+}
+
+// ---------- Récap d'avancement (sous-onglet Proto → Récap) ----------
+// Calcul des "volumes" par tâche selon le type dominant de ses formes :
+//  - surface  : somme des aires (rect = w·h, polygon = formule du lacet)
+//  - longueur : somme des longueurs euclidiennes des lignes
+//  - compte   : nombre de points
+// Une tâche est identifiée par son intitulé (title) — au sein d'un même
+// lot, deux formes avec le même intitulé sont agrégées.
+function polygonAreaProto(points) {
+  if (!Array.isArray(points) || points.length < 3) return 0;
+  let area = 0;
+  for (let i = 0; i < points.length; i++) {
+    const j = (i + 1) % points.length;
+    area += points[i].x * points[j].y;
+    area -= points[j].x * points[i].y;
+  }
+  return Math.abs(area / 2);
+}
+function shapeRawValue(s) {
+  // Retourne la "quantité" brute selon le type de la forme
+  if (s.type === 'rect')    return { surface: (s.coords.w || 0) * (s.coords.h || 0) };
+  if (s.type === 'polygon') return { surface: polygonAreaProto(s.coords.points) };
+  if (s.type === 'line')    return { length: Math.hypot(s.coords.x2 - s.coords.x1, s.coords.y2 - s.coords.y1) };
+  if (s.type === 'point')   return { count: 1 };
+  return {};
+}
+function dominantTaskType(shapes) {
+  // Type dominant = celui qui apparaît le plus, surface en cas d'égalité
+  const c = { surface: 0, length: 0, count: 0 };
+  for (const s of shapes) {
+    if (s.type === 'rect' || s.type === 'polygon') c.surface++;
+    else if (s.type === 'line') c.length++;
+    else if (s.type === 'point') c.count++;
+  }
+  if (c.surface >= c.length && c.surface >= c.count && c.surface > 0) return 'surface';
+  if (c.length >= c.count && c.length > 0) return 'length';
+  if (c.count > 0) return 'count';
+  return null;
+}
+function fmtRecapVolume(type, value) {
+  // Affichage compact ; les unités sont en pixels-plan tant qu'on n'a
+  // pas calibré une échelle réelle. On formatte avec K si très grand.
+  if (value == null) return '—';
+  let txt;
+  if (type === 'surface') {
+    txt = (value >= 100000 ? (value / 1000).toFixed(1) + 'k' : Math.round(value).toLocaleString('fr-FR')) + ' u²';
+  } else if (type === 'length') {
+    txt = (value >= 100000 ? (value / 1000).toFixed(1) + 'k' : Math.round(value).toLocaleString('fr-FR')) + ' u';
+  } else {
+    txt = value + (value > 1 ? ' points' : ' point');
+  }
+  return txt;
+}
+function getProtoRecapData(planId) {
+  // Filtre les formes du plan + filtre les formes avec un type
+  // reconnu, puis groupe par lotId → title.
+  const shapes = (state.protoShapes || []).filter(s => s.planId === planId);
+  // Map<lotId, Map<title, [shapes…]>>
+  const byLot = new Map();
+  for (const s of shapes) {
+    const lotKey = s.lotId || '';
+    const titleKey = (s.title || '').trim();
+    if (!byLot.has(lotKey)) byLot.set(lotKey, new Map());
+    const byTitle = byLot.get(lotKey);
+    if (!byTitle.has(titleKey)) byTitle.set(titleKey, []);
+    byTitle.get(titleKey).push(s);
+  }
+  const lots = [];
+  for (const [lotId, byTitle] of byLot.entries()) {
+    const lot = lotId ? getWorkBatch(lotId) : null;
+    const tasks = [];
+    for (const [title, taskShapes] of byTitle.entries()) {
+      const type = dominantTaskType(taskShapes);
+      if (!type) continue;
+      const vols = { todo: 0, doing: 0, done: 0 };
+      const counts = { todo: 0, doing: 0, done: 0 };
+      let total = 0;
+      for (const s of taskShapes) {
+        // N'agrège que les formes correspondant au type dominant —
+        // une ligne « parasite » dans une tâche surface est ignorée.
+        const v = shapeRawValue(s);
+        const value = v[type] || 0;
+        if (value <= 0 && type !== 'count') continue;
+        const st = (s.status || 'todo');
+        vols[st] = (vols[st] || 0) + value;
+        counts[st] = (counts[st] || 0) + 1;
+        total += value;
+      }
+      if (total <= 0) continue;
+      const pct = {
+        todo:  total > 0 ? (vols.todo  / total) * 100 : 0,
+        doing: total > 0 ? (vols.doing / total) * 100 : 0,
+        done:  total > 0 ? (vols.done  / total) * 100 : 0
+      };
+      tasks.push({ title, type, total, vols, counts, pct });
+    }
+    if (tasks.length === 0) continue;
+    // Tri tâches : terminées en dernier ? Non — alphabétique par nom.
+    tasks.sort((a, b) => (a.title || 'ZZZ').localeCompare(b.title || 'ZZZ', 'fr'));
+    lots.push({
+      lotId,
+      name: lot ? (lot.name || '(sans nom)') : '',
+      color: lot ? lot.color : '#9aa0a6',
+      tasks
+    });
+  }
+  // Tri lots : alphabétique ; ceux sans lot en dernier
+  lots.sort((a, b) => {
+    if (!a.lotId && !b.lotId) return 0;
+    if (!a.lotId) return 1;
+    if (!b.lotId) return -1;
+    return (a.name || '').localeCompare(b.name || '', 'fr');
+  });
+  return lots;
+}
+
+function renderProtoRecap() {
+  renderProtoRecapSlider();
+  const body = document.getElementById('protorecapbody');
+  if (!body) return;
+  body.innerHTML = '';
+  const plan = getActiveProtoPlan();
+  if (!plan) {
+    body.innerHTML = `
+      <div class="proto-recap-empty">
+        <p>Aucun plan disponible.</p>
+        <p class="hint">Téléversez un plan dans le sous-onglet « Plans » pour commencer.</p>
+      </div>`;
+    return;
+  }
+  const lots = getProtoRecapData(plan.id);
+  if (lots.length === 0) {
+    body.innerHTML = `
+      <div class="proto-recap-empty">
+        <p>Aucune tâche documentée sur ce plan.</p>
+        <p class="hint">Posez des formes (point/ligne/rect/polygone) et renseignez intitulé + lot + statut pour faire apparaître l'avancement ici.</p>
+      </div>`;
+    return;
+  }
+  // Stats globales du plan : pourcentage global = moyenne pondérée
+  // des % done de chaque tâche, pondérée par leur volume total.
+  let totalVol = 0, doneVol = 0, doingVol = 0, todoVol = 0, taskCount = 0;
+  for (const lot of lots) for (const t of lot.tasks) {
+    totalVol  += t.total;
+    doneVol   += t.vols.done;
+    doingVol  += t.vols.doing;
+    todoVol   += t.vols.todo;
+    taskCount += 1;
+  }
+  const globalPct = totalVol > 0 ? Math.round((doneVol / totalVol) * 100) : 0;
+  const stats = document.createElement('div');
+  stats.className = 'proto-recap-plan-stats';
+  stats.innerHTML = `
+    <div class="proto-recap-plan-stat">
+      <div class="proto-recap-plan-stat-value" id="prps-pct"></div>
+      <div class="proto-recap-plan-stat-label">avancement</div>
+    </div>
+    <div class="proto-recap-plan-stat">
+      <div class="proto-recap-plan-stat-value" id="prps-tasks"></div>
+      <div class="proto-recap-plan-stat-label">tâches</div>
+    </div>
+    <div class="proto-recap-plan-stat">
+      <div class="proto-recap-plan-stat-value" id="prps-lots"></div>
+      <div class="proto-recap-plan-stat-label">lots</div>
+    </div>
+  `;
+  stats.querySelector('#prps-pct').textContent  = globalPct + ' %';
+  stats.querySelector('#prps-tasks').textContent = taskCount;
+  stats.querySelector('#prps-lots').textContent  = lots.length;
+  body.appendChild(stats);
+  for (const lot of lots) body.appendChild(buildRecapLotCard(lot));
+}
+function buildRecapLotCard(lot) {
+  const card = document.createElement('section');
+  card.className = 'proto-recap-lot' + (lot.lotId ? '' : ' is-none');
+  if (lot.lotId) card.style.borderLeftColor = lot.color || 'var(--accent)';
+  // Agrégat lot : % done global du lot
+  let lotTotal = 0, lotDone = 0;
+  for (const t of lot.tasks) { lotTotal += t.total; lotDone += t.vols.done; }
+  const lotPct = lotTotal > 0 ? Math.round((lotDone / lotTotal) * 100) : 0;
+  const head = document.createElement('header');
+  head.className = 'proto-recap-lot-head';
+  const name = document.createElement('span');
+  name.className = 'proto-recap-lot-name';
+  name.textContent = lot.lotId ? lot.name : 'Tâches sans lot';
+  head.appendChild(name);
+  const agg = document.createElement('span');
+  agg.className = 'proto-recap-lot-aggregate';
+  if (lot.lotId) agg.style.color = lot.color || 'var(--accent)';
+  agg.textContent = lotPct + ' %';
+  head.appendChild(agg);
+  card.appendChild(head);
+  const ul = document.createElement('ul');
+  ul.className = 'proto-recap-task-list';
+  for (const t of lot.tasks) ul.appendChild(buildRecapTaskRow(t));
+  card.appendChild(ul);
+  return card;
+}
+function buildRecapTaskRow(task) {
+  const li = document.createElement('li');
+  li.className = 'proto-recap-task';
+  // En-tête : titre + total + type
+  const head = document.createElement('div');
+  head.className = 'proto-recap-task-head';
+  const title = document.createElement('span');
+  title.className = 'proto-recap-task-title';
+  title.textContent = task.title || '(sans intitulé)';
+  if (!task.title) title.style.fontStyle = 'italic';
+  head.appendChild(title);
+  const meta = document.createElement('span');
+  meta.className = 'proto-recap-task-meta';
+  meta.textContent = fmtRecapVolume(task.type, task.total);
+  head.appendChild(meta);
+  li.appendChild(head);
+  // Barre 3 segments
+  const bar = document.createElement('div');
+  bar.className = 'proto-recap-bar';
+  const segDone  = document.createElement('div');
+  segDone.className = 'proto-recap-bar-seg is-done';
+  segDone.style.flex = Math.max(task.pct.done,  0);
+  const segDoing = document.createElement('div');
+  segDoing.className = 'proto-recap-bar-seg is-doing';
+  segDoing.style.flex = Math.max(task.pct.doing, 0);
+  const segTodo  = document.createElement('div');
+  segTodo.className = 'proto-recap-bar-seg is-todo';
+  segTodo.style.flex = Math.max(task.pct.todo,  0);
+  bar.append(segDone, segDoing, segTodo);
+  li.appendChild(bar);
+  // Légende sous la barre : % par statut
+  const lg = document.createElement('div');
+  lg.className = 'proto-recap-task-legend';
+  for (const k of ['done', 'doing', 'todo']) {
+    if (task.pct[k] <= 0.01) continue;
+    const item = document.createElement('span');
+    item.className = 'proto-recap-task-legend-item';
+    const dot = document.createElement('span');
+    dot.className = 'proto-recap-task-legend-dot is-' + k;
+    const pct = document.createElement('span');
+    pct.className = 'proto-recap-task-legend-pct';
+    pct.textContent = Math.round(task.pct[k]) + ' %';
+    const lbl = document.createElement('span');
+    const labels = { done: 'Réalisée', doing: 'En cours', todo: 'À faire' };
+    lbl.textContent = labels[k];
+    item.append(dot, pct, lbl);
+    lg.appendChild(item);
+  }
+  li.appendChild(lg);
+  return li;
+}
+function renderProtoRecapSlider() {
+  const slider = document.getElementById('protorecapsliders');
+  if (!slider) return;
+  slider.innerHTML = '';
+  const plans = getProtoPlans();
+  if (plans.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.fontSize = '12px';
+    empty.style.color = 'var(--text-3)';
+    empty.style.fontStyle = 'italic';
+    empty.textContent = 'Aucun plan disponible.';
+    slider.appendChild(empty);
+    return;
+  }
+  for (const p of plans) {
+    const folder = getProtoFolder(p.folderId);
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'proto-recap-plan-chip' + (p.id === state.protoActivePlanId ? ' is-active' : '');
+    chip.innerHTML = `
+      <span class="proto-recap-plan-chip-folder"></span>
+      <span class="proto-recap-plan-chip-name"></span>
+    `;
+    chip.querySelector('.proto-recap-plan-chip-folder').textContent = folder ? (folder.name || '(sans dossier)') : '(sans dossier)';
+    chip.querySelector('.proto-recap-plan-chip-name').textContent = p.name || '(sans nom)';
+    chip.addEventListener('click', () => {
+      state.protoActivePlanId = p.id;
+      save();
+      renderProtoRecap();
+    });
+    slider.appendChild(chip);
   }
 }
 
