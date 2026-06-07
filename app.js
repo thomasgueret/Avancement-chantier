@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.69';
+const APP_VERSION = '0.70';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -5947,15 +5947,46 @@ function refreshProtoPolyHint() {
   hint.hidden = !(protoTool === 'polygon' && protoPolyDraw);
 }
 
-// ---------- Upload du plan (avec compression) ----------
+// ---------- Upload du plan ----------
 // folderId : dossier de destination (créé si nécessaire). Si vide,
 // on utilise le dossier par défaut.
 function handleProtoUpload(file, folderId) {
   if (!file) return;
-  if (!/^image\/jpe?g$/i.test(file.type) && !/\.jpe?g$/i.test(file.name)) {
-    showToast('Format invalide : JPG/JPEG uniquement', 'error');
-    return;
+  const isPdf  = /^application\/pdf$/i.test(file.type) || /\.pdf$/i.test(file.name);
+  const isJpeg = /^image\/jpe?g$/i.test(file.type)     || /\.jpe?g$/i.test(file.name);
+  if (isPdf)  return handleProtoUploadPdf(file, folderId);
+  if (isJpeg) return handleProtoUploadJpeg(file, folderId);
+  showToast('Format non supporté : JPG/JPEG ou PDF uniquement', 'error');
+}
+
+// Insère un plan dans le dossier cible avec un nom unique, gérant le
+// quota localStorage. Retourne true si réussi.
+function addProtoPlanFromCanvas(canvas, baseName, folderId, suffix) {
+  try {
+    const folder = (folderId && getProtoFolder(folderId)) || ensureDefaultFolder();
+    const usedNames = new Set(getProtoPlans().map(p => p.name));
+    let name = baseName;
+    if (suffix) name = `${baseName} (${suffix})`;
+    if (!name || usedNames.has(name)) {
+      let n = 1, candidate = 'Plan 1';
+      while (usedNames.has(candidate)) { n++; candidate = 'Plan ' + n; }
+      name = candidate;
+    }
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    const plan = {
+      id: 'pln_' + uid(), folderId: folder.id, name,
+      dataUrl, w: canvas.width, h: canvas.height
+    };
+    state.protoPlans.push(plan);
+    state.protoActivePlanId = plan.id;
+    save();
+    return true;
+  } catch (err) {
+    return false;
   }
+}
+
+function handleProtoUploadJpeg(file, folderId) {
   const reader = new FileReader();
   reader.onload = () => {
     const img = new Image();
@@ -5969,27 +6000,12 @@ function handleProtoUpload(file, folderId) {
       canvas.width = tw; canvas.height = th;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, tw, th);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-      try {
-        const folder = (folderId && getProtoFolder(folderId)) || ensureDefaultFolder();
-        // Nom : "Plan 1", "Plan 2"…
-        const usedNames = new Set(getProtoPlans().map(p => p.name));
-        let n = 1, name = 'Plan 1';
-        while (usedNames.has(name)) { n++; name = 'Plan ' + n; }
-        // Reprend le nom du fichier si court et propre
-        const baseName = (file.name || '').replace(/\.[a-z]+$/i, '').trim();
-        if (baseName && baseName.length <= 40 && !usedNames.has(baseName)) name = baseName;
-        const plan = {
-          id: 'pln_' + uid(), folderId: folder.id, name,
-          dataUrl, w: tw, h: th
-        };
-        state.protoPlans.push(plan);
-        state.protoActivePlanId = plan.id;
-        save();
+      const baseName = (file.name || '').replace(/\.[a-z]+$/i, '').trim();
+      if (addProtoPlanFromCanvas(canvas, baseName.length <= 40 ? baseName : 'Plan', folderId, null)) {
         renderProto();
         renderProtoManager();
         showToast('Plan ajouté');
-      } catch (err) {
+      } else {
         showToast('Plan trop lourd (quota navigateur). Essayez un fichier plus petit.', 'error');
       }
     };
@@ -5998,6 +6014,92 @@ function handleProtoUpload(file, folderId) {
   };
   reader.onerror = () => showToast('Lecture du fichier impossible', 'error');
   reader.readAsDataURL(file);
+}
+
+// Charge PDF.js depuis un CDN à la première utilisation. Le service
+// worker met le fichier en cache pour les usages hors-ligne suivants.
+const PROTO_PDFJS_URL    = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.mjs';
+const PROTO_PDFJS_WORKER = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs';
+let protoPdfJsPromise = null;
+function loadPdfJs() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (protoPdfJsPromise) return protoPdfJsPromise;
+  protoPdfJsPromise = (async () => {
+    const mod = await import(/* @vite-ignore */ PROTO_PDFJS_URL);
+    if (mod.GlobalWorkerOptions) mod.GlobalWorkerOptions.workerSrc = PROTO_PDFJS_WORKER;
+    window.pdfjsLib = mod;
+    return mod;
+  })().catch((err) => {
+    protoPdfJsPromise = null;
+    throw err;
+  });
+  return protoPdfJsPromise;
+}
+
+async function handleProtoUploadPdf(file, folderId) {
+  let pdfjs;
+  try {
+    showToast('Chargement de la bibliothèque PDF…');
+    pdfjs = await loadPdfJs();
+  } catch (err) {
+    showToast('Impossible de charger PDF.js (connexion requise au 1er usage)', 'error');
+    return;
+  }
+  let buf;
+  try {
+    buf = await file.arrayBuffer();
+  } catch (err) {
+    showToast('Lecture du PDF impossible', 'error');
+    return;
+  }
+  let pdf;
+  try {
+    pdf = await pdfjs.getDocument({ data: buf }).promise;
+  } catch (err) {
+    showToast('PDF invalide ou protégé', 'error');
+    return;
+  }
+  const baseName = (file.name || '').replace(/\.[a-z]+$/i, '').trim() || 'PDF';
+  const nbPages = pdf.numPages;
+  let added = 0;
+  for (let pageNum = 1; pageNum <= nbPages; pageNum++) {
+    try {
+      const page = await pdf.getPage(pageNum);
+      const v1 = page.getViewport({ scale: 1 });
+      // Echelle pour la dimension max = 1920 px (cap à 4x pour éviter
+      // les rendus énormes sur des PDF en très basse résolution)
+      const targetScale = Math.min(PROTO_MAX_PLAN_DIM / Math.max(v1.width, v1.height), 4);
+      const viewport = page.getViewport({ scale: targetScale });
+      const canvas = document.createElement('canvas');
+      canvas.width  = Math.round(viewport.width);
+      canvas.height = Math.round(viewport.height);
+      const ctx = canvas.getContext('2d');
+      // Fond blanc (les PDF n'ont pas toujours de fond solide ;
+      // sans ça, certaines pages se retrouvent transparentes ⇒
+      // illisibles après conversion JPEG)
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      const suffix = nbPages > 1 ? `p${pageNum}/${nbPages}` : null;
+      if (!addProtoPlanFromCanvas(canvas, baseName.length <= 40 ? baseName : 'PDF', folderId, suffix)) {
+        showToast(`Quota navigateur atteint : ${added}/${nbPages} page(s) ajoutée(s)`, 'error');
+        break;
+      }
+      added++;
+    } catch (err) {
+      // Page illisible — on continue avec les suivantes
+      console.warn('PDF page ' + pageNum + ' KO', err);
+    }
+  }
+  renderProto();
+  renderProtoManager();
+  if (added > 0) {
+    showToast(nbPages === 1
+      ? 'Plan ajouté'
+      : `${added} page${added > 1 ? 's' : ''} importée${added > 1 ? 's' : ''}`);
+  } else {
+    showToast('Aucune page exploitable dans ce PDF', 'error');
+  }
 }
 
 function clearProtoShapes() {

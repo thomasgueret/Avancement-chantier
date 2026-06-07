@@ -323,12 +323,12 @@
         <!-- Input de fichier partagé (caché). Le ciblage du dossier se
              fait via la variable JS protoUploadTargetFolderId, mise à
              jour par le bouton qui déclenche le picker. -->
-        <input type="file" id="protoupload" accept="image/jpeg,image/jpg,.jpeg,.jpg" hidden>
+        <input type="file" id="protoupload" accept="image/jpeg,image/jpg,.jpeg,.jpg,application/pdf,.pdf" hidden>
 
         <div class="proto-empty" id="protoempty">
           <p>Aucun plan chargé.</p>
           <button class="btn-primary proto-upload-btn" id="protoemptymanager" type="button">Gérer mes dossiers et plans</button>
-          <p class="hint">Créez un dossier puis téléversez des plans (JPG, compressés à 1920px max).</p>
+          <p class="hint">Créez un dossier puis téléversez vos plans (JPG ou PDF — multi-pages supporté, compressés à 1920px max).</p>
         </div>
 
         <div class="proto-editor" id="protoeditor" hidden>
