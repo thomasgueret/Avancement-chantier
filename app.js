@@ -1,3 +1,5 @@
+const SUPABASE_URL      = 'https://djlxfbnkmixxuxmiikif.supabase.co'; // ← colle ici ton Project URL
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRqbHhmYm5rbWl4eHV4bWlpa2lmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5MzUyNzcsImV4cCI6MjA5NjUxMTI3N30.84sp5vhAr1MEXMaHhVuhMZwONCsO7CMSWR_GkyjlZkM'; // ← colle ici ton anon key
 /* =========================================================
    Suivi de chantier — application PWA
    Stockage local (localStorage) pour cette première version.
