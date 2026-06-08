@@ -392,6 +392,77 @@
         <div class="proto-recap-body" id="protorecapbody"></div>
       </div>
     </section>
+    <!-- ============== ONGLET : COMPTE ============== -->
+    <section class="page" id="page-compte">
+      <h2 class="section-title">Mon compte</h2>
+
+      <!-- État : Supabase pas encore configuré (URL/clé vides) -->
+      <div class="auth-form" id="authnotconfigured" hidden>
+        <p class="section-help">La synchronisation n'est pas encore activée sur cette installation. Vos données restent stockées localement sur cet appareil.</p>
+        <p class="hint">Configurez <code>SUPABASE_URL</code> et <code>SUPABASE_ANON_KEY</code> dans <code>app.js</code> pour activer la connexion à votre compte.</p>
+      </div>
+
+      <!-- État : déconnecté → formulaire login/signup -->
+      <div class="auth-form" id="authloggedout" hidden>
+        <p class="section-help">Connectez-vous pour synchroniser vos données entre tous vos appareils et partager votre chantier avec votre équipe.</p>
+        <label class="stock-form-label" for="authemail">Email</label>
+        <input id="authemail" class="stock-form-input" type="email" autocomplete="email" placeholder="vous@exemple.com">
+        <label class="stock-form-label" for="authpassword">Mot de passe</label>
+        <input id="authpassword" class="stock-form-input" type="password" autocomplete="current-password" minlength="6" placeholder="6 caractères minimum">
+        <div class="auth-actions">
+          <button class="btn-primary" id="authsigninbtn" type="button">Se connecter</button>
+          <button class="btn-secondary" id="authsignupbtn" type="button">Créer un compte</button>
+        </div>
+        <p class="auth-error" id="autherror" hidden></p>
+      </div>
+
+      <!-- État : connecté mais pas encore membre d'un chantier -->
+      <div class="auth-form" id="authnosite" hidden>
+        <p class="section-help">Bienvenue ! Pour commencer, créez un nouveau chantier ou rejoignez celui de votre équipe via son code.</p>
+        <div class="auth-mode-bar">
+          <button class="auth-mode-btn active" data-authmode="create" type="button">Nouveau chantier</button>
+          <button class="auth-mode-btn"        data-authmode="join"   type="button">Rejoindre</button>
+        </div>
+        <div id="authsubcreate">
+          <label class="stock-form-label" for="authsitename">Nom du chantier</label>
+          <input id="authsitename" class="stock-form-input" type="text" maxlength="60" placeholder="Maison Dupont, Bât. Lorraine…">
+          <button class="btn-primary stock-submit-btn" id="authcreatebtn" type="button">Créer le chantier</button>
+        </div>
+        <div id="authsubjoin" hidden>
+          <label class="stock-form-label" for="authjoincode">Code du chantier</label>
+          <input id="authjoincode" class="stock-form-input auth-code-input" type="text" maxlength="6" placeholder="ABC123" autocapitalize="characters">
+          <p class="hint">L'admin du chantier vous a communiqué un code à 6 caractères.</p>
+          <button class="btn-primary stock-submit-btn" id="authjoinbtn" type="button">Rejoindre</button>
+        </div>
+        <p class="auth-error" id="authnositeerror" hidden></p>
+      </div>
+
+      <!-- État : connecté + sur un chantier -->
+      <div class="auth-form" id="authloggedin" hidden>
+        <div class="auth-info">
+          <div class="auth-info-row">
+            <span class="auth-info-label">Email</span>
+            <span class="auth-info-value" id="authinfoemail"></span>
+          </div>
+          <div class="auth-info-row">
+            <span class="auth-info-label">Chantier</span>
+            <span class="auth-info-value" id="authinfositename"></span>
+          </div>
+          <div class="auth-info-row">
+            <span class="auth-info-label">Rôle</span>
+            <span class="auth-info-value" id="authinforole"></span>
+          </div>
+          <div class="auth-info-row auth-info-row-code">
+            <span class="auth-info-label">Code à partager</span>
+            <span class="auth-info-value auth-join-code" id="authinfojoincode"></span>
+            <button class="btn-secondary auth-copy-btn" id="authcopycode" type="button">📋 Copier</button>
+          </div>
+        </div>
+        <p class="section-help">Partagez le code à 6 caractères ci-dessus avec vos coéquipiers — ils pourront rejoindre ce chantier en s'inscrivant.</p>
+        <p class="hint">La synchronisation automatique des données sera activée dans la prochaine version. Pour l'instant, vos données restent locales à chaque appareil.</p>
+        <button class="btn-secondary" id="authsignoutbtn" type="button">Se déconnecter</button>
+      </div>
+    </section>
   </main>
 
   <!-- ============== TAB BAR ============== -->
@@ -427,6 +498,10 @@
     <button class="tab-btn" data-page="proto" role="tab">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17v4h4l11-11-4-4L3 17Zm17.7-11.6-2.1-2.1a1 1 0 0 0-1.4 0l-1.8 1.8 3.5 3.5 1.8-1.8a1 1 0 0 0 0-1.4Z"/></svg>
       <span>Proto</span>
+    </button>
+    <button class="tab-btn" data-page="compte" role="tab">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4Zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4Z"/></svg>
+      <span>Compte</span>
     </button>
   </nav>
 

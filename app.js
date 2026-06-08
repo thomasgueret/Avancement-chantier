@@ -7,7 +7,15 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.71';
+const APP_VERSION = '0.72';
+
+// ---------- Supabase (synchro multi-appareils + équipe) ----------
+// À remplir avec les valeurs de TON projet Supabase (Settings → API).
+// Ces deux valeurs sont publiques par construction (la sécurité repose
+// sur la RLS configurée dans le SQL).
+const SUPABASE_URL      = ''; // ex. 'https://xxxxxxx.supabase.co'
+const SUPABASE_ANON_KEY = ''; // ex. 'eyJhbGciOi…' (longue clé)
+const SUPABASE_SDK_URL  = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -76,6 +84,9 @@ const state = {
   //    coords:{cx,cy} | {x1,y1,x2,y2} | {x,y,w,h},
   //    lotId, title, date, status:'todo'|'doing'|'done' }]
   protoShapes: [],
+  // Auth (non persistée — recalée à chaque démarrage via Supabase)
+  authUser: null,            // { id, email } | null
+  authSite: null,            // { id, name, joinCode, role } | null
   currentDate: todayISO(),
   chartHidden: {},        // { [companyId]: true } — entreprises masquées du graphique
   chartRange: 30          // 7 | 30 | 'all'
@@ -5068,6 +5079,7 @@ function switchPage(name) {
   if (name === 'consommable') renderConsommable();
   if (name === 'dashboard') renderDashboard();
   if (name === 'proto') renderProto();
+  if (name === 'compte') renderCompte();
 }
 
 // ---------- Import / Export ----------
@@ -6947,6 +6959,154 @@ function deleteProtoShape() {
   closeProtoShapeSheet();
 }
 
+// ====================================================================
+//   AUTH (Supabase) — connexion + multi-chantiers via code
+// ====================================================================
+// Étape 4 du plan : connexion / inscription / création-rejoindre de
+// chantier. La SYNCHRO des données arrivera à l'étape 5.
+
+let supabaseClient = null;
+let supabaseLoadPromise = null;
+
+function isSupabaseConfigured() {
+  return !!(SUPABASE_URL && SUPABASE_ANON_KEY);
+}
+
+function loadSupabase() {
+  if (supabaseClient) return Promise.resolve(supabaseClient);
+  if (supabaseLoadPromise) return supabaseLoadPromise;
+  if (!isSupabaseConfigured()) return Promise.resolve(null);
+  supabaseLoadPromise = (async () => {
+    const mod = await import(/* @vite-ignore */ SUPABASE_SDK_URL);
+    supabaseClient = mod.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: { persistSession: true, autoRefreshToken: true, storage: window.localStorage }
+    });
+    // Maintient state.authUser synchronisé avec le SDK (token refresh, sign-out…)
+    supabaseClient.auth.onAuthStateChange(async (_event, session) => {
+      if (session && session.user) {
+        state.authUser = { id: session.user.id, email: session.user.email };
+        await refreshSiteInfo();
+      } else {
+        state.authUser = null;
+        state.authSite = null;
+      }
+      renderCompte();
+    });
+    return supabaseClient;
+  })().catch((err) => {
+    supabaseLoadPromise = null;
+    console.error('Supabase SDK chargement KO', err);
+    return null;
+  });
+  return supabaseLoadPromise;
+}
+
+async function refreshAuthSession() {
+  const supa = await loadSupabase();
+  if (!supa) { renderCompte(); return null; }
+  const { data } = await supa.auth.getSession();
+  if (data && data.session && data.session.user) {
+    state.authUser = { id: data.session.user.id, email: data.session.user.email };
+    await refreshSiteInfo();
+  } else {
+    state.authUser = null;
+    state.authSite = null;
+  }
+  renderCompte();
+  return data && data.session;
+}
+
+async function refreshSiteInfo() {
+  if (!state.authUser) { state.authSite = null; return; }
+  const supa = await loadSupabase();
+  if (!supa) return;
+  // Récupère le 1er site dont on est membre (v1 : 1 utilisateur = 1 site)
+  const { data: members, error: mErr } = await supa
+    .from('site_members').select('site_id, role').eq('user_id', state.authUser.id);
+  if (mErr || !members || members.length === 0) { state.authSite = null; return; }
+  const { data: sites, error: sErr } = await supa
+    .from('sites').select('id, name, join_code').in('id', members.map(m => m.site_id));
+  if (sErr || !sites || sites.length === 0) { state.authSite = null; return; }
+  const site = sites[0];
+  const member = members.find(m => m.site_id === site.id);
+  state.authSite = {
+    id: site.id,
+    name: site.name,
+    joinCode: site.join_code,
+    role: member ? member.role : 'member'
+  };
+}
+
+async function signInWithPassword(email, password) {
+  const supa = await loadSupabase();
+  if (!supa) throw new Error('Synchronisation non configurée');
+  const { error } = await supa.auth.signInWithPassword({ email: email.trim(), password });
+  if (error) throw error;
+}
+async function signUpWithPassword(email, password) {
+  const supa = await loadSupabase();
+  if (!supa) throw new Error('Synchronisation non configurée');
+  const { error } = await supa.auth.signUp({ email: email.trim(), password });
+  if (error) throw error;
+}
+async function signOut() {
+  const supa = await loadSupabase();
+  if (!supa) return;
+  await supa.auth.signOut();
+  state.authUser = null;
+  state.authSite = null;
+  renderCompte();
+}
+async function createSiteForUser(name) {
+  const supa = await loadSupabase();
+  if (!supa || !state.authUser) throw new Error('Non connecté');
+  const { error } = await supa.from('sites').insert({
+    name: (name || '').trim() || 'Mon chantier',
+    owner_id: state.authUser.id
+  });
+  if (error) throw error;
+  await refreshSiteInfo();
+}
+async function joinSiteWithCode(code) {
+  const supa = await loadSupabase();
+  if (!supa || !state.authUser) throw new Error('Non connecté');
+  const { error } = await supa.rpc('join_site_with_code', { code: (code || '').trim().toUpperCase() });
+  if (error) throw error;
+  await refreshSiteInfo();
+}
+
+function renderCompte() {
+  const root = document.getElementById('page-compte');
+  if (!root) return;
+  const notConfigured = document.getElementById('authnotconfigured');
+  const loggedOut     = document.getElementById('authloggedout');
+  const noSite        = document.getElementById('authnosite');
+  const loggedIn      = document.getElementById('authloggedin');
+  if (!notConfigured || !loggedOut || !noSite || !loggedIn) return;
+  notConfigured.hidden = true;
+  loggedOut.hidden = true;
+  noSite.hidden = true;
+  loggedIn.hidden = true;
+  if (!isSupabaseConfigured()) { notConfigured.hidden = false; return; }
+  if (!state.authUser)         { loggedOut.hidden = false; clearAuthError(); return; }
+  if (!state.authSite)         { noSite.hidden = false; clearAuthError('authnositeerror'); return; }
+  loggedIn.hidden = false;
+  document.getElementById('authinfoemail').textContent    = state.authUser.email;
+  document.getElementById('authinfositename').textContent = state.authSite.name;
+  document.getElementById('authinfojoincode').textContent = state.authSite.joinCode;
+  document.getElementById('authinforole').textContent     = state.authSite.role === 'admin' ? 'Admin' : 'Membre';
+}
+function showAuthError(elId, message) {
+  const e = document.getElementById(elId);
+  if (!e) return;
+  e.hidden = false;
+  e.textContent = message || 'Erreur';
+}
+function clearAuthError(elId = 'autherror') {
+  const e = document.getElementById(elId);
+  if (e) { e.hidden = true; e.textContent = ''; }
+}
+
 // ---------- Init ----------
 function init() {
   load();
@@ -7182,6 +7342,96 @@ function init() {
         document.querySelectorAll('.proto-status-btn').forEach(b => b.classList.toggle('is-active', b === btn));
       });
     });
+  }
+
+  // ----- Auth (Compte) -----
+  const authSignIn = document.getElementById('authsigninbtn');
+  if (authSignIn) authSignIn.addEventListener('click', async () => {
+    clearAuthError();
+    const email = document.getElementById('authemail').value;
+    const pwd   = document.getElementById('authpassword').value;
+    if (!email || !pwd) { showAuthError('autherror', 'Email + mot de passe requis'); return; }
+    try {
+      authSignIn.disabled = true;
+      await signInWithPassword(email, pwd);
+      await refreshAuthSession();
+    } catch (e) {
+      showAuthError('autherror', e.message || 'Connexion échouée');
+    } finally { authSignIn.disabled = false; }
+  });
+  const authSignUp = document.getElementById('authsignupbtn');
+  if (authSignUp) authSignUp.addEventListener('click', async () => {
+    clearAuthError();
+    const email = document.getElementById('authemail').value;
+    const pwd   = document.getElementById('authpassword').value;
+    if (!email || (pwd || '').length < 6) {
+      showAuthError('autherror', 'Email valide + mot de passe d\'au moins 6 caractères requis'); return;
+    }
+    try {
+      authSignUp.disabled = true;
+      await signUpWithPassword(email, pwd);
+      await refreshAuthSession();
+      showToast('Compte créé');
+    } catch (e) {
+      showAuthError('autherror', e.message || 'Inscription échouée');
+    } finally { authSignUp.disabled = false; }
+  });
+  // Tabs "Créer / Rejoindre" sur l'écran sans site
+  document.querySelectorAll('.auth-mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const mode = btn.dataset.authmode;
+      document.querySelectorAll('.auth-mode-btn').forEach(b => b.classList.toggle('active', b === btn));
+      document.getElementById('authsubcreate').hidden = (mode !== 'create');
+      document.getElementById('authsubjoin').hidden   = (mode !== 'join');
+      clearAuthError('authnositeerror');
+    });
+  });
+  const authCreate = document.getElementById('authcreatebtn');
+  if (authCreate) authCreate.addEventListener('click', async () => {
+    clearAuthError('authnositeerror');
+    const name = document.getElementById('authsitename').value;
+    try {
+      authCreate.disabled = true;
+      await createSiteForUser(name);
+      renderCompte();
+      showToast('Chantier créé');
+    } catch (e) {
+      showAuthError('authnositeerror', e.message || 'Création impossible');
+    } finally { authCreate.disabled = false; }
+  });
+  const authJoin = document.getElementById('authjoinbtn');
+  if (authJoin) authJoin.addEventListener('click', async () => {
+    clearAuthError('authnositeerror');
+    const code = document.getElementById('authjoincode').value;
+    if (!code) { showAuthError('authnositeerror', 'Code requis'); return; }
+    try {
+      authJoin.disabled = true;
+      await joinSiteWithCode(code);
+      renderCompte();
+      showToast('Chantier rejoint');
+    } catch (e) {
+      showAuthError('authnositeerror', e.message || 'Code invalide');
+    } finally { authJoin.disabled = false; }
+  });
+  const authSignOut = document.getElementById('authsignoutbtn');
+  if (authSignOut) authSignOut.addEventListener('click', async () => {
+    try { authSignOut.disabled = true; await signOut(); }
+    finally { authSignOut.disabled = false; }
+  });
+  const authCopyCode = document.getElementById('authcopycode');
+  if (authCopyCode) authCopyCode.addEventListener('click', async () => {
+    const code = state.authSite && state.authSite.joinCode;
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code);
+      showToast('Code copié');
+    } catch (_) { /* l'utilisateur peut sélectionner manuellement */ }
+  });
+  // Restaure la session si déjà connecté + tente de charger le SDK
+  if (isSupabaseConfigured()) {
+    refreshAuthSession().catch((err) => console.error('Auth init KO', err));
+  } else {
+    renderCompte();
   }
 
   // Service worker : enregistrement + rechargement auto à chaque mise à jour
