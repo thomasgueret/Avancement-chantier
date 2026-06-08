@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.70';
+const APP_VERSION = '0.71';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
 const CHART_COLORS = [
@@ -6102,6 +6102,249 @@ async function handleProtoUploadPdf(file, folderId) {
   }
 }
 
+// ---------- Export PDF du plan ----------
+// jsPDF chargé à la demande au 1er export. Cache via SW idem PDF.js.
+const PROTO_JSPDF_URL = 'https://cdn.jsdelivr.net/npm/jspdf@2.5.2/+esm';
+let protoJsPdfPromise = null;
+function loadJsPdf() {
+  if (window.jspdf && window.jspdf.jsPDF) return Promise.resolve(window.jspdf);
+  if (protoJsPdfPromise) return protoJsPdfPromise;
+  protoJsPdfPromise = (async () => {
+    const mod = await import(/* @vite-ignore */ PROTO_JSPDF_URL);
+    // Le bundle ESM jsdelivr expose { jsPDF }
+    const ns = (mod && mod.jsPDF) ? mod : (mod && mod.default && mod.default.jsPDF ? mod.default : { jsPDF: mod.jsPDF || mod.default });
+    window.jspdf = ns;
+    return ns;
+  })().catch((err) => { protoJsPdfPromise = null; throw err; });
+  return protoJsPdfPromise;
+}
+
+// Convertit #rrggbb → 'rgba(r, g, b, a)' pour utiliser des transparences
+// avec les API canvas (qui n'acceptent pas le format #rrggbbaa partout).
+function hexToRgba(hex, alpha) {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return `rgba(0, 0, 0, ${alpha})`;
+  const v = m[1];
+  const r = parseInt(v.slice(0, 2), 16);
+  const g = parseInt(v.slice(2, 4), 16);
+  const b = parseInt(v.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+function hexToRgbInts(hex) {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return { r: 0, g: 0, b: 0 };
+  const v = m[1];
+  return {
+    r: parseInt(v.slice(0, 2), 16),
+    g: parseInt(v.slice(2, 4), 16),
+    b: parseInt(v.slice(4, 6), 16)
+  };
+}
+
+// Dessine une forme sur le canvas (utilisé pour l'aperçu + le PDF).
+function drawProtoShapeOnCanvas(ctx, s, plan) {
+  const lot = getWorkBatch(s.lotId);
+  const lotColor = lot ? lot.color : '#888888';
+  const statusColor = PROTO_STATUS_COLOR[s.status] || PROTO_STATUS_COLOR.todo;
+  const sw = Math.max(plan.w, plan.h) / 200;
+  ctx.lineJoin = 'round';
+  ctx.lineCap  = 'round';
+  if (s.type === 'point') {
+    ctx.fillStyle = statusColor;
+    ctx.strokeStyle = lotColor;
+    ctx.lineWidth = sw;
+    ctx.beginPath();
+    ctx.arc(s.coords.cx, s.coords.cy, Math.max(sw * 2.5, 8), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  } else if (s.type === 'line') {
+    ctx.strokeStyle = statusColor;
+    ctx.lineWidth = sw * 2;
+    ctx.beginPath();
+    ctx.moveTo(s.coords.x1, s.coords.y1);
+    ctx.lineTo(s.coords.x2, s.coords.y2);
+    ctx.stroke();
+  } else if (s.type === 'rect') {
+    ctx.fillStyle = hexToRgba(statusColor, 0.25);
+    ctx.strokeStyle = statusColor;
+    ctx.lineWidth = sw;
+    ctx.fillRect(s.coords.x, s.coords.y, s.coords.w, s.coords.h);
+    ctx.strokeRect(s.coords.x, s.coords.y, s.coords.w, s.coords.h);
+  } else if (s.type === 'polygon') {
+    const pts = s.coords.points || [];
+    if (pts.length < 3) return;
+    ctx.fillStyle = hexToRgba(statusColor, 0.25);
+    ctx.strokeStyle = statusColor;
+    ctx.lineWidth = sw;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+}
+
+// Charge l'image d'un plan en Promise.
+function loadImagePromise(dataUrl) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => res(img);
+    img.onerror = () => rej(new Error('Image illisible'));
+    img.src = dataUrl;
+  });
+}
+
+// Rend dans un canvas le plan + les formes filtrées (z-order identique
+// au SVG). Le canvas a la résolution naturelle du plan, garantissant
+// un export net même après agrandissement dans le PDF.
+async function renderProtoExportCanvas(plan) {
+  const img = await loadImagePromise(plan.dataUrl);
+  const canvas = document.createElement('canvas');
+  canvas.width  = plan.w;
+  canvas.height = plan.h;
+  const ctx = canvas.getContext('2d');
+  // Fond blanc avant l'image au cas où celle-ci aurait des zones
+  // transparentes (sécurité — les JPEG n'ont pas d'alpha mais bon)
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0, plan.w, plan.h);
+  // Formes filtrées + z-order
+  const order = { rect: 0, polygon: 0, line: 1, point: 2 };
+  const shapes = (state.protoShapes || [])
+    .filter(s => s.planId === plan.id && shapeMatchesFilters(s))
+    .slice()
+    .sort((a, b) => (order[a.type] ?? 0) - (order[b.type] ?? 0));
+  for (const s of shapes) drawProtoShapeOnCanvas(ctx, s, plan);
+  return canvas;
+}
+
+// Texte décrivant les filtres actifs (utilisé dans l'aperçu et le PDF)
+function getProtoFiltersSummary() {
+  const parts = [];
+  if (state.protoFilterLotId) {
+    const lot = getWorkBatch(state.protoFilterLotId);
+    parts.push('Lot : ' + (lot && lot.name ? lot.name : '(sans nom)'));
+  } else {
+    parts.push('Tous les lots');
+  }
+  const statuses = state.protoFilterStatuses || [];
+  if (statuses.length < 3) {
+    if (statuses.length === 0) parts.push('Aucun statut');
+    else parts.push('Statuts : ' + statuses.map(s => PROTO_STATUS_LABEL[s]).join(' · '));
+  } else {
+    parts.push('Tous les statuts');
+  }
+  return parts.join(' — ');
+}
+
+// Ouvre la modale d'aperçu / export PDF.
+async function openProtoExport() {
+  const plan = getActiveProtoPlan();
+  if (!plan) { showToast('Aucun plan actif', 'error'); return; }
+  const m = document.getElementById('protoexport');
+  if (!m) return;
+  protoResetGestureState();
+  // Reset des champs
+  document.getElementById('protoexportname').value = (plan.name || 'Plan').replace(/[^\w\s.-]/g, '_');
+  document.getElementById('protoexportfilters').textContent = getProtoFiltersSummary();
+  const preview = document.getElementById('protoexportpreview');
+  preview.innerHTML = '<p class="hint">Génération de l\'aperçu…</p>';
+  m.hidden = false;
+  document.body.style.overflow = 'hidden';
+  try {
+    const canvas = await renderProtoExportCanvas(plan);
+    // Affiche le canvas tel quel — CSS le contraint à la taille de la modale
+    preview.innerHTML = '';
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    const img = document.createElement('img');
+    img.src = dataUrl;
+    img.alt = 'Aperçu du plan ' + plan.name;
+    preview.appendChild(img);
+    // On stocke le canvas pour le réutiliser à l'export (évite un re-render)
+    preview._protoCanvas = canvas;
+  } catch (err) {
+    preview.innerHTML = '<p class="hint">Aperçu indisponible : ' + (err && err.message ? err.message : 'erreur') + '</p>';
+  }
+}
+function closeProtoExport() {
+  const m = document.getElementById('protoexport');
+  if (m) m.hidden = true;
+  document.body.style.overflow = '';
+}
+
+async function doProtoExportDownload() {
+  const plan = getActiveProtoPlan();
+  if (!plan) return;
+  const preview = document.getElementById('protoexportpreview');
+  const orient = (document.querySelector('input[name="protoexportorient"]:checked') || {}).value || 'auto';
+  let jspdf;
+  try {
+    showToast('Chargement de la bibliothèque PDF…');
+    jspdf = await loadJsPdf();
+  } catch (err) {
+    showToast('Impossible de charger jsPDF (connexion requise au 1er usage)', 'error');
+    return;
+  }
+  // Récupère le canvas déjà rendu (ou refait si besoin)
+  const canvas = (preview && preview._protoCanvas) || await renderProtoExportCanvas(plan);
+  const ratio = canvas.width / canvas.height;
+  let orientation = orient;
+  if (orient === 'auto') orientation = ratio >= 1 ? 'landscape' : 'portrait';
+  const pdf = new jspdf.jsPDF({ orientation, unit: 'mm', format: 'a4' });
+  const pageW = pdf.internal.pageSize.getWidth();
+  const pageH = pdf.internal.pageSize.getHeight();
+  const margin = 10;
+  // En-tête
+  pdf.setFontSize(14);
+  pdf.setTextColor(20, 24, 33);
+  pdf.text(plan.name || 'Plan', margin, 12);
+  const folder = getProtoFolder(plan.folderId);
+  pdf.setFontSize(9);
+  pdf.setTextColor(120);
+  if (folder && folder.name) pdf.text(folder.name, margin, 17);
+  const dateStr = new Date().toLocaleDateString('fr-FR');
+  pdf.text(dateStr, pageW - margin, 12, { align: 'right' });
+  // Indicateur de filtres
+  pdf.setFontSize(8);
+  pdf.text('Filtres : ' + getProtoFiltersSummary(), pageW - margin, 17, { align: 'right' });
+  // Zone image
+  const headerH = 22;
+  const footerH = 14;
+  const availW = pageW - 2 * margin;
+  const availH = pageH - headerH - footerH;
+  let imgW, imgH;
+  if (ratio > availW / availH) { imgW = availW; imgH = availW / ratio; }
+  else                          { imgH = availH; imgW = availH * ratio; }
+  const imgX = (pageW - imgW) / 2;
+  const imgY = headerH;
+  pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', imgX, imgY, imgW, imgH);
+  // Légende en pied de page : compteurs par statut
+  const shapes = (state.protoShapes || []).filter(s => s.planId === plan.id && shapeMatchesFilters(s));
+  const counts = { todo: 0, doing: 0, done: 0 };
+  for (const s of shapes) if (counts[s.status] != null) counts[s.status]++;
+  pdf.setFontSize(9);
+  pdf.setTextColor(40);
+  let lx = margin;
+  const ly = pageH - 6;
+  for (const k of ['todo', 'doing', 'done']) {
+    const c = hexToRgbInts(PROTO_STATUS_COLOR[k]);
+    pdf.setFillColor(c.r, c.g, c.b);
+    pdf.circle(lx + 2, ly - 2, 1.6, 'F');
+    pdf.setTextColor(40);
+    pdf.text(`${PROTO_STATUS_LABEL[k]} : ${counts[k]}`, lx + 6, ly);
+    lx += 38;
+  }
+  pdf.setTextColor(140);
+  pdf.text(`${shapes.length} forme${shapes.length > 1 ? 's' : ''}`, pageW - margin, ly, { align: 'right' });
+  // Nom de fichier
+  let fname = (document.getElementById('protoexportname').value || plan.name || 'plan').trim();
+  fname = fname.replace(/\.pdf$/i, '').replace(/[^\w\s.-]/g, '_').slice(0, 80) || 'plan';
+  pdf.save(fname + '.pdf');
+  closeProtoExport();
+  showToast('PDF généré');
+}
+
 function clearProtoShapes() {
   const planId = state.protoActivePlanId;
   const shapes = (state.protoShapes || []).filter(s => s.planId === planId);
@@ -6915,6 +7158,15 @@ function init() {
   // Polygone : bouton « Annuler » du hint
   const protoPolyCancel = document.getElementById('protopolycancel');
   if (protoPolyCancel) protoPolyCancel.addEventListener('click', cancelPolygon);
+  // Export PDF
+  const protoExpOpen = document.getElementById('protoexportopen');
+  if (protoExpOpen) protoExpOpen.addEventListener('click', openProtoExport);
+  const protoExp = document.getElementById('protoexport');
+  if (protoExp) {
+    document.getElementById('protoexportclose').addEventListener('click', closeProtoExport);
+    protoExp.addEventListener('click', (e) => { if (e.target === protoExp) closeProtoExport(); });
+    document.getElementById('protoexportdownload').addEventListener('click', doProtoExportDownload);
+  }
   // Escape annule un polygone en cours
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && protoPolyDraw) cancelPolygon();

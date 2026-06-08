@@ -374,6 +374,9 @@
               <button class="proto-zoom-btn" id="protozoomout"   type="button" title="Dézoomer">−</button>
               <button class="proto-zoom-btn" id="protozoomreset" type="button" title="Réinitialiser le zoom">⟲</button>
             </div>
+            <div class="proto-export-bar">
+              <button class="proto-zoom-btn proto-export-btn" id="protoexportopen" type="button" title="Exporter en PDF (avec les filtres)">📥</button>
+            </div>
             <div class="proto-poly-hint" id="protopolyhint" hidden>
               <span id="protopolyhinttext">Cliquez pour placer un sommet — fermez en cliquant sur le premier point.</span>
               <button class="proto-poly-cancel" id="protopolycancel" type="button">Annuler</button>
@@ -517,6 +520,39 @@
         <button class="btn-secondary conso-add-line" id="consoaddline" type="button">+ Ajouter une ligne</button>
 
         <button class="btn-primary stock-submit-btn" id="consoentrysave" type="button">Enregistrer la commande</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== Modale : export PDF du plan affiché ============== -->
+  <div class="modal-overlay" id="protoexport" hidden>
+    <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="protoexporttitle">
+      <div class="modal-header">
+        <h3 class="modal-title" id="protoexporttitle">Exporter le plan en PDF</h3>
+        <button class="modal-close" id="protoexportclose" type="button" aria-label="Fermer">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="section-help">Aperçu de la mise en page. Les formes affichées suivent les <strong id="protoexportfilters">filtres actuellement appliqués</strong>. Vérifiez l'aperçu puis téléchargez.</p>
+        <div class="proto-export-preview" id="protoexportpreview">
+          <p class="hint">Génération de l'aperçu…</p>
+        </div>
+        <div class="proto-export-options">
+          <label class="proto-export-orient">
+            <input type="radio" name="protoexportorient" value="auto" checked> Orientation auto
+          </label>
+          <label class="proto-export-orient">
+            <input type="radio" name="protoexportorient" value="landscape"> Paysage
+          </label>
+          <label class="proto-export-orient">
+            <input type="radio" name="protoexportorient" value="portrait"> Portrait
+          </label>
+        </div>
+        <label class="stock-form-label" for="protoexportname">Nom du fichier</label>
+        <div class="proto-export-filename-row">
+          <input class="stock-form-input" id="protoexportname" type="text" maxlength="80" placeholder="Plan">
+          <span class="proto-export-ext">.pdf</span>
+        </div>
+        <button class="btn-primary stock-submit-btn" id="protoexportdownload" type="button">📥 Télécharger le PDF</button>
       </div>
     </div>
   </div>

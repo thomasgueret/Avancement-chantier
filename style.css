@@ -2759,6 +2759,72 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 }
 .proto-poly-hint, .proto-poly-cancel { touch-action: auto; }
 .proto-zoom-btn:active { background: var(--surface-2); color: var(--accent); }
+/* Bouton flottant d'export PDF (en haut à droite du canvas) */
+.proto-export-bar {
+  position: absolute;
+  top: 10px; right: 10px;
+  z-index: 3;
+}
+.proto-export-bar .proto-export-btn {
+  width: 36px; height: 36px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: 0 2px 8px rgba(20,24,33,0.12);
+  font-size: 18px;
+  border-radius: var(--radius-sm);
+}
+.proto-export-btn:active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Aperçu de l'export dans la modale */
+.proto-export-preview {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  margin-bottom: 12px;
+  min-height: 200px;
+  display: flex; align-items: center; justify-content: center;
+}
+.proto-export-preview img,
+.proto-export-preview canvas {
+  max-width: 100%;
+  max-height: 50vh;
+  border: 1px solid var(--border);
+  background: white;
+  display: block;
+}
+.proto-export-preview .hint {
+  color: var(--text-3); font-style: italic; font-size: 13px;
+}
+
+.proto-export-options {
+  display: flex; flex-wrap: wrap; gap: 12px;
+  margin: 8px 0 12px;
+  font-size: 13px;
+}
+.proto-export-orient {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.proto-export-orient input { accent-color: var(--accent); }
+
+.proto-export-filename-row {
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 12px;
+}
+.proto-export-filename-row .stock-form-input { flex: 1; min-width: 0; }
+.proto-export-ext {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px; font-weight: 700;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
 /* Hint visible quand un polygone est en cours de tracé */
 .proto-poly-hint {
   position: absolute;
