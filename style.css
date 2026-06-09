@@ -3338,3 +3338,74 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 .auth-sync-chip.is-syncing { background: rgba(237, 108, 2, 0.10); color: #b54708; }
 .auth-sync-chip.is-error   { background: rgba(211, 47, 47, 0.10); color: #b71c1c; }
 .auth-sync-chip.is-offline { background: rgba(120, 120, 120, 0.12); color: #555; }
+
+/* Encart "Chantier actif" — distingué visuellement du reste */
+.auth-active-box {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 12px;
+  margin: 4px 0;
+}
+.auth-active-box-head {
+  font-size: 11px; font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.05em; text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.auth-active-box .auth-info { margin-bottom: 8px; }
+
+/* Section "Mes chantiers" */
+.auth-subsection-title {
+  font-size: 13px; font-weight: 700;
+  color: var(--text-3);
+  text-transform: uppercase; letter-spacing: 0.04em;
+  margin: 12px 0 4px;
+}
+.auth-sites-list {
+  list-style: none; padding: 0; margin: 0 0 8px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.auth-site-row {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid transparent;
+  padding: 2px;
+}
+.auth-site-row.is-active {
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+}
+.auth-site-pick {
+  flex: 1; min-width: 0;
+  border: none; background: transparent;
+  text-align: left;
+  padding: 8px 10px;
+  cursor: pointer;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  border-radius: var(--radius-sm);
+  -webkit-tap-highlight-color: transparent;
+}
+.auth-site-name {
+  font-size: 14px; font-weight: 700; color: var(--text);
+  max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.auth-site-meta {
+  font-size: 11px; color: var(--text-3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.04em;
+}
+.auth-site-leave {
+  flex-shrink: 0;
+  width: 28px; height: 28px;
+  border: none; background: transparent;
+  color: var(--text-3);
+  font-size: 18px; font-weight: 700;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.auth-site-leave:active { background: var(--surface); color: var(--danger); }
+
+.auth-signout { margin-top: 12px; }

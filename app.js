@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.74';
+const APP_VERSION = '0.75';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -86,7 +86,8 @@ const state = {
   protoShapes: [],
   // Auth (non persistée — recalée à chaque démarrage via Supabase)
   authUser: null,            // { id, email } | null
-  authSite: null,            // { id, name, joinCode, role } | null
+  authSites: [],             // [{ id, name, joinCode, role }] — tous les sites accessibles
+  authSite: null,            // chantier actif (l'un des authSites)
   // Synchronisation (étape 5)
   syncStatus: 'idle',        // 'idle' | 'syncing' | 'error' | 'offline'
   syncTimestamp: 0,          // ms epoch — dernier changement local connu
@@ -7046,24 +7047,82 @@ async function refreshAuthSession() {
 }
 
 async function refreshSiteInfo() {
-  if (!state.authUser) { state.authSite = null; return; }
+  if (!state.authUser) { state.authSites = []; state.authSite = null; return; }
   const supa = await loadSupabase();
   if (!supa) return;
-  // Récupère le 1er site dont on est membre (v1 : 1 utilisateur = 1 site)
+  // 1) Liste tous les sites dont on est membre
   const { data: members, error: mErr } = await supa
     .from('site_members').select('site_id, role').eq('user_id', state.authUser.id);
-  if (mErr || !members || members.length === 0) { state.authSite = null; return; }
+  if (mErr) console.error('refreshSiteInfo: erreur lecture site_members', mErr);
+  if (mErr || !members || members.length === 0) {
+    state.authSites = []; state.authSite = null;
+    return;
+  }
   const { data: sites, error: sErr } = await supa
     .from('sites').select('id, name, join_code').in('id', members.map(m => m.site_id));
-  if (sErr || !sites || sites.length === 0) { state.authSite = null; return; }
-  const site = sites[0];
-  const member = members.find(m => m.site_id === site.id);
-  state.authSite = {
-    id: site.id,
-    name: site.name,
-    joinCode: site.join_code,
-    role: member ? member.role : 'member'
-  };
+  if (sErr) console.error('refreshSiteInfo: erreur lecture sites', sErr);
+  if (sErr || !sites) {
+    state.authSites = []; state.authSite = null;
+    return;
+  }
+  // Map vers le format authSites + tri alphabétique par nom
+  state.authSites = sites.map(s => {
+    const m = members.find(mb => mb.site_id === s.id);
+    return { id: s.id, name: s.name || '(sans nom)', joinCode: s.join_code, role: m ? m.role : 'member' };
+  }).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'fr'));
+  // Garde le site actif si toujours valide ; sinon prend le premier
+  if (state.authSite) {
+    const found = state.authSites.find(s => s.id === state.authSite.id);
+    state.authSite = found || state.authSites[0] || null;
+  } else {
+    state.authSite = state.authSites[0] || null;
+  }
+}
+
+// Bascule sur un autre chantier (parmi authSites)
+async function switchActiveSite(siteId) {
+  const site = (state.authSites || []).find(s => s.id === siteId);
+  if (!site) return;
+  await teardownSyncRealtime();
+  stopSyncPolling();
+  state.authSite = site;
+  renderCompte();
+  await doSyncPull(true);
+  await setupSyncRealtime();
+  startSyncPolling();
+}
+
+// Quitte un chantier (supprime la ligne site_members nous concernant).
+// Pour les non-admins : la policy members_self_leave permet ça.
+// Pour les admins : nécessite la policy sites_delete (ajout SQL à faire).
+async function leaveOrDeleteSite(siteId) {
+  const supa = await loadSupabase();
+  if (!supa || !state.authUser) throw new Error('Non connecté');
+  const site = (state.authSites || []).find(s => s.id === siteId);
+  if (!site) return;
+  if (site.role === 'admin') {
+    // Tentative de suppression complète (nécessite policy sites_delete)
+    const { error } = await supa.from('sites').delete().eq('id', siteId);
+    if (error) {
+      throw new Error('Pour supprimer un chantier dont vous êtes admin, ajoutez la policy SQL sites_delete (voir guide). Détail : ' + error.message);
+    }
+  } else {
+    const { error } = await supa.from('site_members').delete()
+      .eq('site_id', siteId).eq('user_id', state.authUser.id);
+    if (error) throw error;
+  }
+  // Si on quittait le chantier actif, on bascule sur un autre
+  if (state.authSite && state.authSite.id === siteId) {
+    state.authSite = null;
+    await teardownSyncRealtime();
+    stopSyncPolling();
+  }
+  await refreshSiteInfo();
+  if (state.authSite) {
+    await doSyncPull(true);
+    await setupSyncRealtime();
+    startSyncPolling();
+  }
 }
 
 async function signInWithPassword(email, password) {
@@ -7091,11 +7150,19 @@ async function signOut() {
 async function createSiteForUser(name) {
   const supa = await loadSupabase();
   if (!supa || !state.authUser) throw new Error('Non connecté');
-  const { error } = await supa.from('sites').insert({
-    name: (name || '').trim() || 'Mon chantier',
-    owner_id: state.authUser.id
-  });
-  if (error) throw error;
+  const finalName = (name || '').trim() || 'Mon chantier';
+  console.log('[Sync] createSite: name=' + finalName + ' owner=' + state.authUser.id);
+  const { data, error } = await supa.from('sites')
+    .insert({ name: finalName, owner_id: state.authUser.id })
+    .select('id, name, join_code')
+    .single();
+  if (error) {
+    console.error('[Sync] createSite KO', error);
+    throw new Error(error.message || error.details || 'Création impossible');
+  }
+  console.log('[Sync] createSite OK', data);
+  // Force le nouveau site comme actif tout de suite
+  state.authSite = { id: data.id, name: data.name, joinCode: data.join_code, role: 'admin' };
   await refreshSiteInfo();
   // Premier site → push de l'état local actuel (pour amorcer site_data)
   await doSyncPull(true);
@@ -7119,21 +7186,71 @@ function renderCompte() {
   if (!root) return;
   const notConfigured = document.getElementById('authnotconfigured');
   const loggedOut     = document.getElementById('authloggedout');
-  const noSite        = document.getElementById('authnosite');
   const loggedIn      = document.getElementById('authloggedin');
-  if (!notConfigured || !loggedOut || !noSite || !loggedIn) return;
+  const noSite        = document.getElementById('authnosite');
+  if (!notConfigured || !loggedOut || !loggedIn) return;
   notConfigured.hidden = true;
   loggedOut.hidden = true;
-  noSite.hidden = true;
+  if (noSite) noSite.hidden = true;
   loggedIn.hidden = true;
   if (!isSupabaseConfigured()) { notConfigured.hidden = false; return; }
   if (!state.authUser)         { loggedOut.hidden = false; clearAuthError(); return; }
-  if (!state.authSite)         { noSite.hidden = false; clearAuthError('authnositeerror'); return; }
+  // Toujours afficher le panneau "connecté" qui contient la liste +
+  // formulaires de création/rejoindre. Plus de séparation noSite/loggedIn.
   loggedIn.hidden = false;
-  document.getElementById('authinfoemail').textContent    = state.authUser.email;
-  document.getElementById('authinfositename').textContent = state.authSite.name;
-  document.getElementById('authinfojoincode').textContent = state.authSite.joinCode;
-  document.getElementById('authinforole').textContent     = state.authSite.role === 'admin' ? 'Admin' : 'Membre';
+  document.getElementById('authinfoemail').textContent = state.authUser.email;
+  if (state.authSite) {
+    document.getElementById('authinfositename').textContent = state.authSite.name;
+    document.getElementById('authinfojoincode').textContent = state.authSite.joinCode;
+    document.getElementById('authinforole').textContent     = state.authSite.role === 'admin' ? 'Admin' : 'Membre';
+    document.getElementById('authactivesitebox').hidden = false;
+  } else {
+    document.getElementById('authactivesitebox').hidden = true;
+  }
+  renderSitesList();
+  updateSyncChip();
+  clearAuthError('authnositeerror');
+}
+
+function renderSitesList() {
+  const list = document.getElementById('authsiteslist');
+  if (!list) return;
+  list.innerHTML = '';
+  const sites = state.authSites || [];
+  if (sites.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'hint';
+    empty.style.fontStyle = 'italic';
+    empty.textContent = 'Aucun chantier. Créez-en un ou rejoignez celui de votre équipe via son code.';
+    list.appendChild(empty);
+    return;
+  }
+  for (const s of sites) {
+    const li = document.createElement('li');
+    li.className = 'auth-site-row' + (state.authSite && state.authSite.id === s.id ? ' is-active' : '');
+    li.innerHTML = `
+      <button class="auth-site-pick" type="button">
+        <span class="auth-site-name"></span>
+        <span class="auth-site-meta"></span>
+      </button>
+      <button class="auth-site-leave" type="button" aria-label="Quitter / supprimer ce chantier">×</button>
+    `;
+    li.querySelector('.auth-site-name').textContent = s.name;
+    li.querySelector('.auth-site-meta').textContent = `${s.joinCode} · ${s.role === 'admin' ? 'Admin' : 'Membre'}`;
+    li.querySelector('.auth-site-pick').addEventListener('click', async () => {
+      try { await switchActiveSite(s.id); showToast('Chantier actif : ' + s.name); }
+      catch (e) { showToast(e.message || 'Erreur', 'error'); }
+    });
+    li.querySelector('.auth-site-leave').addEventListener('click', async () => {
+      const msg = s.role === 'admin'
+        ? `Supprimer DÉFINITIVEMENT le chantier « ${s.name} » avec toutes ses données ? Cette action est irréversible.`
+        : `Quitter le chantier « ${s.name} » ? Vous pourrez le rejoindre à nouveau via son code (${s.joinCode}).`;
+      if (!confirm(msg)) return;
+      try { await leaveOrDeleteSite(s.id); showToast(s.role === 'admin' ? 'Chantier supprimé' : 'Chantier quitté'); }
+      catch (e) { showAuthError('authnositeerror', e.message); }
+    });
+    list.appendChild(li);
+  }
 }
 function showAuthError(elId, message) {
   const e = document.getElementById(elId);

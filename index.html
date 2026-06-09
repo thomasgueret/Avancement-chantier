@@ -416,11 +416,51 @@
         <p class="auth-error" id="autherror" hidden></p>
       </div>
 
-      <!-- État : connecté mais pas encore membre d'un chantier -->
-      <div class="auth-form" id="authnosite" hidden>
-        <p class="section-help">Bienvenue ! Pour commencer, créez un nouveau chantier ou rejoignez celui de votre équipe via son code.</p>
+      <!-- État : connecté — affiche le site actif (s'il y en a un) + liste
+           de tous les chantiers accessibles + formulaires create/join -->
+      <div class="auth-form" id="authloggedin" hidden>
+        <div class="auth-info">
+          <div class="auth-info-row">
+            <span class="auth-info-label">Email</span>
+            <span class="auth-info-value" id="authinfoemail"></span>
+          </div>
+          <div class="auth-info-row">
+            <span class="auth-info-label">Synchro</span>
+            <span class="auth-info-value">
+              <span id="authsyncchip" class="auth-sync-chip is-idle">🟢 Synchronisé</span>
+            </span>
+          </div>
+        </div>
+
+        <!-- Encart "Chantier actif" — masqué quand aucun chantier sélectionné -->
+        <div class="auth-active-box" id="authactivesitebox" hidden>
+          <div class="auth-active-box-head">Chantier actif</div>
+          <div class="auth-info">
+            <div class="auth-info-row">
+              <span class="auth-info-label">Nom</span>
+              <span class="auth-info-value" id="authinfositename"></span>
+            </div>
+            <div class="auth-info-row">
+              <span class="auth-info-label">Rôle</span>
+              <span class="auth-info-value" id="authinforole"></span>
+            </div>
+            <div class="auth-info-row auth-info-row-code">
+              <span class="auth-info-label">Code à partager</span>
+              <span class="auth-info-value auth-join-code" id="authinfojoincode"></span>
+              <button class="btn-secondary auth-copy-btn" id="authcopycode" type="button">📋 Copier</button>
+            </div>
+          </div>
+          <p class="hint">Sync auto : push à chaque modif + pull au changement d'onglet, retour sur l'app, toutes les 20 s, et via realtime quand c'est activé côté Supabase.</p>
+          <button class="btn-primary stock-submit-btn" id="authforcesync" type="button">🔄 Forcer la synchronisation</button>
+        </div>
+
+        <!-- Liste de TOUS les chantiers accessibles à cet utilisateur -->
+        <h3 class="auth-subsection-title">Mes chantiers</h3>
+        <ul class="auth-sites-list" id="authsiteslist"></ul>
+
+        <!-- Formulaires inline pour créer un autre / rejoindre un autre -->
         <div class="auth-mode-bar">
-          <button class="auth-mode-btn active" data-authmode="create" type="button">Nouveau chantier</button>
+          <button class="auth-mode-btn active" data-authmode="create" type="button">+ Nouveau chantier</button>
           <button class="auth-mode-btn"        data-authmode="join"   type="button">Rejoindre</button>
         </div>
         <div id="authsubcreate">
@@ -435,39 +475,8 @@
           <button class="btn-primary stock-submit-btn" id="authjoinbtn" type="button">Rejoindre</button>
         </div>
         <p class="auth-error" id="authnositeerror" hidden></p>
-      </div>
 
-      <!-- État : connecté + sur un chantier -->
-      <div class="auth-form" id="authloggedin" hidden>
-        <div class="auth-info">
-          <div class="auth-info-row">
-            <span class="auth-info-label">Synchro</span>
-            <span class="auth-info-value">
-              <span id="authsyncchip" class="auth-sync-chip is-idle">🟢 Synchronisé</span>
-            </span>
-          </div>
-          <div class="auth-info-row">
-            <span class="auth-info-label">Email</span>
-            <span class="auth-info-value" id="authinfoemail"></span>
-          </div>
-          <div class="auth-info-row">
-            <span class="auth-info-label">Chantier</span>
-            <span class="auth-info-value" id="authinfositename"></span>
-          </div>
-          <div class="auth-info-row">
-            <span class="auth-info-label">Rôle</span>
-            <span class="auth-info-value" id="authinforole"></span>
-          </div>
-          <div class="auth-info-row auth-info-row-code">
-            <span class="auth-info-label">Code à partager</span>
-            <span class="auth-info-value auth-join-code" id="authinfojoincode"></span>
-            <button class="btn-secondary auth-copy-btn" id="authcopycode" type="button">📋 Copier</button>
-          </div>
-        </div>
-        <p class="section-help">Partagez le code à 6 caractères ci-dessus avec vos coéquipiers — ils pourront rejoindre ce chantier en s'inscrivant.</p>
-        <p class="hint">Synchronisation automatique : push à chaque modif (1,5 s) + pull à chaque changement d'onglet, retour sur l'app, et toutes les 20 s. Si quelque chose semble pas à jour, utilisez le bouton ci-dessous.</p>
-        <button class="btn-primary stock-submit-btn" id="authforcesync" type="button">🔄 Forcer la synchronisation</button>
-        <button class="btn-secondary" id="authsignoutbtn" type="button">Se déconnecter</button>
+        <button class="btn-secondary auth-signout" id="authsignoutbtn" type="button">Se déconnecter</button>
       </div>
     </section>
   </main>
