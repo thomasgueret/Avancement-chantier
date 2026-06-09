@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.75';
+const APP_VERSION = '0.76';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -7004,14 +7004,28 @@ function loadSupabase() {
       auth: { persistSession: true, autoRefreshToken: true, storage: window.localStorage }
     });
     // Maintient state.authUser synchronisé avec le SDK (token refresh, sign-out…)
-    supabaseClient.auth.onAuthStateChange(async (_event, session) => {
+    supabaseClient.auth.onAuthStateChange(async (event, session) => {
+      // Évé. PASSWORD_RECOVERY = utilisateur revient via un lien de
+      // reset de mot de passe → on affiche le formulaire dédié au lieu
+      // du panneau principal.
+      if (event === 'PASSWORD_RECOVERY') {
+        state.authUser = session && session.user
+          ? { id: session.user.id, email: session.user.email }
+          : null;
+        switchPage('compte');
+        document.body.dataset.authRecovery = '1';
+        renderCompte();
+        return;
+      }
       if (session && session.user) {
         state.authUser = { id: session.user.id, email: session.user.email };
         await refreshSiteInfo();
       } else {
         state.authUser = null;
         state.authSite = null;
+        state.authSites = [];
       }
+      delete document.body.dataset.authRecovery;
       renderCompte();
     });
     return supabaseClient;
@@ -7125,17 +7139,53 @@ async function leaveOrDeleteSite(siteId) {
   }
 }
 
+// Traduit les messages d'erreur Supabase en français pour l'utilisateur.
+function translateAuthError(err) {
+  if (!err) return 'Erreur inconnue';
+  const msg = String(err.message || err || '');
+  const map = [
+    [/User already registered/i,                       'Cet email est déjà inscrit. Connectez-vous plutôt.'],
+    [/Invalid login credentials/i,                     'Email ou mot de passe incorrect.'],
+    [/Email not confirmed/i,                           'Vérifiez votre email — un lien de confirmation vous a été envoyé.'],
+    [/Password should be at least 6 characters/i,      'Mot de passe trop court (6 caractères minimum).'],
+    [/Unable to validate email address: invalid format/i, 'Format email invalide.'],
+    [/For security purposes.*after \d+ seconds/i,      'Trop de tentatives, patientez 60 s avant de réessayer.'],
+    [/network|fetch/i,                                 'Pas de connexion réseau. Réessayez plus tard.'],
+    [/Email rate limit exceeded/i,                     'Quota d\'envoi d\'emails atteint. Réessayez dans quelques minutes.']
+  ];
+  for (const [re, fr] of map) if (re.test(msg)) return fr;
+  return msg || 'Erreur inconnue';
+}
+
+// Validation minimaliste d'un email côté client (n'autorise pas tout
+// mais filtre les fautes de frappe évidentes).
+function isValidEmail(s) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test((s || '').trim());
+}
+
 async function signInWithPassword(email, password) {
   const supa = await loadSupabase();
   if (!supa) throw new Error('Synchronisation non configurée');
+  if (!isValidEmail(email)) throw new Error('Format email invalide.');
+  if (!password) throw new Error('Mot de passe requis.');
   const { error } = await supa.auth.signInWithPassword({ email: email.trim(), password });
-  if (error) throw error;
+  if (error) throw new Error(translateAuthError(error));
 }
+// Retourne true si une session a été créée immédiatement (confirmation
+// email désactivée ou utilisateur déjà confirmé), false si l'email de
+// confirmation a été envoyé et l'utilisateur doit cliquer le lien.
 async function signUpWithPassword(email, password) {
   const supa = await loadSupabase();
   if (!supa) throw new Error('Synchronisation non configurée');
-  const { error } = await supa.auth.signUp({ email: email.trim(), password });
-  if (error) throw error;
+  if (!isValidEmail(email)) throw new Error('Format email invalide.');
+  if ((password || '').length < 6) throw new Error('Mot de passe trop court (6 caractères minimum).');
+  const redirectTo = window.location.origin + window.location.pathname;
+  const { data, error } = await supa.auth.signUp({
+    email: email.trim(), password,
+    options: { emailRedirectTo: redirectTo }
+  });
+  if (error) throw new Error(translateAuthError(error));
+  return !!(data && data.session);
 }
 async function signOut() {
   const supa = await loadSupabase();
@@ -7145,7 +7195,31 @@ async function signOut() {
   await supa.auth.signOut();
   state.authUser = null;
   state.authSite = null;
+  state.authSites = [];
   renderCompte();
+}
+
+// Demande un email de réinitialisation de mot de passe. Supabase envoie
+// un email avec un lien qui ramène sur l'app avec un hash de tokens —
+// le SDK détecte ça et émet l'événement PASSWORD_RECOVERY qu'on intercepte
+// dans onAuthStateChange pour afficher le formulaire de nouveau mot de passe.
+async function requestPasswordReset(email) {
+  const supa = await loadSupabase();
+  if (!supa) throw new Error('Synchronisation non configurée');
+  if (!isValidEmail(email)) throw new Error('Format email invalide.');
+  const redirectTo = window.location.origin + window.location.pathname;
+  const { error } = await supa.auth.resetPasswordForEmail(email.trim(), { redirectTo });
+  if (error) throw new Error(translateAuthError(error));
+}
+
+// Met à jour le mot de passe de l'utilisateur courant (utilisé après
+// une récupération PASSWORD_RECOVERY).
+async function updatePasswordTo(newPassword) {
+  const supa = await loadSupabase();
+  if (!supa) throw new Error('Non configuré');
+  if ((newPassword || '').length < 6) throw new Error('Mot de passe trop court (6 caractères minimum).');
+  const { error } = await supa.auth.updateUser({ password: newPassword });
+  if (error) throw new Error(translateAuthError(error));
 }
 async function createSiteForUser(name) {
   const supa = await loadSupabase();
@@ -7188,12 +7262,19 @@ function renderCompte() {
   const loggedOut     = document.getElementById('authloggedout');
   const loggedIn      = document.getElementById('authloggedin');
   const noSite        = document.getElementById('authnosite');
+  const recovery      = document.getElementById('authrecovery');
   if (!notConfigured || !loggedOut || !loggedIn) return;
   notConfigured.hidden = true;
   loggedOut.hidden = true;
   if (noSite) noSite.hidden = true;
   loggedIn.hidden = true;
+  if (recovery) recovery.hidden = true;
   if (!isSupabaseConfigured()) { notConfigured.hidden = false; return; }
+  // Reset de mot de passe en cours (revient d'un lien email)
+  if (document.body.dataset.authRecovery === '1' && recovery) {
+    recovery.hidden = false;
+    return;
+  }
   if (!state.authUser)         { loggedOut.hidden = false; clearAuthError(); return; }
   // Toujours afficher le panneau "connecté" qui contient la liste +
   // formulaires de création/rejoindre. Plus de séparation noSite/loggedIn.
@@ -7733,7 +7814,6 @@ function init() {
     clearAuthError();
     const email = document.getElementById('authemail').value;
     const pwd   = document.getElementById('authpassword').value;
-    if (!email || !pwd) { showAuthError('autherror', 'Email + mot de passe requis'); return; }
     try {
       authSignIn.disabled = true;
       await signInWithPassword(email, pwd);
@@ -7747,17 +7827,50 @@ function init() {
     clearAuthError();
     const email = document.getElementById('authemail').value;
     const pwd   = document.getElementById('authpassword').value;
-    if (!email || (pwd || '').length < 6) {
-      showAuthError('autherror', 'Email valide + mot de passe d\'au moins 6 caractères requis'); return;
-    }
     try {
       authSignUp.disabled = true;
-      await signUpWithPassword(email, pwd);
-      await refreshAuthSession();
-      showToast('Compte créé');
+      const hasSession = await signUpWithPassword(email, pwd);
+      if (hasSession) {
+        await refreshAuthSession();
+        showToast('Compte créé — bienvenue !');
+      } else {
+        showAuthError('autherror', 'Compte créé. Cliquez sur le lien reçu par email pour activer votre compte.');
+      }
     } catch (e) {
       showAuthError('autherror', e.message || 'Inscription échouée');
     } finally { authSignUp.disabled = false; }
+  });
+  // Lien "Mot de passe oublié" → demande envoi de l'email de reset
+  const authForgot = document.getElementById('authforgotlink');
+  if (authForgot) authForgot.addEventListener('click', async (e) => {
+    e.preventDefault();
+    clearAuthError();
+    const email = document.getElementById('authemail').value;
+    if (!isValidEmail(email)) { showAuthError('autherror', 'Saisissez d\'abord votre email ci-dessus, puis cliquez à nouveau.'); return; }
+    try {
+      authForgot.style.pointerEvents = 'none';
+      await requestPasswordReset(email);
+      showAuthError('autherror', 'Email envoyé. Vérifiez votre boîte de réception pour le lien de réinitialisation.');
+    } catch (err) {
+      showAuthError('autherror', err.message);
+    } finally { setTimeout(() => { authForgot.style.pointerEvents = ''; }, 60000); }
+  });
+  // Formulaire "nouveau mot de passe" après clic sur le lien de reset
+  const authRecoverBtn = document.getElementById('authrecoverybtn');
+  if (authRecoverBtn) authRecoverBtn.addEventListener('click', async () => {
+    clearAuthError('authrecoveryerror');
+    const pwd1 = document.getElementById('authrecoverypwd').value;
+    const pwd2 = document.getElementById('authrecoverypwd2').value;
+    if (pwd1 !== pwd2) { showAuthError('authrecoveryerror', 'Les 2 mots de passe ne correspondent pas.'); return; }
+    try {
+      authRecoverBtn.disabled = true;
+      await updatePasswordTo(pwd1);
+      delete document.body.dataset.authRecovery;
+      await refreshAuthSession();
+      showToast('Mot de passe mis à jour');
+    } catch (e) {
+      showAuthError('authrecoveryerror', e.message);
+    } finally { authRecoverBtn.disabled = false; }
   });
   // Tabs "Créer / Rejoindre" sur l'écran sans site
   document.querySelectorAll('.auth-mode-btn').forEach(btn => {

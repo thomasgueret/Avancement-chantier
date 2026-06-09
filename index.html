@@ -413,7 +413,21 @@
           <button class="btn-primary" id="authsigninbtn" type="button">Se connecter</button>
           <button class="btn-secondary" id="authsignupbtn" type="button">Créer un compte</button>
         </div>
+        <p class="auth-forgot-row">
+          <a href="#" id="authforgotlink" class="auth-forgot-link">Mot de passe oublié ?</a>
+        </p>
         <p class="auth-error" id="autherror" hidden></p>
+      </div>
+
+      <!-- État : réinitialisation de mot de passe (revient d'un lien email) -->
+      <div class="auth-form" id="authrecovery" hidden>
+        <p class="section-help">Définissez un nouveau mot de passe pour votre compte.</p>
+        <label class="stock-form-label" for="authrecoverypwd">Nouveau mot de passe</label>
+        <input id="authrecoverypwd" class="stock-form-input" type="password" minlength="6" placeholder="6 caractères minimum">
+        <label class="stock-form-label" for="authrecoverypwd2">Confirmation</label>
+        <input id="authrecoverypwd2" class="stock-form-input" type="password" minlength="6" placeholder="Retapez le mot de passe">
+        <button class="btn-primary stock-submit-btn" id="authrecoverybtn" type="button">Mettre à jour le mot de passe</button>
+        <p class="auth-error" id="authrecoveryerror" hidden></p>
       </div>
 
       <!-- État : connecté — affiche le site actif (s'il y en a un) + liste
