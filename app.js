@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.72';
+const APP_VERSION = '0.73';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -87,6 +87,10 @@ const state = {
   // Auth (non persistée — recalée à chaque démarrage via Supabase)
   authUser: null,            // { id, email } | null
   authSite: null,            // { id, name, joinCode, role } | null
+  // Synchronisation (étape 5)
+  syncStatus: 'idle',        // 'idle' | 'syncing' | 'error' | 'offline'
+  syncTimestamp: 0,          // ms epoch — dernier changement local connu
+  syncLastPulled: 0,         // ms epoch — dernier pull réussi depuis le serveur
   currentDate: todayISO(),
   chartHidden: {},        // { [companyId]: true } — entreprises masquées du graphique
   chartRange: 30          // 7 | 30 | 'all'
@@ -152,6 +156,7 @@ function load() {
     if (Array.isArray(data.protoShapes)) state.protoShapes = data.protoShapes;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
+    if (typeof data.syncTimestamp === 'number') state.syncTimestamp = data.syncTimestamp;
     // Champs hérités (ancien modèle à liste unique) → migrés ensuite
     if (data.tasks) state._legacyTasks = data.tasks;
     if (data.zoneHasTasks) state._legacyZoneHasTasks = data.zoneHasTasks;
@@ -201,9 +206,18 @@ function save() {
     protoFilterStatuses: state.protoFilterStatuses,
     protoShapes: state.protoShapes,
     chartHidden: state.chartHidden,
-    chartRange: state.chartRange
+    chartRange: state.chartRange,
+    syncTimestamp: state.syncTimestamp
   };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
+  catch (e) { console.warn('localStorage save KO', e); }
+  // Synchro : à chaque save, on bump le timestamp et on schedule un
+  // push vers Supabase (sauf quand on est justement en train d'appliquer
+  // l'état distant — sinon boucle infinie).
+  if (!_syncApplying) {
+    state.syncTimestamp = Date.now();
+    if (typeof schedulePush === 'function') schedulePush();
+  }
 }
 
 // ---------- Utils ----------
@@ -7008,9 +7022,15 @@ async function refreshAuthSession() {
   if (data && data.session && data.session.user) {
     state.authUser = { id: data.session.user.id, email: data.session.user.email };
     await refreshSiteInfo();
+    // Synchro : pull initial + abonnement realtime dès qu'on est sur un chantier
+    if (state.authSite) {
+      await doSyncPull(true);
+      await setupSyncRealtime();
+    }
   } else {
     state.authUser = null;
     state.authSite = null;
+    await teardownSyncRealtime();
   }
   renderCompte();
   return data && data.session;
@@ -7052,6 +7072,7 @@ async function signUpWithPassword(email, password) {
 async function signOut() {
   const supa = await loadSupabase();
   if (!supa) return;
+  await teardownSyncRealtime();
   await supa.auth.signOut();
   state.authUser = null;
   state.authSite = null;
@@ -7066,6 +7087,9 @@ async function createSiteForUser(name) {
   });
   if (error) throw error;
   await refreshSiteInfo();
+  // Premier site → push de l'état local actuel (pour amorcer site_data)
+  await doSyncPull(true);
+  await setupSyncRealtime();
 }
 async function joinSiteWithCode(code) {
   const supa = await loadSupabase();
@@ -7073,6 +7097,9 @@ async function joinSiteWithCode(code) {
   const { error } = await supa.rpc('join_site_with_code', { code: (code || '').trim().toUpperCase() });
   if (error) throw error;
   await refreshSiteInfo();
+  // Rejoindre → pull pour récupérer l'état déjà partagé par les autres membres
+  await doSyncPull(true);
+  await setupSyncRealtime();
 }
 
 function renderCompte() {
@@ -7106,6 +7133,173 @@ function clearAuthError(elId = 'autherror') {
   const e = document.getElementById(elId);
   if (e) { e.hidden = true; e.textContent = ''; }
 }
+
+// ====================================================================
+//   SYNCHRONISATION (étape 5) — push/pull state ↔ site_data
+// ====================================================================
+// Stratégie : last-write-wins par timestamp. Push debouncé sur 1.5 s
+// après chaque save(). Pull initial au login + realtime via WebSocket
+// pour récupérer les changements des coéquipiers en quasi-temps réel.
+
+const SYNC_DEBOUNCE_MS = 1500;
+// Clés exclues de la synchro : préférences UI per-device + auth + sync
+const SYNC_EXCLUDED_KEYS = new Set([
+  'currentDate',                     // curseur "aujourd'hui" local
+  'chartHidden', 'chartRange',       // filtres graphique perso
+  'consoRecapMode',                  // mode récap conso perso
+  'protoActivePlanId',               // plan en cours d'édition
+  'protoFilterLotId', 'protoFilterStatuses', // filtres Proto
+  'echeckinCollapsed',               // sections eCheckIn pliées/dépliées
+  'authUser', 'authSite',            // auth (regénéré par Supabase)
+  'syncStatus', 'syncTimestamp', 'syncLastPulled',
+  'protoPlan', 'protoPlanW', 'protoPlanH' // champs hérités migrés
+]);
+
+let _syncApplying = false;        // true pendant l'application du state distant
+let syncPushTimer = null;
+let syncRealtimeChannel = null;
+
+function schedulePush() {
+  if (!isSupabaseConfigured() || !state.authSite || !state.authUser) return;
+  clearTimeout(syncPushTimer);
+  syncPushTimer = setTimeout(doSyncPush, SYNC_DEBOUNCE_MS);
+}
+
+function getSyncablePayload() {
+  const out = {};
+  for (const k in state) {
+    if (SYNC_EXCLUDED_KEYS.has(k)) continue;
+    out[k] = state[k];
+  }
+  return out;
+}
+
+function setSyncStatus(s) {
+  state.syncStatus = s;
+  updateSyncChip();
+}
+
+async function doSyncPush() {
+  if (!state.authSite || !state.authUser) return;
+  const supa = await loadSupabase();
+  if (!supa) return;
+  setSyncStatus('syncing');
+  try {
+    const payload = getSyncablePayload();
+    const updatedAt = new Date(state.syncTimestamp || Date.now()).toISOString();
+    const { error } = await supa.from('site_data').update({
+      state: payload,
+      updated_at: updatedAt,
+      updated_by: state.authUser.id
+    }).eq('site_id', state.authSite.id);
+    if (error) throw error;
+    setSyncStatus('idle');
+  } catch (err) {
+    console.error('Sync push KO', err);
+    setSyncStatus('error');
+  }
+}
+
+async function doSyncPull(initial = false) {
+  if (!state.authSite || !state.authUser) return;
+  const supa = await loadSupabase();
+  if (!supa) return;
+  setSyncStatus('syncing');
+  try {
+    const { data, error } = await supa
+      .from('site_data')
+      .select('state, updated_at, updated_by')
+      .eq('site_id', state.authSite.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (data) {
+      const remoteTs = data.updated_at ? new Date(data.updated_at).getTime() : 0;
+      const localTs = state.syncTimestamp || 0;
+      const remoteHasData = data.state && Object.keys(data.state || {}).length > 0;
+      if (!remoteHasData && initial) {
+        // Serveur vide à la 1re connexion → on push notre état local
+        await doSyncPush();
+      } else if (remoteHasData && (initial ? remoteTs >= localTs : remoteTs > localTs)) {
+        // Appliquer l'état distant (flag pour ne pas re-déclencher push)
+        _syncApplying = true;
+        try {
+          for (const k in data.state) {
+            if (SYNC_EXCLUDED_KEYS.has(k)) continue;
+            state[k] = data.state[k];
+          }
+          state.syncTimestamp = remoteTs;
+          save();
+          renderAll();
+        } finally { _syncApplying = false; }
+      }
+    } else if (initial) {
+      // Pas de ligne site_data du tout → on push pour la créer/initialiser
+      await doSyncPush();
+    }
+    state.syncLastPulled = Date.now();
+    setSyncStatus('idle');
+  } catch (err) {
+    console.error('Sync pull KO', err);
+    setSyncStatus('error');
+  }
+}
+
+async function setupSyncRealtime() {
+  if (!state.authSite || !state.authUser) return;
+  const supa = await loadSupabase();
+  if (!supa || typeof supa.channel !== 'function') return;
+  await teardownSyncRealtime();
+  try {
+    syncRealtimeChannel = supa.channel('site_data_' + state.authSite.id)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'site_data',
+        filter: 'site_id=eq.' + state.authSite.id
+      }, (payload) => {
+        // Ignore les changements faits par nous-même
+        if (payload && payload.new && payload.new.updated_by === state.authUser.id) return;
+        doSyncPull();
+      })
+      .subscribe();
+  } catch (err) {
+    console.warn('Realtime setup KO (continue sans realtime)', err);
+  }
+}
+async function teardownSyncRealtime() {
+  if (!syncRealtimeChannel) return;
+  const supa = await loadSupabase();
+  if (supa) {
+    try { await supa.removeChannel(syncRealtimeChannel); } catch (_) {}
+  }
+  syncRealtimeChannel = null;
+}
+
+function updateSyncChip() {
+  const chip = document.getElementById('authsyncchip');
+  if (!chip) return;
+  const labels = {
+    idle:    { txt: '🟢 Synchronisé',           cls: 'is-idle' },
+    syncing: { txt: '🟡 Sync en cours…',        cls: 'is-syncing' },
+    error:   { txt: '🔴 Erreur de sync',         cls: 'is-error' },
+    offline: { txt: '⚫ Hors-ligne',             cls: 'is-offline' }
+  };
+  const lbl = labels[state.syncStatus] || labels.idle;
+  chip.textContent = lbl.txt;
+  chip.className = 'auth-sync-chip ' + lbl.cls;
+}
+
+// Détecte le passage online/offline pour mettre à jour le chip et
+// déclencher un push des changements en attente
+window.addEventListener('online', () => {
+  if (state.authSite && state.syncStatus === 'offline') {
+    setSyncStatus('idle');
+    schedulePush();
+  }
+});
+window.addEventListener('offline', () => {
+  if (state.authSite) setSyncStatus('offline');
+});
 
 // ---------- Init ----------
 function init() {

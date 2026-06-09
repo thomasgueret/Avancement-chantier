@@ -3325,3 +3325,16 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   padding: 6px 10px;
   font-size: 12px;
 }
+
+/* Indicateur d'état de synchronisation */
+.auth-sync-chip {
+  display: inline-flex; align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.auth-sync-chip.is-idle    { background: rgba(46, 125, 50, 0.10); color: #1b5e20; }
+.auth-sync-chip.is-syncing { background: rgba(237, 108, 2, 0.10); color: #b54708; }
+.auth-sync-chip.is-error   { background: rgba(211, 47, 47, 0.10); color: #b71c1c; }
+.auth-sync-chip.is-offline { background: rgba(120, 120, 120, 0.12); color: #555; }
