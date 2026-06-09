@@ -13,8 +13,8 @@ const APP_VERSION = '0.72';
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
 // Ces deux valeurs sont publiques par construction (la sécurité repose
 // sur la RLS configurée dans le SQL).
-const SUPABASE_URL      = ''; // ex. 'https://xxxxxxx.supabase.co'
-const SUPABASE_ANON_KEY = ''; // ex. 'eyJhbGciOi…' (longue clé)
+const SUPABASE_URL      = 'https://djlxfbnkmixxuxmiikif.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRqbHhmYm5rbWl4eHV4bWlpa2lmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5MzUyNzcsImV4cCI6MjA5NjUxMTI3N30.84sp5vhAr1MEXMaHhVuhMZwONCsO7CMSWR_GkyjlZkM';
 const SUPABASE_SDK_URL  = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 
 // Palette de couleurs pour les courbes (accent + 9 couleurs distinctes)
