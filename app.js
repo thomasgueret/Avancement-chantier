@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.73';
+const APP_VERSION = '0.74';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -216,6 +216,7 @@ function save() {
   // l'état distant — sinon boucle infinie).
   if (!_syncApplying) {
     state.syncTimestamp = Date.now();
+    _hasPendingPush = true;
     if (typeof schedulePush === 'function') schedulePush();
   }
 }
@@ -5094,6 +5095,12 @@ function switchPage(name) {
   if (name === 'dashboard') renderDashboard();
   if (name === 'proto') renderProto();
   if (name === 'compte') renderCompte();
+  // Synchro : à chaque changement d'onglet, on tente un pull en arrière-
+  // plan pour récupérer les dernières modifs des coéquipiers. Non
+  // bloquant pour le rendu courant.
+  if (state.authSite && isSupabaseConfigured()) {
+    doSyncPull().catch(err => console.warn('Pull on tab change KO', err));
+  }
 }
 
 // ---------- Import / Export ----------
@@ -7026,11 +7033,13 @@ async function refreshAuthSession() {
     if (state.authSite) {
       await doSyncPull(true);
       await setupSyncRealtime();
+      startSyncPolling();
     }
   } else {
     state.authUser = null;
     state.authSite = null;
     await teardownSyncRealtime();
+    stopSyncPolling();
   }
   renderCompte();
   return data && data.session;
@@ -7073,6 +7082,7 @@ async function signOut() {
   const supa = await loadSupabase();
   if (!supa) return;
   await teardownSyncRealtime();
+  stopSyncPolling();
   await supa.auth.signOut();
   state.authUser = null;
   state.authSite = null;
@@ -7090,6 +7100,7 @@ async function createSiteForUser(name) {
   // Premier site → push de l'état local actuel (pour amorcer site_data)
   await doSyncPull(true);
   await setupSyncRealtime();
+  startSyncPolling();
 }
 async function joinSiteWithCode(code) {
   const supa = await loadSupabase();
@@ -7100,6 +7111,7 @@ async function joinSiteWithCode(code) {
   // Rejoindre → pull pour récupérer l'état déjà partagé par les autres membres
   await doSyncPull(true);
   await setupSyncRealtime();
+  startSyncPolling();
 }
 
 function renderCompte() {
@@ -7142,6 +7154,20 @@ function clearAuthError(elId = 'autherror') {
 // pour récupérer les changements des coéquipiers en quasi-temps réel.
 
 const SYNC_DEBOUNCE_MS = 1500;
+const SYNC_POLL_INTERVAL_MS = 20000; // pull périodique toutes les 20s
+// ID unique de cet appareil — permet de différencier nos propres
+// pushs (skippés en realtime) des pushs d'autres appareils du même
+// compte (qu'on doit pull). Stocké en localStorage, jamais synchronisé.
+function getDeviceId() {
+  let id = '';
+  try { id = localStorage.getItem('chantier_device_id') || ''; } catch (_) {}
+  if (!id) {
+    id = 'dev_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    try { localStorage.setItem('chantier_device_id', id); } catch (_) {}
+  }
+  return id;
+}
+const DEVICE_ID = getDeviceId();
 // Clés exclues de la synchro : préférences UI per-device + auth + sync
 const SYNC_EXCLUDED_KEYS = new Set([
   'currentDate',                     // curseur "aujourd'hui" local
@@ -7156,7 +7182,9 @@ const SYNC_EXCLUDED_KEYS = new Set([
 ]);
 
 let _syncApplying = false;        // true pendant l'application du state distant
+let _hasPendingPush = false;      // true si une modif locale n'a pas encore été poussée
 let syncPushTimer = null;
+let syncPollTimer = null;
 let syncRealtimeChannel = null;
 
 function schedulePush() {
@@ -7171,6 +7199,9 @@ function getSyncablePayload() {
     if (SYNC_EXCLUDED_KEYS.has(k)) continue;
     out[k] = state[k];
   }
+  // Marqueur d'appareil — sera lu côté pull pour éviter qu'un appareil
+  // re-pull son propre push (boucle inutile mais sans dégât).
+  out._sourceDeviceId = DEVICE_ID;
   return out;
 }
 
@@ -7193,6 +7224,7 @@ async function doSyncPush() {
       updated_by: state.authUser.id
     }).eq('site_id', state.authSite.id);
     if (error) throw error;
+    _hasPendingPush = false;
     setSyncStatus('idle');
   } catch (err) {
     console.error('Sync push KO', err);
@@ -7216,15 +7248,19 @@ async function doSyncPull(initial = false) {
       const remoteTs = data.updated_at ? new Date(data.updated_at).getTime() : 0;
       const localTs = state.syncTimestamp || 0;
       const remoteHasData = data.state && Object.keys(data.state || {}).length > 0;
+      // Skip si le push vient de cet appareil-ci (le state distant
+      // contient un marqueur _sourceDeviceId qu'on a mis nous-même)
+      const sameDevice = data.state && data.state._sourceDeviceId === DEVICE_ID;
       if (!remoteHasData && initial) {
         // Serveur vide à la 1re connexion → on push notre état local
         await doSyncPush();
-      } else if (remoteHasData && (initial ? remoteTs >= localTs : remoteTs > localTs)) {
+      } else if (remoteHasData && !sameDevice && (initial ? remoteTs >= localTs : remoteTs > localTs)) {
         // Appliquer l'état distant (flag pour ne pas re-déclencher push)
         _syncApplying = true;
         try {
           for (const k in data.state) {
             if (SYNC_EXCLUDED_KEYS.has(k)) continue;
+            if (k === '_sourceDeviceId') continue;
             state[k] = data.state[k];
           }
           state.syncTimestamp = remoteTs;
@@ -7233,7 +7269,6 @@ async function doSyncPull(initial = false) {
         } finally { _syncApplying = false; }
       }
     } else if (initial) {
-      // Pas de ligne site_data du tout → on push pour la créer/initialiser
       await doSyncPush();
     }
     state.syncLastPulled = Date.now();
@@ -7256,9 +7291,10 @@ async function setupSyncRealtime() {
         schema: 'public',
         table: 'site_data',
         filter: 'site_id=eq.' + state.authSite.id
-      }, (payload) => {
-        // Ignore les changements faits par nous-même
-        if (payload && payload.new && payload.new.updated_by === state.authUser.id) return;
+      }, () => {
+        // Toujours pull : doSyncPull saute en interne si le state distant
+        // vient de cet appareil (via _sourceDeviceId). Ça gère
+        // correctement le cas « 2 appareils du même compte ».
         doSyncPull();
       })
       .subscribe();
@@ -7273,6 +7309,35 @@ async function teardownSyncRealtime() {
     try { await supa.removeChannel(syncRealtimeChannel); } catch (_) {}
   }
   syncRealtimeChannel = null;
+}
+
+// Polling régulier (fallback robuste si realtime n'est pas activé sur la
+// table dans Supabase). 20 s = compromis entre latence et requêtes
+// inutiles. Le SDK Supabase coalesce les requêtes — pas de surcharge.
+function startSyncPolling() {
+  stopSyncPolling();
+  syncPollTimer = setInterval(() => {
+    if (state.authSite && state.authUser && document.visibilityState === 'visible') {
+      doSyncPull();
+    }
+  }, SYNC_POLL_INTERVAL_MS);
+}
+function stopSyncPolling() {
+  if (syncPollTimer) clearInterval(syncPollTimer);
+  syncPollTimer = null;
+}
+
+// Force une synchro complète : push immédiat si des modifs locales
+// sont en attente, puis pull. Utilisé par le bouton « Forcer la sync ».
+async function forceFullSync() {
+  if (!state.authSite || !state.authUser) {
+    showToast('Connectez-vous d\'abord', 'error');
+    return;
+  }
+  clearTimeout(syncPushTimer);
+  if (_hasPendingPush) await doSyncPush();
+  await doSyncPull(true);
+  showToast('Synchronisation effectuée');
 }
 
 function updateSyncChip() {
@@ -7299,6 +7364,13 @@ window.addEventListener('online', () => {
 });
 window.addEventListener('offline', () => {
   if (state.authSite) setSyncStatus('offline');
+});
+// Quand l'utilisateur revient sur l'onglet (focus), pull immédiat pour
+// rattraper les changements éventuels des coéquipiers.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.authSite && isSupabaseConfigured()) {
+    doSyncPull().catch(err => console.warn('Pull on visibility KO', err));
+  }
 });
 
 // ---------- Init ----------
@@ -7611,6 +7683,15 @@ function init() {
   if (authSignOut) authSignOut.addEventListener('click', async () => {
     try { authSignOut.disabled = true; await signOut(); }
     finally { authSignOut.disabled = false; }
+  });
+  const authForceSync = document.getElementById('authforcesync');
+  if (authForceSync) authForceSync.addEventListener('click', async () => {
+    try {
+      authForceSync.disabled = true;
+      await forceFullSync();
+    } catch (e) {
+      showToast('Sync KO : ' + (e.message || 'erreur'), 'error');
+    } finally { authForceSync.disabled = false; }
   });
   const authCopyCode = document.getElementById('authcopycode');
   if (authCopyCode) authCopyCode.addEventListener('click', async () => {

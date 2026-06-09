@@ -465,7 +465,8 @@
           </div>
         </div>
         <p class="section-help">Partagez le code à 6 caractères ci-dessus avec vos coéquipiers — ils pourront rejoindre ce chantier en s'inscrivant.</p>
-        <p class="hint">Synchronisation automatique active : vos modifications sont poussées vers tous les appareils de l'équipe en quelques secondes. Les filtres de vue (lot, statut, plan actif) restent locaux à chaque appareil.</p>
+        <p class="hint">Synchronisation automatique : push à chaque modif (1,5 s) + pull à chaque changement d'onglet, retour sur l'app, et toutes les 20 s. Si quelque chose semble pas à jour, utilisez le bouton ci-dessous.</p>
+        <button class="btn-primary stock-submit-btn" id="authforcesync" type="button">🔄 Forcer la synchronisation</button>
         <button class="btn-secondary" id="authsignoutbtn" type="button">Se déconnecter</button>
       </div>
     </section>
