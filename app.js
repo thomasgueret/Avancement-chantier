@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.78';
+const APP_VERSION = '0.79';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -5270,7 +5270,13 @@ const PROTO_MAX_PLAN_DIM = 1920; // px max sur le plus grand côté
 const PROTO_DEFAULT_LOT_COLORS = ['#0a84ff', '#ff9500', '#5856d6', '#34c759', '#ff2d55', '#af52de'];
 
 // État UI (non persisté) du Proto
-let protoTool = 'select';   // 'select' | 'point' | 'line' | 'rect' | 'polygon'
+let protoTool = 'select';   // 'select' | 'point' | 'line' | 'rect' | 'polygon' | 'polyline'
+// Mode série : quand activé, le 1er sheet d'édition d'une forme capture
+// les valeurs (lot/intitulé/statut/date) et les applique automatiquement
+// aux formes suivantes — pratique pour saisir beaucoup de tâches en
+// rafale avec la même catégorisation.
+let protoSeriesMode = false;
+let protoSeriesDefaults = null;  // { lotId, title, date, status }
 let protoDrawing = null;    // état pendant un dessin (rect/line)
 let protoPolyDraw = null;   // état pendant un dessin de polygone (multi-clics)
 let protoEditingShapeId = null;
@@ -5533,10 +5539,11 @@ function renderProtoSVG() {
   svg.innerHTML = '';
   const planId = state.protoActivePlanId;
   if (!planId) return;
-  // Ordre z : surfaces (rect/polygon) en bas, lignes au milieu,
-  // points au-dessus. Filtres lot + statut appliqués ici (les formes
-  // filtrées disparaissent du DOM, donc ne reçoivent pas non plus de clic).
-  const orderRank = { rect: 0, polygon: 0, line: 1, point: 2 };
+  // Ordre z : surfaces (rect/polygon) en bas, lignes/polylignes au
+  // milieu, points au-dessus. Filtres lot + statut appliqués ici (les
+  // formes filtrées disparaissent du DOM, donc ne reçoivent pas non
+  // plus de clic).
+  const orderRank = { rect: 0, polygon: 0, line: 1, polyline: 1, point: 2 };
   const shapes = (state.protoShapes || [])
     .filter(s => s.planId === planId)
     .filter(shapeMatchesFilters)
@@ -5552,16 +5559,19 @@ function buildShapeElement(sh) {
   const lot = getWorkBatch(sh.lotId);
   const lotColor = lot ? lot.color : '#888';
   const statusColor = PROTO_STATUS_COLOR[sh.status] || PROTO_STATUS_COLOR.todo;
-  const sw = Math.max(plan.w, plan.h) / 200; // stroke ~ 0.5% du plan
+  // Taille réduite de 30% par rapport à v0.78 (demande utilisateur) :
+  // points plus petits, traits plus fins pour rect/line/polygon/polyline.
+  const sw = Math.max(plan.w, plan.h) / 200; // ref ~ 0.5% du plan
+  const sw70 = sw * 0.7;                     // épaisseur trait réduite
   let el;
   if (sh.type === 'point') {
     el = document.createElementNS(ns, 'circle');
     el.setAttribute('cx', sh.coords.cx);
     el.setAttribute('cy', sh.coords.cy);
-    el.setAttribute('r',  Math.max(sw * 2.5, 8));
+    el.setAttribute('r',  Math.max(sw * 1.75, 5.6));  // 30% plus petit
     el.setAttribute('fill', statusColor);
     el.setAttribute('stroke', lotColor);
-    el.setAttribute('stroke-width', sw);
+    el.setAttribute('stroke-width', sw70);
   } else if (sh.type === 'line') {
     el = document.createElementNS(ns, 'line');
     el.setAttribute('x1', sh.coords.x1);
@@ -5569,7 +5579,7 @@ function buildShapeElement(sh) {
     el.setAttribute('x2', sh.coords.x2);
     el.setAttribute('y2', sh.coords.y2);
     el.setAttribute('stroke', statusColor);
-    el.setAttribute('stroke-width', sw * 2);
+    el.setAttribute('stroke-width', sw * 1.4);  // 30% plus fin que sw*2
     el.setAttribute('stroke-linecap', 'round');
   } else if (sh.type === 'polygon') {
     el = document.createElementNS(ns, 'polygon');
@@ -5577,7 +5587,16 @@ function buildShapeElement(sh) {
     el.setAttribute('fill', statusColor);
     el.setAttribute('fill-opacity', '0.25');
     el.setAttribute('stroke', statusColor);
-    el.setAttribute('stroke-width', sw);
+    el.setAttribute('stroke-width', sw70);
+    el.setAttribute('stroke-linejoin', 'round');
+  } else if (sh.type === 'polyline') {
+    // Polyligne = série de segments connectés, NON refermée
+    el = document.createElementNS(ns, 'polyline');
+    el.setAttribute('points', (sh.coords.points || []).map(p => `${p.x},${p.y}`).join(' '));
+    el.setAttribute('fill', 'none');
+    el.setAttribute('stroke', statusColor);
+    el.setAttribute('stroke-width', sw * 1.4);
+    el.setAttribute('stroke-linecap', 'round');
     el.setAttribute('stroke-linejoin', 'round');
   } else { // rect
     el = document.createElementNS(ns, 'rect');
@@ -5588,7 +5607,7 @@ function buildShapeElement(sh) {
     el.setAttribute('fill', statusColor);
     el.setAttribute('fill-opacity', '0.25');
     el.setAttribute('stroke', statusColor);
-    el.setAttribute('stroke-width', sw);
+    el.setAttribute('stroke-width', sw70);
   }
   el.classList.add('proto-shape');
   el.setAttribute('data-shape-id', sh.id);
@@ -5966,9 +5985,15 @@ function refreshProtoToolbar() {
   });
   const wrap = document.getElementById('protocanvaswrap');
   if (wrap) wrap.dataset.protoTool = protoTool;
+  // Bouton "Série" : actif quand le mode est ON
+  const seriesBtn = document.getElementById('protoseriestoggle');
+  if (seriesBtn) {
+    seriesBtn.classList.toggle('is-active', protoSeriesMode);
+    seriesBtn.setAttribute('aria-pressed', protoSeriesMode ? 'true' : 'false');
+  }
 }
 function setProtoTool(tool) {
-  if (!['select', 'point', 'line', 'rect', 'polygon'].includes(tool)) return;
+  if (!['select', 'point', 'line', 'rect', 'polygon', 'polyline'].includes(tool)) return;
   // Annule tout dessin en cours quand on change d'outil
   cancelProtoInProgress();
   protoTool = tool;
@@ -5976,10 +6001,27 @@ function setProtoTool(tool) {
   refreshProtoPolyHint();
 }
 
+// Mode série : toggle on/off. Quand activé, après une 1re saisie le
+// sheet ne s'ouvre plus pour les formes suivantes (les défauts captés
+// sont appliqués directement). Cleared quand on toggle off.
+function toggleProtoSeriesMode() {
+  protoSeriesMode = !protoSeriesMode;
+  if (!protoSeriesMode) protoSeriesDefaults = null;
+  refreshProtoToolbar();
+  if (protoSeriesMode) showToast('Mode série activé — la 1re forme captera lot+intitulé+statut, les suivantes les hériteront.');
+  else showToast('Mode série désactivé');
+}
+
 function refreshProtoPolyHint() {
   const hint = document.getElementById('protopolyhint');
   if (!hint) return;
-  hint.hidden = !(protoTool === 'polygon' && protoPolyDraw);
+  hint.hidden = !((protoTool === 'polygon' || protoTool === 'polyline') && protoPolyDraw);
+  // Texte adapté selon l'outil
+  const txt = document.getElementById('protopolyhinttext');
+  if (txt) {
+    if (protoTool === 'polyline') txt.textContent = 'Cliquez pour placer un sommet — terminez avec « ✓ Terminer ».';
+    else                          txt.textContent = 'Cliquez pour placer un sommet — fermez en cliquant le 1er point ou « ✓ Terminer ».';
+  }
 }
 
 // ---------- Upload du plan ----------
@@ -6182,19 +6224,20 @@ function drawProtoShapeOnCanvas(ctx, s, plan) {
   const lotColor = lot ? lot.color : '#888888';
   const statusColor = PROTO_STATUS_COLOR[s.status] || PROTO_STATUS_COLOR.todo;
   const sw = Math.max(plan.w, plan.h) / 200;
+  const sw70 = sw * 0.7;
   ctx.lineJoin = 'round';
   ctx.lineCap  = 'round';
   if (s.type === 'point') {
     ctx.fillStyle = statusColor;
     ctx.strokeStyle = lotColor;
-    ctx.lineWidth = sw;
+    ctx.lineWidth = sw70;
     ctx.beginPath();
-    ctx.arc(s.coords.cx, s.coords.cy, Math.max(sw * 2.5, 8), 0, Math.PI * 2);
+    ctx.arc(s.coords.cx, s.coords.cy, Math.max(sw * 1.75, 5.6), 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
   } else if (s.type === 'line') {
     ctx.strokeStyle = statusColor;
-    ctx.lineWidth = sw * 2;
+    ctx.lineWidth = sw * 1.4;
     ctx.beginPath();
     ctx.moveTo(s.coords.x1, s.coords.y1);
     ctx.lineTo(s.coords.x2, s.coords.y2);
@@ -6202,7 +6245,7 @@ function drawProtoShapeOnCanvas(ctx, s, plan) {
   } else if (s.type === 'rect') {
     ctx.fillStyle = hexToRgba(statusColor, 0.25);
     ctx.strokeStyle = statusColor;
-    ctx.lineWidth = sw;
+    ctx.lineWidth = sw70;
     ctx.fillRect(s.coords.x, s.coords.y, s.coords.w, s.coords.h);
     ctx.strokeRect(s.coords.x, s.coords.y, s.coords.w, s.coords.h);
   } else if (s.type === 'polygon') {
@@ -6210,12 +6253,21 @@ function drawProtoShapeOnCanvas(ctx, s, plan) {
     if (pts.length < 3) return;
     ctx.fillStyle = hexToRgba(statusColor, 0.25);
     ctx.strokeStyle = statusColor;
-    ctx.lineWidth = sw;
+    ctx.lineWidth = sw70;
     ctx.beginPath();
     ctx.moveTo(pts[0].x, pts[0].y);
     for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
     ctx.closePath();
     ctx.fill();
+    ctx.stroke();
+  } else if (s.type === 'polyline') {
+    const pts = s.coords.points || [];
+    if (pts.length < 2) return;
+    ctx.strokeStyle = statusColor;
+    ctx.lineWidth = sw * 1.4;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
     ctx.stroke();
   }
 }
@@ -6595,8 +6647,10 @@ function protoPointerDown(evt) {
     startProtoPan(evt);
     return;
   }
-  // Mode polygone : clic = ajouter un sommet (ou refermer)
-  if (protoTool === 'polygon') {
+  // Mode polygone OU polyligne : clic = ajouter un sommet.
+  // Polygone se referme en cliquant le 1er point ; polyligne se finit
+  // par le bouton « Terminer » du hint.
+  if (protoTool === 'polygon' || protoTool === 'polyline') {
     if (isProtoShape(evt.target)) {
       protoActivePointers.delete(evt.pointerId);
       return;
@@ -6720,7 +6774,7 @@ function startSimpleDraw(evt) {
     save();
     renderProtoSVG();
     renderProtoLegend();
-    openProtoShapeSheet(sh.id);
+    finalizeShapeCreation(sh);
     return;
   }
   const wrap = document.getElementById('protocanvaswrap');
@@ -6797,7 +6851,7 @@ function endSimpleDraw(evt) {
   save();
   renderProtoSVG();
   renderProtoLegend();
-  openProtoShapeSheet(sh.id);
+  finalizeShapeCreation(sh);
 }
 
 // ---------- Drawing polygone (clic par clic) ----------
@@ -6810,17 +6864,69 @@ function handlePolygonClick(evt) {
   if (!protoPolyDraw) {
     protoPolyDraw = { points: [{ x: c.x, y: c.y }], previewEl: null, firstVertexEl: null, hintLineEl: null, closeLineEl: null };
   } else {
-    const first = protoPolyDraw.points[0];
-    const distToFirst = Math.hypot(c.x - first.x, c.y - first.y);
-    if (protoPolyDraw.points.length >= 3 && distToFirst <= closeThreshold) {
-      finishPolygon();
-      return;
+    // Pour le polygone uniquement : clic sur le 1er sommet ferme.
+    // La polyligne ignore ce raccourci, l'utilisateur termine via
+    // le bouton « ✓ Terminer » du hint.
+    if (protoTool === 'polygon') {
+      const first = protoPolyDraw.points[0];
+      const distToFirst = Math.hypot(c.x - first.x, c.y - first.y);
+      if (protoPolyDraw.points.length >= 3 && distToFirst <= closeThreshold) {
+        finishPolygon();
+        return;
+      }
     }
     protoPolyDraw.points.push({ x: c.x, y: c.y });
   }
   drawPolygonPreview();
   refreshProtoPolyHint();
   evt.preventDefault();
+}
+
+// Termine une polyligne (au moins 2 sommets) et la stocke en tant que
+// shape type 'polyline'.
+function finishPolyline() {
+  if (!protoPolyDraw) return;
+  const plan = getActiveProtoPlan();
+  const pts = protoPolyDraw.points.slice();
+  clearPolygonPreview();
+  protoPolyDraw = null;
+  refreshProtoPolyHint();
+  if (!plan || pts.length < 2) return;
+  const sh = { id: 's_' + uid(), planId: plan.id, type: 'polyline',
+    coords: { points: pts },
+    lotId: '', title: '', date: '', status: 'todo' };
+  state.protoShapes.push(sh);
+  save();
+  renderProtoSVG();
+  renderProtoLegend();
+  finalizeShapeCreation(sh);
+}
+
+// Helper appelé après création d'une forme (point/line/rect/polygon/
+// polyline) : en mode série avec des défauts captés, applique-les sans
+// ouvrir le sheet. Sinon, ouvre le sheet d'édition normalement.
+function finalizeShapeCreation(sh) {
+  if (protoSeriesMode && protoSeriesDefaults) {
+    sh.lotId  = protoSeriesDefaults.lotId  || '';
+    sh.title  = protoSeriesDefaults.title  || '';
+    sh.date   = protoSeriesDefaults.date   || '';
+    sh.status = protoSeriesDefaults.status || 'todo';
+    save();
+    renderProtoSVG();
+    renderProtoLegend();
+    showToast('Forme ajoutée (série) ✓');
+    return;
+  }
+  openProtoShapeSheet(sh.id);
+}
+
+// Termine le dessin polygone/polyligne en cours (appelé par le bouton
+// « ✓ Terminer » du hint).
+function finishCurrentPolyDraw() {
+  if (!protoPolyDraw) return;
+  if (protoTool === 'polyline') finishPolyline();
+  else if (protoPolyDraw.points.length >= 3) finishPolygon();
+  else cancelPolygon();
 }
 function clearPolygonPreview() {
   if (!protoPolyDraw) return;
@@ -6920,7 +7026,7 @@ function finishPolygon() {
   save();
   renderProtoSVG();
   renderProtoLegend();
-  openProtoShapeSheet(sh.id);
+  finalizeShapeCreation(sh);
 }
 function cancelPolygon() {
   cancelProtoInProgress();
@@ -6965,11 +7071,18 @@ function saveProtoShapeSheet() {
   sh.date  = document.getElementById('protoshapedate').value || '';
   const active = document.querySelector('.proto-status-btn.is-active');
   sh.status = active ? active.dataset.protoStatus : 'todo';
+  // Mode série : on capture les valeurs comme défauts pour les prochaines
+  // formes (jusqu'à ce que le mode soit désactivé).
+  if (protoSeriesMode) {
+    protoSeriesDefaults = { lotId: sh.lotId, title: sh.title, date: sh.date, status: sh.status };
+    showToast('Tâche enregistrée — défauts série captés ✓');
+  } else {
+    showToast('Tâche enregistrée');
+  }
   save();
   renderProtoSVG();
   renderProtoLegend();
   closeProtoShapeSheet();
-  showToast('Tâche enregistrée');
 }
 function deleteProtoShape() {
   const sh = state.protoShapes.find(s => s.id === protoEditingShapeId);
@@ -7075,6 +7188,20 @@ async function refreshAuthSession() {
   }
 }
 
+// Persistance locale de l'ID du chantier actif (survit aux reloads).
+// Un chantier devient ainsi un "fichier de sauvegarde" : on s'y
+// reconnecte automatiquement à chaque ouverture de l'app.
+const ACTIVE_SITE_KEY = 'chantier_active_site_id';
+function saveActiveSiteId(id) {
+  try {
+    if (id) localStorage.setItem(ACTIVE_SITE_KEY, id);
+    else localStorage.removeItem(ACTIVE_SITE_KEY);
+  } catch (_) {}
+}
+function getSavedActiveSiteId() {
+  try { return localStorage.getItem(ACTIVE_SITE_KEY) || ''; } catch (_) { return ''; }
+}
+
 async function refreshSiteInfo() {
   if (!state.authUser) { state.authSites = []; state.authSite = null; return; }
   const supa = await loadSupabase();
@@ -7099,13 +7226,22 @@ async function refreshSiteInfo() {
     const m = members.find(mb => mb.site_id === s.id);
     return { id: s.id, name: s.name || '(sans nom)', joinCode: s.join_code, role: m ? m.role : 'member' };
   }).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'fr'));
-  // Garde le site actif si toujours valide ; sinon prend le premier
+  // Choisit le site actif : (1) celui déjà actif s'il est encore valide,
+  // (2) celui sauvegardé en localStorage (= dernière session),
+  // (3) le premier de la liste. Sauvegarde l'ID pour la prochaine ouverture.
   if (state.authSite) {
     const found = state.authSites.find(s => s.id === state.authSite.id);
-    state.authSite = found || state.authSites[0] || null;
-  } else {
-    state.authSite = state.authSites[0] || null;
+    state.authSite = found || null;
   }
+  if (!state.authSite) {
+    const savedId = getSavedActiveSiteId();
+    if (savedId) {
+      const saved = state.authSites.find(s => s.id === savedId);
+      if (saved) state.authSite = saved;
+    }
+  }
+  if (!state.authSite) state.authSite = state.authSites[0] || null;
+  saveActiveSiteId(state.authSite ? state.authSite.id : null);
 }
 
 // Bascule sur un autre chantier (parmi authSites)
@@ -7115,9 +7251,10 @@ async function switchActiveSite(siteId) {
   await teardownSyncRealtime();
   stopSyncPolling();
   state.authSite = site;
+  saveActiveSiteId(site.id);
   renderCompte();
   await doSyncPull(true);
-  await setupSyncRealtime();
+  try { await setupSyncRealtime(); } catch (_) {}
   startSyncPolling();
 }
 
@@ -7238,7 +7375,8 @@ async function updatePasswordTo(newPassword) {
 }
 async function createSiteForUser(name) {
   const supa = await loadSupabase();
-  if (!supa || !state.authUser) throw new Error('Non connecté');
+  if (!supa) throw new Error('Connexion à Supabase impossible — vérifiez votre réseau.');
+  if (!state.authUser) throw new Error('Vous devez être connecté pour créer un chantier.');
   const finalName = (name || '').trim() || 'Mon chantier';
   console.log('[Sync] createSite: name=' + finalName + ' owner=' + state.authUser.id);
   const { data, error } = await supa.from('sites')
@@ -7247,27 +7385,31 @@ async function createSiteForUser(name) {
     .single();
   if (error) {
     console.error('[Sync] createSite KO', error);
-    throw new Error(error.message || error.details || 'Création impossible');
+    throw new Error('Création impossible : ' + (error.message || error.details || 'erreur Supabase'));
   }
   console.log('[Sync] createSite OK', data);
-  // Force le nouveau site comme actif tout de suite
+  // Force le nouveau site comme actif tout de suite (avant les étapes
+  // de sync qui peuvent échouer sans empêcher la création)
   state.authSite = { id: data.id, name: data.name, joinCode: data.join_code, role: 'admin' };
-  await refreshSiteInfo();
-  // Premier site → push de l'état local actuel (pour amorcer site_data)
-  await doSyncPull(true);
-  await setupSyncRealtime();
-  startSyncPolling();
+  saveActiveSiteId(data.id);
+  try { await refreshSiteInfo(); } catch (e) { console.warn('[Sync] refreshSiteInfo post-create KO', e); }
+  // Étapes optionnelles : si elles plantent, le chantier est quand même
+  // créé et l'utilisateur ne perd pas son action.
+  try { await doSyncPull(true); }     catch (e) { console.warn('[Sync] pull post-create KO', e); }
+  try { await setupSyncRealtime(); }  catch (e) { console.warn('[Sync] realtime post-create KO', e); }
+  try { startSyncPolling(); }          catch (e) { console.warn('[Sync] polling post-create KO', e); }
 }
 async function joinSiteWithCode(code) {
   const supa = await loadSupabase();
-  if (!supa || !state.authUser) throw new Error('Non connecté');
-  const { error } = await supa.rpc('join_site_with_code', { code: (code || '').trim().toUpperCase() });
-  if (error) throw error;
-  await refreshSiteInfo();
-  // Rejoindre → pull pour récupérer l'état déjà partagé par les autres membres
-  await doSyncPull(true);
-  await setupSyncRealtime();
-  startSyncPolling();
+  if (!supa) throw new Error('Connexion à Supabase impossible — vérifiez votre réseau.');
+  if (!state.authUser) throw new Error('Vous devez être connecté pour rejoindre un chantier.');
+  const { data, error } = await supa.rpc('join_site_with_code', { code: (code || '').trim().toUpperCase() });
+  if (error) throw new Error('Code invalide ou erreur Supabase : ' + (error.message || ''));
+  if (data) { state.authSite = null; saveActiveSiteId(data); /* l'ID est en data */ }
+  try { await refreshSiteInfo(); } catch (e) { console.warn('[Sync] refreshSiteInfo post-join KO', e); }
+  try { await doSyncPull(true); }    catch (e) { console.warn('[Sync] pull post-join KO', e); }
+  try { await setupSyncRealtime(); } catch (e) { console.warn('[Sync] realtime post-join KO', e); }
+  try { startSyncPolling(); }         catch (e) { console.warn('[Sync] polling post-join KO', e); }
 }
 
 function renderCompte() {
@@ -7348,21 +7490,12 @@ function renderSitesList() {
         <span class="auth-site-name"></span>
         <span class="auth-site-meta"></span>
       </button>
-      <button class="auth-site-leave" type="button" aria-label="Quitter / supprimer ce chantier">×</button>
     `;
     li.querySelector('.auth-site-name').textContent = s.name;
     li.querySelector('.auth-site-meta').textContent = `${s.joinCode} · ${s.role === 'admin' ? 'Admin' : 'Membre'}`;
     li.querySelector('.auth-site-pick').addEventListener('click', async () => {
       try { await switchActiveSite(s.id); showToast('Chantier actif : ' + s.name); }
       catch (e) { showToast(e.message || 'Erreur', 'error'); }
-    });
-    li.querySelector('.auth-site-leave').addEventListener('click', async () => {
-      const msg = s.role === 'admin'
-        ? `Supprimer DÉFINITIVEMENT le chantier « ${s.name} » avec toutes ses données ? Cette action est irréversible.`
-        : `Quitter le chantier « ${s.name} » ? Vous pourrez le rejoindre à nouveau via son code (${s.joinCode}).`;
-      if (!confirm(msg)) return;
-      try { await leaveOrDeleteSite(s.id); showToast(s.role === 'admin' ? 'Chantier supprimé' : 'Chantier quitté'); }
-      catch (e) { showAuthError('authnositeerror', e.message); }
     });
     list.appendChild(li);
   }
@@ -7813,9 +7946,14 @@ function init() {
   if (protoZIn)  protoZIn.addEventListener('click', protoZoomIn);
   if (protoZOut) protoZOut.addEventListener('click', protoZoomOut);
   if (protoZRst) protoZRst.addEventListener('click', protoZoomReset);
-  // Polygone : bouton « Annuler » du hint
+  // Polygone / Polyligne : bouton « ✓ Terminer » + « Annuler »
   const protoPolyCancel = document.getElementById('protopolycancel');
   if (protoPolyCancel) protoPolyCancel.addEventListener('click', cancelPolygon);
+  const protoPolyFinish = document.getElementById('protopolyfinish');
+  if (protoPolyFinish) protoPolyFinish.addEventListener('click', finishCurrentPolyDraw);
+  // Mode série (rafale)
+  const protoSeriesBtn = document.getElementById('protoseriestoggle');
+  if (protoSeriesBtn) protoSeriesBtn.addEventListener('click', toggleProtoSeriesMode);
   // Export PDF
   const protoExpOpen = document.getElementById('protoexportopen');
   if (protoExpOpen) protoExpOpen.addEventListener('click', openProtoExport);
@@ -7926,29 +8064,41 @@ function init() {
       showAuthError('authnositeerror', 'Vous devez être connecté pour créer un chantier. Reconnectez-vous.');
       return;
     }
+    const origText = authCreate.textContent;
     try {
       authCreate.disabled = true;
+      authCreate.textContent = '⏳ Création en cours…';
       await createSiteForUser(name);
+      document.getElementById('authsitename').value = '';
       renderCompte();
-      showToast('Chantier créé');
+      showToast('Chantier créé ✓');
     } catch (e) {
       console.error('[Auth] Création chantier KO', e);
       showAuthError('authnositeerror', e.message || 'Création impossible');
-    } finally { authCreate.disabled = false; }
+    } finally {
+      authCreate.disabled = false;
+      authCreate.textContent = origText || 'Créer le chantier';
+    }
   });
   const authJoin = document.getElementById('authjoinbtn');
   if (authJoin) authJoin.addEventListener('click', async () => {
     clearAuthError('authnositeerror');
     const code = document.getElementById('authjoincode').value;
     if (!code) { showAuthError('authnositeerror', 'Code requis'); return; }
+    const origText = authJoin.textContent;
     try {
       authJoin.disabled = true;
+      authJoin.textContent = '⏳ Connexion au chantier…';
       await joinSiteWithCode(code);
+      document.getElementById('authjoincode').value = '';
       renderCompte();
-      showToast('Chantier rejoint');
+      showToast('Chantier rejoint ✓');
     } catch (e) {
       showAuthError('authnositeerror', e.message || 'Code invalide');
-    } finally { authJoin.disabled = false; }
+    } finally {
+      authJoin.disabled = false;
+      authJoin.textContent = origText || 'Rejoindre';
+    }
   });
   const authSignOut = document.getElementById('authsignoutbtn');
   if (authSignOut) authSignOut.addEventListener('click', async () => {

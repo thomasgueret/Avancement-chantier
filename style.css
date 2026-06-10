@@ -2678,6 +2678,12 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 }
 .proto-tool-btn.proto-tool-secondary { background: transparent; }
 .proto-tool-btn.proto-tool-danger:active { color: var(--danger); }
+/* Bouton "Série" : indicateur visuel quand le mode est actif */
+.proto-tool-btn.proto-tool-series.is-active {
+  background: rgba(46, 125, 50, 0.15);
+  color: #2e7d32;
+  border-color: #2e7d32;
+}
 .proto-toolbar-sep {
   flex: 1; min-width: 8px;
 }

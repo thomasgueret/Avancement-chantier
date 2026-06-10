@@ -361,6 +361,8 @@
             <button class="proto-tool-btn" data-proto-tool="line" type="button" aria-pressed="false" title="Tracer une ligne">／<span> Ligne</span></button>
             <button class="proto-tool-btn" data-proto-tool="rect" type="button" aria-pressed="false" title="Tracer un rectangle (tape + glisser)">▭<span> Rectangle</span></button>
             <button class="proto-tool-btn" data-proto-tool="polygon" type="button" aria-pressed="false" title="Tracer un polygone (clic par clic, refermer en cliquant le premier point)">⬠<span> Polygone</span></button>
+            <button class="proto-tool-btn" data-proto-tool="polyline" type="button" aria-pressed="false" title="Tracer une polyligne (clic par clic, terminer via le bouton Terminer)">⌇<span> Polyligne</span></button>
+            <button class="proto-tool-btn proto-tool-series" id="protoseriestoggle" type="button" aria-pressed="false" title="Mode série : applique automatiquement le lot+intitulé+statut aux prochaines formes (au lieu d'ouvrir le sheet à chaque fois)">🔁<span> Série</span></button>
             <button class="proto-tool-btn proto-tool-danger" id="protoclear" type="button" title="Supprimer toutes les formes de ce plan">🗑<span> Effacer</span></button>
           </div>
           <div class="proto-legend" id="protolegend"></div>
@@ -379,6 +381,7 @@
             </div>
             <div class="proto-poly-hint" id="protopolyhint" hidden>
               <span id="protopolyhinttext">Cliquez pour placer un sommet — fermez en cliquant sur le premier point.</span>
+              <button class="proto-poly-cancel" id="protopolyfinish" type="button">✓ Terminer</button>
               <button class="proto-poly-cancel" id="protopolycancel" type="button">Annuler</button>
             </div>
           </div>
