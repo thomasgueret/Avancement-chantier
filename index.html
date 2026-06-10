@@ -396,6 +396,12 @@
     <section class="page" id="page-compte">
       <h2 class="section-title">Mon compte</h2>
 
+      <!-- État : vérification de la session en cours (au démarrage) -->
+      <div class="auth-form auth-loading-form" id="authloading">
+        <div class="auth-loading-spinner" aria-hidden="true"></div>
+        <p class="hint">Vérification de la session…</p>
+      </div>
+
       <!-- État : Supabase pas encore configuré (URL/clé vides) -->
       <div class="auth-form" id="authnotconfigured" hidden>
         <p class="section-help">La synchronisation n'est pas encore activée sur cette installation. Vos données restent stockées localement sur cet appareil.</p>

@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.76';
+const APP_VERSION = '0.77';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -88,6 +88,7 @@ const state = {
   authUser: null,            // { id, email } | null
   authSites: [],             // [{ id, name, joinCode, role }] — tous les sites accessibles
   authSite: null,            // chantier actif (l'un des authSites)
+  authLoading: true,         // true tant que la session Supabase n'a pas été récupérée au moins une fois
   // Synchronisation (étape 5)
   syncStatus: 'idle',        // 'idle' | 'syncing' | 'error' | 'offline'
   syncTimestamp: 0,          // ms epoch — dernier changement local connu
@@ -7026,6 +7027,7 @@ function loadSupabase() {
         state.authSites = [];
       }
       delete document.body.dataset.authRecovery;
+      state.authLoading = false;
       renderCompte();
     });
     return supabaseClient;
@@ -7038,26 +7040,39 @@ function loadSupabase() {
 }
 
 async function refreshAuthSession() {
-  const supa = await loadSupabase();
-  if (!supa) { renderCompte(); return null; }
-  const { data } = await supa.auth.getSession();
-  if (data && data.session && data.session.user) {
-    state.authUser = { id: data.session.user.id, email: data.session.user.email };
-    await refreshSiteInfo();
-    // Synchro : pull initial + abonnement realtime dès qu'on est sur un chantier
-    if (state.authSite) {
-      await doSyncPull(true);
-      await setupSyncRealtime();
-      startSyncPolling();
+  try {
+    const supa = await loadSupabase();
+    if (!supa) {
+      state.authLoading = false;
+      renderCompte();
+      return null;
     }
-  } else {
-    state.authUser = null;
-    state.authSite = null;
-    await teardownSyncRealtime();
-    stopSyncPolling();
+    const { data } = await supa.auth.getSession();
+    if (data && data.session && data.session.user) {
+      state.authUser = { id: data.session.user.id, email: data.session.user.email };
+      await refreshSiteInfo();
+      // Synchro : pull initial + abonnement realtime dès qu'on est sur un chantier
+      if (state.authSite) {
+        await doSyncPull(true);
+        await setupSyncRealtime();
+        startSyncPolling();
+      }
+    } else {
+      state.authUser = null;
+      state.authSite = null;
+      state.authSites = [];
+      await teardownSyncRealtime();
+      stopSyncPolling();
+    }
+    state.authLoading = false;
+    renderCompte();
+    return data && data.session;
+  } catch (err) {
+    console.error('[Auth] refreshAuthSession KO', err);
+    state.authLoading = false;
+    renderCompte();
+    return null;
   }
-  renderCompte();
-  return data && data.session;
 }
 
 async function refreshSiteInfo() {
@@ -7258,24 +7273,36 @@ async function joinSiteWithCode(code) {
 function renderCompte() {
   const root = document.getElementById('page-compte');
   if (!root) return;
+  const loading       = document.getElementById('authloading');
   const notConfigured = document.getElementById('authnotconfigured');
   const loggedOut     = document.getElementById('authloggedout');
   const loggedIn      = document.getElementById('authloggedin');
   const noSite        = document.getElementById('authnosite');
   const recovery      = document.getElementById('authrecovery');
   if (!notConfigured || !loggedOut || !loggedIn) return;
+  // Tout cacher par défaut
+  if (loading) loading.hidden = true;
   notConfigured.hidden = true;
   loggedOut.hidden = true;
   if (noSite) noSite.hidden = true;
   loggedIn.hidden = true;
   if (recovery) recovery.hidden = true;
+  // 0. Pas de config Supabase → écran "non configuré"
   if (!isSupabaseConfigured()) { notConfigured.hidden = false; return; }
-  // Reset de mot de passe en cours (revient d'un lien email)
+  // 1. Tant que la session n'a pas été vérifiée au moins une fois,
+  //    on affiche un loader. Empêche le flash « déconnecté » au boot.
+  if (state.authLoading) {
+    if (loading) loading.hidden = false;
+    else        loggedOut.hidden = false; // fallback si pas de div loading
+    return;
+  }
+  // 2. Reset de mot de passe en cours (revient d'un lien email)
   if (document.body.dataset.authRecovery === '1' && recovery) {
     recovery.hidden = false;
     return;
   }
-  if (!state.authUser)         { loggedOut.hidden = false; clearAuthError(); return; }
+  // 3. Déconnecté
+  if (!state.authUser) { loggedOut.hidden = false; clearAuthError(); return; }
   // Toujours afficher le panneau "connecté" qui contient la liste +
   // formulaires de création/rejoindre. Plus de séparation noSite/loggedIn.
   loggedIn.hidden = false;
@@ -7932,10 +7959,23 @@ function init() {
       showToast('Code copié');
     } catch (_) { /* l'utilisateur peut sélectionner manuellement */ }
   });
-  // Restaure la session si déjà connecté + tente de charger le SDK
+  // Restaure la session si déjà connecté + tente de charger le SDK.
+  // Filet de sécurité : si le SDK ne répond pas en 10 s (CDN bloqué,
+  // offline complet…), on sort du mode loading pour ne pas bloquer
+  // l'utilisateur sur un spinner infini.
   if (isSupabaseConfigured()) {
-    refreshAuthSession().catch((err) => console.error('Auth init KO', err));
+    const safetyTimeout = setTimeout(() => {
+      if (state.authLoading) {
+        console.warn('[Auth] Timeout 10s : abandon du chargement SDK Supabase');
+        state.authLoading = false;
+        renderCompte();
+      }
+    }, 10000);
+    refreshAuthSession()
+      .catch((err) => console.error('Auth init KO', err))
+      .finally(() => clearTimeout(safetyTimeout));
   } else {
+    state.authLoading = false;
     renderCompte();
   }
 

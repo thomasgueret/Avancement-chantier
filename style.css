@@ -3250,6 +3250,22 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   color: var(--danger);
 }
 
+/* Loader pendant la vérification de la session au boot — évite que
+   l'utilisateur voie brièvement l'écran « déconnecté » avant que la
+   session Supabase soit récupérée (flash visuel). */
+.auth-loading-form {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 10px; padding: 40px 16px;
+}
+.auth-loading-spinner {
+  width: 32px; height: 32px;
+  border: 3px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: auth-spin 0.8s linear infinite;
+}
+@keyframes auth-spin { to { transform: rotate(360deg); } }
+
 /* Lien "Mot de passe oublié" sous le formulaire de login */
 .auth-forgot-row { margin: 8px 0 0; text-align: center; }
 .auth-forgot-link {
