@@ -439,18 +439,18 @@
       <!-- État : connecté — affiche le site actif (s'il y en a un) + liste
            de tous les chantiers accessibles + formulaires create/join -->
       <div class="auth-form" id="authloggedin" hidden>
-        <div class="auth-info">
-          <div class="auth-info-row">
-            <span class="auth-info-label">Email</span>
-            <span class="auth-info-value" id="authinfoemail"></span>
+        <!-- Bandeau "Connecté en tant que" : email + chip Synchro toujours visibles -->
+        <div class="auth-header-row">
+          <div class="auth-header-email">
+            <span class="auth-header-label">Connecté</span>
+            <span class="auth-header-value" id="authinfoemail"></span>
           </div>
-          <div class="auth-info-row">
-            <span class="auth-info-label">Synchro</span>
-            <span class="auth-info-value">
-              <span id="authsyncchip" class="auth-sync-chip is-idle">🟢 Synchronisé</span>
-            </span>
-          </div>
+          <span id="authsyncchip" class="auth-sync-chip is-idle">🟢 Synchronisé</span>
         </div>
+
+        <!-- Bouton "Forcer la synchronisation" toujours visible (désactivé si
+             pas de chantier actif, avec hint expliquant pourquoi) -->
+        <button class="btn-primary stock-submit-btn" id="authforcesync" type="button">🔄 Forcer la synchronisation</button>
 
         <!-- Encart "Chantier actif" — masqué quand aucun chantier sélectionné -->
         <div class="auth-active-box" id="authactivesitebox" hidden>
@@ -470,8 +470,11 @@
               <button class="btn-secondary auth-copy-btn" id="authcopycode" type="button">📋 Copier</button>
             </div>
           </div>
-          <p class="hint">Sync auto : push à chaque modif + pull au changement d'onglet, retour sur l'app, toutes les 20 s, et via realtime quand c'est activé côté Supabase.</p>
-          <button class="btn-primary stock-submit-btn" id="authforcesync" type="button">🔄 Forcer la synchronisation</button>
+        </div>
+
+        <!-- Placeholder quand aucun chantier actif -->
+        <div class="auth-no-active-box" id="authnoactivebox" hidden>
+          <p class="hint">Aucun chantier actif. Choisissez-en un dans la liste, créez-en un nouveau, ou rejoignez celui de votre équipe via son code.</p>
         </div>
 
         <!-- Liste de TOUS les chantiers accessibles à cet utilisateur -->

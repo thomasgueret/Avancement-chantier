@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.77';
+const APP_VERSION = '0.78';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -7307,13 +7307,20 @@ function renderCompte() {
   // formulaires de création/rejoindre. Plus de séparation noSite/loggedIn.
   loggedIn.hidden = false;
   document.getElementById('authinfoemail').textContent = state.authUser.email;
+  const activeBox    = document.getElementById('authactivesitebox');
+  const noActiveBox  = document.getElementById('authnoactivebox');
+  const forceSyncBtn = document.getElementById('authforcesync');
   if (state.authSite) {
     document.getElementById('authinfositename').textContent = state.authSite.name;
     document.getElementById('authinfojoincode').textContent = state.authSite.joinCode;
     document.getElementById('authinforole').textContent     = state.authSite.role === 'admin' ? 'Admin' : 'Membre';
-    document.getElementById('authactivesitebox').hidden = false;
+    if (activeBox)    activeBox.hidden = false;
+    if (noActiveBox)  noActiveBox.hidden = true;
+    if (forceSyncBtn) { forceSyncBtn.disabled = false; forceSyncBtn.title = ''; }
   } else {
-    document.getElementById('authactivesitebox').hidden = true;
+    if (activeBox)    activeBox.hidden = true;
+    if (noActiveBox)  noActiveBox.hidden = false;
+    if (forceSyncBtn) { forceSyncBtn.disabled = true;  forceSyncBtn.title = 'Sélectionnez un chantier d\'abord'; }
   }
   renderSitesList();
   updateSyncChip();
@@ -7911,14 +7918,21 @@ function init() {
   });
   const authCreate = document.getElementById('authcreatebtn');
   if (authCreate) authCreate.addEventListener('click', async () => {
+    console.log('[Auth] Click Créer le chantier');
     clearAuthError('authnositeerror');
     const name = document.getElementById('authsitename').value;
+    console.log('[Auth] Nom saisi:', name, '— authUser:', state.authUser, '— authLoading:', state.authLoading);
+    if (!state.authUser) {
+      showAuthError('authnositeerror', 'Vous devez être connecté pour créer un chantier. Reconnectez-vous.');
+      return;
+    }
     try {
       authCreate.disabled = true;
       await createSiteForUser(name);
       renderCompte();
       showToast('Chantier créé');
     } catch (e) {
+      console.error('[Auth] Création chantier KO', e);
       showAuthError('authnositeerror', e.message || 'Création impossible');
     } finally { authCreate.disabled = false; }
   });

@@ -3365,6 +3365,38 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 .auth-sync-chip.is-error   { background: rgba(211, 47, 47, 0.10); color: #b71c1c; }
 .auth-sync-chip.is-offline { background: rgba(120, 120, 120, 0.12); color: #555; }
 
+/* Bandeau en-tête : email + chip Synchro côte à côte */
+.auth-header-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+}
+.auth-header-email {
+  display: flex; flex-direction: column;
+  min-width: 0; flex: 1;
+}
+.auth-header-label {
+  font-size: 10px; font-weight: 700; color: var(--text-3);
+  letter-spacing: 0.04em; text-transform: uppercase;
+}
+.auth-header-value {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Placeholder quand pas de chantier actif */
+.auth-no-active-box {
+  padding: 12px;
+  background: var(--surface-2);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  margin: 4px 0;
+}
+.auth-no-active-box .hint { margin: 0; }
+
 /* Encart "Chantier actif" — distingué visuellement du reste */
 .auth-active-box {
   background: var(--accent-soft);
