@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.81';
+const APP_VERSION = '0.82';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -7993,8 +7993,10 @@ function init() {
     try {
       authSignIn.disabled = true;
       authSignIn.textContent = '⏳ Connexion…';
-      await withTimeout(signInWithPassword(email, pwd), 'signIn');
-      await withTimeout(refreshAuthSession(), 'refresh session', 8000);
+      // Timeout généreux (20s) pour les actions user — leur retard est
+      // visible (bouton disabled), pas besoin d'avorter trop vite.
+      await withTimeout(signInWithPassword(email, pwd), 'signIn', 20000);
+      await withTimeout(refreshAuthSession(), 'refresh session', 15000);
       showToast('Connecté ✓');
     } catch (e) {
       showAuthError('autherror', e.message || 'Connexion échouée');
@@ -8012,9 +8014,9 @@ function init() {
     try {
       authSignUp.disabled = true;
       authSignUp.textContent = '⏳ Création…';
-      const hasSession = await withTimeout(signUpWithPassword(email, pwd), 'signUp');
+      const hasSession = await withTimeout(signUpWithPassword(email, pwd), 'signUp', 20000);
       if (hasSession) {
-        await withTimeout(refreshAuthSession(), 'refresh session', 8000);
+        await withTimeout(refreshAuthSession(), 'refresh session', 15000);
         showToast('Compte créé — bienvenue !');
       } else {
         showAuthError('autherror', 'Compte créé. Cliquez sur le lien reçu par email pour activer votre compte.');
@@ -8106,7 +8108,7 @@ function init() {
     try {
       authSignOut.disabled = true;
       authSignOut.textContent = '⏳ Déconnexion…';
-      await withTimeout(signOut(), 'signOut', 8000);
+      await withTimeout(signOut(), 'signOut', 15000);
     } catch (e) {
       console.error('[Auth] signOut KO', e);
       showToast('Erreur déconnexion : ' + (e.message || ''), 'error');
