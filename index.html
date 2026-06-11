@@ -455,14 +455,15 @@
              pas de chantier actif, avec hint expliquant pourquoi) -->
         <button class="btn-primary stock-submit-btn" id="authforcesync" type="button">🔄 Forcer la synchronisation</button>
 
-        <!-- Encart "Chantier actif" — masqué quand aucun chantier sélectionné -->
+        <!-- Encart "Chantier actif" — avec champ nom modifiable par l'admin -->
         <div class="auth-active-box" id="authactivesitebox" hidden>
           <div class="auth-active-box-head">Chantier actif</div>
+          <label class="stock-form-label" for="authsitenameedit">Nom</label>
+          <div class="auth-rename-row">
+            <input id="authsitenameedit" class="stock-form-input" type="text" maxlength="60">
+            <button class="btn-secondary auth-rename-btn" id="authrenamebtn" type="button" title="Enregistrer le nouveau nom">💾</button>
+          </div>
           <div class="auth-info">
-            <div class="auth-info-row">
-              <span class="auth-info-label">Nom</span>
-              <span class="auth-info-value" id="authinfositename"></span>
-            </div>
             <div class="auth-info-row">
               <span class="auth-info-label">Rôle</span>
               <span class="auth-info-value" id="authinforole"></span>
@@ -477,29 +478,15 @@
 
         <!-- Placeholder quand aucun chantier actif -->
         <div class="auth-no-active-box" id="authnoactivebox" hidden>
-          <p class="hint">Aucun chantier actif. Choisissez-en un dans la liste, créez-en un nouveau, ou rejoignez celui de votre équipe via son code.</p>
+          <p class="hint"><strong>Aucun chantier actif.</strong> Demandez à votre admin le code à 6 caractères pour rejoindre votre chantier ci-dessous.</p>
         </div>
 
-        <!-- Liste de TOUS les chantiers accessibles à cet utilisateur -->
-        <h3 class="auth-subsection-title">Mes chantiers</h3>
-        <ul class="auth-sites-list" id="authsiteslist"></ul>
-
-        <!-- Formulaires inline pour créer un autre / rejoindre un autre -->
-        <div class="auth-mode-bar">
-          <button class="auth-mode-btn active" data-authmode="create" type="button">+ Nouveau chantier</button>
-          <button class="auth-mode-btn"        data-authmode="join"   type="button">Rejoindre</button>
-        </div>
-        <div id="authsubcreate">
-          <label class="stock-form-label" for="authsitename">Nom du chantier</label>
-          <input id="authsitename" class="stock-form-input" type="text" maxlength="60" placeholder="Maison Dupont, Bât. Lorraine…">
-          <button class="btn-primary stock-submit-btn" id="authcreatebtn" type="button">Créer le chantier</button>
-        </div>
-        <div id="authsubjoin" hidden>
-          <label class="stock-form-label" for="authjoincode">Code du chantier</label>
-          <input id="authjoincode" class="stock-form-input auth-code-input" type="text" maxlength="6" placeholder="ABC123" autocapitalize="characters">
-          <p class="hint">L'admin du chantier vous a communiqué un code à 6 caractères.</p>
-          <button class="btn-primary stock-submit-btn" id="authjoinbtn" type="button">Rejoindre</button>
-        </div>
+        <!-- Formulaire unique : rejoindre via code -->
+        <h3 class="auth-subsection-title">Rejoindre un autre chantier</h3>
+        <label class="stock-form-label" for="authjoincode">Code à 6 caractères</label>
+        <input id="authjoincode" class="stock-form-input auth-code-input" type="text" maxlength="6" placeholder="ABC123" autocapitalize="characters">
+        <p class="hint">Tous vos collègues qui rejoignent avec ce code partagent les mêmes données. Une seule sauvegarde, synchronisée.</p>
+        <button class="btn-primary stock-submit-btn" id="authjoinbtn" type="button">Rejoindre</button>
         <p class="auth-error" id="authnositeerror" hidden></p>
 
         <button class="btn-secondary auth-signout" id="authsignoutbtn" type="button">Se déconnecter</button>
