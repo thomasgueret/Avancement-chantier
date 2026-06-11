@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.80';
+const APP_VERSION = '0.81';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -5098,10 +5098,10 @@ function switchPage(name) {
   if (name === 'proto') renderProto();
   if (name === 'compte') renderCompte();
   // Synchro : à chaque changement d'onglet, on tente un pull en arrière-
-  // plan pour récupérer les dernières modifs des coéquipiers. Non
-  // bloquant pour le rendu courant.
+  // plan pour récupérer les dernières modifs des coéquipiers. Borné
+  // par un timeout 5s, non-bloquant pour le rendu courant.
   if (state.authSite && isSupabaseConfigured()) {
-    doSyncPull().catch(err => console.warn('Pull on tab change KO', err));
+    withTimeout(doSyncPull(), 'pull tab change').catch(err => console.warn('[Sync] pull tab change KO', err));
   }
 }
 
@@ -7164,6 +7164,12 @@ async function refreshAuthSession() {
     if (data && data.session && data.session.user) {
       state.authUser = { id: data.session.user.id, email: data.session.user.email };
       try { await withTimeout(refreshSiteInfo(), 'refreshSiteInfo'); } catch (e) { console.warn(e); }
+      // Bootstrap : si l'utilisateur n'a aucun chantier (nouveau signup),
+      // on lui en crée un automatiquement « Mon chantier » dont il devient
+      // admin (via trigger SQL). Code généré, prêt à être partagé.
+      if (state.authUser && (state.authSites || []).length === 0) {
+        try { await withTimeout(autoCreateBootstrapSite(), 'bootstrap site'); } catch (e) { console.warn(e); }
+      }
       // Synchro : pull initial + abonnement realtime dès qu'on est sur un chantier
       if (state.authSite) {
         try { await withTimeout(doSyncPull(true),      'doSyncPull');       } catch (e) { console.warn(e); }
@@ -7261,6 +7267,31 @@ async function switchActiveSite(siteId) {
 // v0.80 : leaveOrDeleteSite retiré — un chantier ne peut plus être
 // supprimé depuis l'UI. La rejointe via code remplace l'actif.
 
+// Bootstrap : crée un chantier « Mon chantier » au premier signin si
+// l'utilisateur n'en a aucun. Devient admin via le trigger SQL, code
+// auto-généré. Le chantier est prêt à être partagé immédiatement.
+async function autoCreateBootstrapSite() {
+  if (!state.authUser || (state.authSites || []).length > 0) return;
+  const supa = await loadSupabase();
+  if (!supa) return;
+  console.log('[Auth] Bootstrap : création d\'un chantier auto pour le nouvel utilisateur');
+  const { data, error } = await withTimeout(
+    supa.from('sites')
+      .insert({ name: 'Mon chantier', owner_id: state.authUser.id })
+      .select('id, name, join_code')
+      .single(),
+    'bootstrap insert'
+  );
+  if (error) {
+    console.warn('[Auth] Bootstrap create site KO', error);
+    return;
+  }
+  console.log('[Auth] Bootstrap OK', data);
+  state.authSite = { id: data.id, name: data.name, joinCode: data.join_code, role: 'admin' };
+  saveActiveSiteId(data.id);
+  try { await withTimeout(refreshSiteInfo(), 'refreshSiteInfo post-bootstrap'); } catch (e) { console.warn(e); }
+}
+
 // Traduit les messages d'erreur Supabase en français pour l'utilisateur.
 function translateAuthError(err) {
   if (!err) return 'Erreur inconnue';
@@ -7310,15 +7341,29 @@ async function signUpWithPassword(email, password) {
   return !!(data && data.session);
 }
 async function signOut() {
-  const supa = await loadSupabase();
-  if (!supa) return;
-  await teardownSyncRealtime();
+  // Teardown LOCAL d'abord : la déconnexion doit fonctionner même si
+  // les appels Supabase plantent ou hang. Ainsi l'UI se met à jour
+  // immédiatement, et l'utilisateur peut se reconnecter ou fermer
+  // l'onglet sans rester coincé sur un bouton désactivé.
+  try { await withTimeout(teardownSyncRealtime(), 'teardown signOut'); } catch (_) {}
   stopSyncPolling();
-  await supa.auth.signOut();
   state.authUser = null;
   state.authSite = null;
   state.authSites = [];
+  saveActiveSiteId(null);     // Vide la persistance locale du chantier actif
+  state.syncTimestamp = 0;    // Reset du timestamp (sinon le prochain user pourrait push avec ancien ts)
+  state.syncStatus = 'idle';
   renderCompte();
+  // Puis on tente de fermer la session côté serveur (best-effort,
+  // borné par un timeout). Si ça plante, le user est quand même
+  // déconnecté localement.
+  try {
+    const supa = await loadSupabase();
+    if (supa) await withTimeout(supa.auth.signOut(), 'auth.signOut');
+  } catch (e) {
+    console.warn('[Auth] signOut server-side KO (déconnexion locale effective)', e);
+  }
+  showToast('Déconnecté');
 }
 
 // Demande un email de réinitialisation de mot de passe. Supabase envoie
@@ -7509,7 +7554,9 @@ let syncRealtimeChannel = null;
 function schedulePush() {
   if (!isSupabaseConfigured() || !state.authSite || !state.authUser) return;
   clearTimeout(syncPushTimer);
-  syncPushTimer = setTimeout(doSyncPush, SYNC_DEBOUNCE_MS);
+  syncPushTimer = setTimeout(() => {
+    withTimeout(doSyncPush(), 'push debounced').catch(err => console.warn('[Sync] push debounced KO', err));
+  }, SYNC_DEBOUNCE_MS);
 }
 
 function getSyncablePayload() {
@@ -7637,7 +7684,7 @@ function startSyncPolling() {
   stopSyncPolling();
   syncPollTimer = setInterval(() => {
     if (state.authSite && state.authUser && document.visibilityState === 'visible') {
-      doSyncPull();
+      withTimeout(doSyncPull(), 'pull polling').catch(err => console.warn('[Sync] pull polling KO', err));
     }
   }, SYNC_POLL_INTERVAL_MS);
 }
@@ -7654,8 +7701,10 @@ async function forceFullSync() {
     return;
   }
   clearTimeout(syncPushTimer);
-  if (_hasPendingPush) await doSyncPush();
-  await doSyncPull(true);
+  if (_hasPendingPush) {
+    try { await withTimeout(doSyncPush(), 'force push'); } catch (e) { console.warn(e); }
+  }
+  try { await withTimeout(doSyncPull(true), 'force pull'); } catch (e) { console.warn(e); }
   showToast('Synchronisation effectuée');
 }
 
@@ -7688,7 +7737,7 @@ window.addEventListener('offline', () => {
 // rattraper les changements éventuels des coéquipiers.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && state.authSite && isSupabaseConfigured()) {
-    doSyncPull().catch(err => console.warn('Pull on visibility KO', err));
+    withTimeout(doSyncPull(), 'pull visibility').catch(err => console.warn('[Sync] pull visibility KO', err));
   }
 });
 
@@ -7940,31 +7989,42 @@ function init() {
     clearAuthError();
     const email = document.getElementById('authemail').value;
     const pwd   = document.getElementById('authpassword').value;
+    const origText = authSignIn.textContent;
     try {
       authSignIn.disabled = true;
-      await signInWithPassword(email, pwd);
-      await refreshAuthSession();
+      authSignIn.textContent = '⏳ Connexion…';
+      await withTimeout(signInWithPassword(email, pwd), 'signIn');
+      await withTimeout(refreshAuthSession(), 'refresh session', 8000);
+      showToast('Connecté ✓');
     } catch (e) {
       showAuthError('autherror', e.message || 'Connexion échouée');
-    } finally { authSignIn.disabled = false; }
+    } finally {
+      authSignIn.disabled = false;
+      authSignIn.textContent = origText || 'Se connecter';
+    }
   });
   const authSignUp = document.getElementById('authsignupbtn');
   if (authSignUp) authSignUp.addEventListener('click', async () => {
     clearAuthError();
     const email = document.getElementById('authemail').value;
     const pwd   = document.getElementById('authpassword').value;
+    const origText = authSignUp.textContent;
     try {
       authSignUp.disabled = true;
-      const hasSession = await signUpWithPassword(email, pwd);
+      authSignUp.textContent = '⏳ Création…';
+      const hasSession = await withTimeout(signUpWithPassword(email, pwd), 'signUp');
       if (hasSession) {
-        await refreshAuthSession();
+        await withTimeout(refreshAuthSession(), 'refresh session', 8000);
         showToast('Compte créé — bienvenue !');
       } else {
         showAuthError('autherror', 'Compte créé. Cliquez sur le lien reçu par email pour activer votre compte.');
       }
     } catch (e) {
       showAuthError('autherror', e.message || 'Inscription échouée');
-    } finally { authSignUp.disabled = false; }
+    } finally {
+      authSignUp.disabled = false;
+      authSignUp.textContent = origText || 'Créer un compte';
+    }
   });
   // Lien "Mot de passe oublié" → demande envoi de l'email de reset
   const authForgot = document.getElementById('authforgotlink');
@@ -8042,8 +8102,18 @@ function init() {
   });
   const authSignOut = document.getElementById('authsignoutbtn');
   if (authSignOut) authSignOut.addEventListener('click', async () => {
-    try { authSignOut.disabled = true; await signOut(); }
-    finally { authSignOut.disabled = false; }
+    const origText = authSignOut.textContent;
+    try {
+      authSignOut.disabled = true;
+      authSignOut.textContent = '⏳ Déconnexion…';
+      await withTimeout(signOut(), 'signOut', 8000);
+    } catch (e) {
+      console.error('[Auth] signOut KO', e);
+      showToast('Erreur déconnexion : ' + (e.message || ''), 'error');
+    } finally {
+      authSignOut.disabled = false;
+      authSignOut.textContent = origText || 'Se déconnecter';
+    }
   });
   const authForceSync = document.getElementById('authforcesync');
   if (authForceSync) authForceSync.addEventListener('click', async () => {
