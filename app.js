@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.85';
+const APP_VERSION = '0.86';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -7575,18 +7575,26 @@ function init() {
     });
   }
 
-  // ----- Sync : chip dans le header (clic = force full sync) -----
-  const syncChip = document.getElementById('syncchip');
-  if (syncChip) syncChip.addEventListener('click', async () => {
+  // ----- Sync : chip d'état (droite) + bouton 🔄 (gauche), tous deux dans le header -----
+  const syncChip     = document.getElementById('syncchip');
+  const syncForceBtn = document.getElementById('syncforcebtn');
+  const triggerForceSync = async (el) => {
     try {
-      syncChip.disabled = true;
+      if (el) el.disabled = true;
+      if (syncForceBtn) syncForceBtn.classList.add('is-spinning');
       await forceFullSync();
     } catch (e) {
       showToast('Sync KO : ' + (e.message || 'erreur'), 'error');
-    } finally { syncChip.disabled = false; }
-  });
+    } finally {
+      if (el) el.disabled = false;
+      if (syncForceBtn) syncForceBtn.classList.remove('is-spinning');
+    }
+  };
+  if (syncChip)     syncChip.addEventListener('click',     () => triggerForceSync(syncChip));
+  if (syncForceBtn) syncForceBtn.addEventListener('click', () => triggerForceSync(syncForceBtn));
   if (isSupabaseConfigured()) {
-    if (syncChip) syncChip.hidden = false;
+    if (syncChip)     syncChip.hidden = false;
+    if (syncForceBtn) syncForceBtn.hidden = false;
     updateSyncChip();
     (async () => {
       try { await withTimeout(doSyncPull(true), 'initial pull', 15000); } catch (e) { console.warn('[Sync] initial pull KO', e); }
