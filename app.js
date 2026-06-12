@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.84';
+const APP_VERSION = '0.85';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -5062,7 +5062,6 @@ function switchPage(name) {
   if (name === 'consommable') renderConsommable();
   if (name === 'dashboard') renderDashboard();
   if (name === 'proto') renderProto();
-  if (name === 'compte') renderCompte();
   // Synchro : à chaque changement d'onglet, on tente un pull en arrière-
   // plan pour récupérer les dernières modifs des coéquipiers.
   if (isSupabaseConfigured()) {
@@ -7095,20 +7094,6 @@ function loadSupabase() {
   return supabaseLoadPromise;
 }
 
-function renderCompte() {
-  const notConfigured = document.getElementById('syncnotconfigured');
-  const ready         = document.getElementById('syncready');
-  if (!notConfigured || !ready) return;
-  if (!isSupabaseConfigured()) {
-    notConfigured.hidden = false;
-    ready.hidden = true;
-    return;
-  }
-  notConfigured.hidden = true;
-  ready.hidden = false;
-  updateSyncChip();
-}
-
 // ====================================================================
 //   SYNCHRONISATION — push/pull state ↔ site_data
 // ====================================================================
@@ -7590,23 +7575,19 @@ function init() {
     });
   }
 
-  // ----- Sync (Compte) -----
-  const syncForceBtn = document.getElementById('syncforcebtn');
-  if (syncForceBtn) syncForceBtn.addEventListener('click', async () => {
-    const origText = syncForceBtn.textContent;
+  // ----- Sync : chip dans le header (clic = force full sync) -----
+  const syncChip = document.getElementById('syncchip');
+  if (syncChip) syncChip.addEventListener('click', async () => {
     try {
-      syncForceBtn.disabled = true;
-      syncForceBtn.textContent = '⏳ Synchronisation…';
+      syncChip.disabled = true;
       await forceFullSync();
     } catch (e) {
       showToast('Sync KO : ' + (e.message || 'erreur'), 'error');
-    } finally {
-      syncForceBtn.disabled = false;
-      syncForceBtn.textContent = origText || '🔄 Forcer la synchronisation';
-    }
+    } finally { syncChip.disabled = false; }
   });
-  renderCompte();
   if (isSupabaseConfigured()) {
+    if (syncChip) syncChip.hidden = false;
+    updateSyncChip();
     (async () => {
       try { await withTimeout(doSyncPull(true), 'initial pull', 15000); } catch (e) { console.warn('[Sync] initial pull KO', e); }
       try { await withTimeout(setupSyncRealtime(), 'setupSyncRealtime'); } catch (e) { console.warn(e); }
