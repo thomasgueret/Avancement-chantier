@@ -3433,3 +3433,122 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   flex-shrink: 0;
 }
 .cr-entry-delete:active { background: var(--surface-2); color: var(--danger); }
+
+/* ----- CR slider horizontal d'entreprises ----- */
+.cr-slider {
+  display: flex; gap: 6px;
+  overflow-x: auto; overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  padding: 8px 4px;
+  margin: 0 -4px 6px;
+}
+.cr-slider::-webkit-scrollbar { display: none; }
+.cr-slider-chip {
+  scroll-snap-align: start;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-size: 13px; font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  white-space: nowrap;
+  max-width: 60vw;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.cr-slider-chip.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+/* ----- CR : interrupteur (switch) pour la rubrique Avancements ----- */
+.cr-switch {
+  position: relative;
+  display: inline-flex; align-items: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.cr-switch input { position: absolute; opacity: 0; pointer-events: none; }
+.cr-switch-track {
+  position: relative;
+  width: 36px; height: 20px;
+  background: var(--border);
+  border-radius: 999px;
+  transition: background 0.15s;
+}
+.cr-switch-thumb {
+  position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px;
+  background: white;
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+  transition: left 0.15s;
+}
+.cr-switch input:checked + .cr-switch-track { background: var(--accent); }
+.cr-switch input:checked + .cr-switch-track .cr-switch-thumb { left: 18px; }
+
+/* ----- CR : aperçu lecture-seule des avancements ----- */
+.cr-avanc-lot {
+  background: var(--surface-2);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.cr-avanc-lot:last-child { margin-bottom: 0; }
+.cr-avanc-lot-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 6px;
+}
+.cr-avanc-lot-name {
+  font-size: 13px; font-weight: 700; color: var(--text);
+}
+.cr-avanc-lot-pct {
+  font-size: 13px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.cr-avanc-task-list {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.cr-avanc-task-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+.cr-avanc-task-title {
+  font-size: 12px; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1; min-width: 0;
+}
+.cr-avanc-task-meta {
+  font-size: 11px; color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.cr-avanc-bar {
+  display: flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--border);
+}
+.cr-avanc-bar-seg { height: 100%; }
+.cr-avanc-bar-seg.is-done  { background: #2e7d32; }
+.cr-avanc-bar-seg.is-doing { background: #ed6c02; }
+.cr-avanc-bar-seg.is-todo  { background: #d32f2f; }
+
+/* ----- Lot row : ajout du dropdown entreprise ----- */
+.lot-company {
+  flex: 1; min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  font-size: 13px; color: var(--text);
+  font-family: inherit;
+}

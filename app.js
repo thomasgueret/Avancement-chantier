@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.87';
+const APP_VERSION = '0.88';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -87,6 +87,8 @@ const state = {
   // CR (comptes-rendus) : entrées textuelles par entreprise et par rubrique
   crEntries: {},             // { [companyId]: { [sectionKey]: [{ id, text }] } }
   crCollapsed: {},           // { [companyId]: { _company: bool, [sectionKey]: bool } }
+  crSelectedCompanyId: null, // entreprise affichée dans le slider CR (UI per-device)
+  crAvancementVisible: {},   // { [companyId]: bool } — afficher l'aperçu Avancements (défaut true)
   // Synchronisation (modèle simplifié : un seul jeu partagé via Supabase)
   syncStatus: 'idle',        // 'idle' | 'syncing' | 'error' | 'offline'
   syncTimestamp: 0,          // ms epoch — dernier changement local connu
@@ -156,6 +158,7 @@ function load() {
     if (Array.isArray(data.protoShapes)) state.protoShapes = data.protoShapes;
     if (data.crEntries   && typeof data.crEntries   === 'object') state.crEntries   = data.crEntries;
     if (data.crCollapsed && typeof data.crCollapsed === 'object') state.crCollapsed = data.crCollapsed;
+    if (data.crAvancementVisible && typeof data.crAvancementVisible === 'object') state.crAvancementVisible = data.crAvancementVisible;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
     if (typeof data.syncTimestamp === 'number') state.syncTimestamp = data.syncTimestamp;
@@ -209,6 +212,7 @@ function save() {
     protoShapes: state.protoShapes,
     crEntries: state.crEntries,
     crCollapsed: state.crCollapsed,
+    crAvancementVisible: state.crAvancementVisible,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange,
     syncTimestamp: state.syncTimestamp
@@ -3383,6 +3387,10 @@ function deleteCompany(id) {
   delete state.echeckinCollapsed[id];
   delete state.crEntries[id];
   delete state.crCollapsed[id];
+  delete state.crAvancementVisible[id];
+  if (state.crSelectedCompanyId === id) state.crSelectedCompanyId = null;
+  // Libère les lots qui pointaient sur cette entreprise (lien rompu)
+  for (const lot of getWorkBatches()) if (lot.companyId === id) lot.companyId = null;
   // Nettoie les intempéries marquées pour cette entreprise
   for (const date of Object.keys(state.weather)) {
     if (state.weather[date]) {
@@ -3607,19 +3615,58 @@ function deleteCREntry(companyId, sectionKey, entryId) {
   renderCR();
 }
 
+function getCRSelectedCompany() {
+  if (!state.companies.length) return null;
+  if (state.crSelectedCompanyId) {
+    const c = state.companies.find(c => c.id === state.crSelectedCompanyId);
+    if (c) return c;
+  }
+  return state.companies[0];
+}
+function setCRSelectedCompany(companyId) {
+  state.crSelectedCompanyId = companyId;
+  save();
+  renderCR();
+}
+function isCRAvancementVisible(companyId) {
+  // Visible par défaut (clé absente = true)
+  return state.crAvancementVisible[companyId] !== false;
+}
+function setCRAvancementVisible(companyId, visible) {
+  if (visible) delete state.crAvancementVisible[companyId];
+  else state.crAvancementVisible[companyId] = false;
+  save();
+}
+
 function renderCR() {
-  const root  = document.getElementById('crroot');
-  const empty = document.getElementById('crempty');
-  if (!root) return;
-  root.innerHTML = '';
+  const slider = document.getElementById('crslider');
+  const body   = document.getElementById('crbody');
+  const empty  = document.getElementById('crempty');
+  if (!slider || !body) return;
+  slider.innerHTML = '';
+  body.innerHTML = '';
   if (!state.companies.length) {
     if (empty) empty.hidden = false;
+    slider.hidden = true;
+    body.hidden = true;
     return;
   }
   if (empty) empty.hidden = true;
-  for (const company of state.companies) {
-    root.appendChild(buildCRCompanyCard(company));
+  slider.hidden = false;
+  body.hidden = false;
+  // Slider : un chip par entreprise
+  const selected = getCRSelectedCompany();
+  for (const c of state.companies) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'cr-slider-chip' + (selected && c.id === selected.id ? ' is-active' : '');
+    chip.dataset.crAction = 'select-company';
+    chip.dataset.companyId = c.id;
+    chip.textContent = c.name;
+    slider.appendChild(chip);
   }
+  // Body : la carte de l'entreprise sélectionnée
+  if (selected) body.appendChild(buildCRCompanyCard(selected));
 }
 
 function buildCRCompanyCard(company) {
@@ -3657,26 +3704,161 @@ function buildCRSection(companyId, sec) {
 
   const head = document.createElement('div');
   head.className = 'cr-section-head';
-  head.innerHTML = `
-    <button type="button" class="cr-section-toggle" data-cr-action="toggle-section" data-company-id="${companyId}" data-section-key="${sec.key}" aria-label="${collapsed ? 'Déplier' : 'Replier'}">${collapsed ? '+' : '−'}</button>
-    <span class="cr-section-name">${sec.label}</span>
-    <button type="button" class="cr-add-entry" data-cr-action="add-entry" data-company-id="${companyId}" data-section-key="${sec.key}" aria-label="Ajouter une note">+</button>
-  `;
+  // Avancements : aperçu read-only + interrupteur (pour l'export PDF)
+  // au lieu du bouton « + Ajouter une note ».
+  if (sec.key === 'avancement') {
+    const visible = isCRAvancementVisible(companyId);
+    head.innerHTML = `
+      <button type="button" class="cr-section-toggle" data-cr-action="toggle-section" data-company-id="${companyId}" data-section-key="${sec.key}" aria-label="${collapsed ? 'Déplier' : 'Replier'}">${collapsed ? '+' : '−'}</button>
+      <span class="cr-section-name">${sec.label}</span>
+      <label class="cr-switch" title="Inclure dans le compte-rendu">
+        <input type="checkbox" data-cr-action="toggle-avancement-visible" data-company-id="${companyId}" ${visible ? 'checked' : ''}>
+        <span class="cr-switch-track"><span class="cr-switch-thumb"></span></span>
+      </label>
+    `;
+  } else {
+    head.innerHTML = `
+      <button type="button" class="cr-section-toggle" data-cr-action="toggle-section" data-company-id="${companyId}" data-section-key="${sec.key}" aria-label="${collapsed ? 'Déplier' : 'Replier'}">${collapsed ? '+' : '−'}</button>
+      <span class="cr-section-name">${sec.label}</span>
+      <button type="button" class="cr-add-entry" data-cr-action="add-entry" data-company-id="${companyId}" data-section-key="${sec.key}" aria-label="Ajouter une note">+</button>
+    `;
+  }
   wrap.appendChild(head);
 
   const body = document.createElement('div');
   body.className = 'cr-section-body';
-  const entries = getCREntries(companyId, sec.key);
-  if (entries.length === 0) {
-    const placeholder = document.createElement('p');
-    placeholder.className = 'cr-section-empty';
-    placeholder.textContent = 'Aucune note. Touchez + pour en ajouter une.';
-    body.appendChild(placeholder);
+  if (sec.key === 'avancement') {
+    buildCRAvancementBody(body, companyId);
   } else {
-    for (const entry of entries) body.appendChild(buildCREntry(companyId, sec.key, entry));
+    const entries = getCREntries(companyId, sec.key);
+    if (entries.length === 0) {
+      const placeholder = document.createElement('p');
+      placeholder.className = 'cr-section-empty';
+      placeholder.textContent = 'Aucune note. Touchez + pour en ajouter une.';
+      body.appendChild(placeholder);
+    } else {
+      for (const entry of entries) body.appendChild(buildCREntry(companyId, sec.key, entry));
+    }
   }
   wrap.appendChild(body);
   return wrap;
+}
+
+// Aperçu read-only des avancements d'une entreprise : agrège les
+// formes (Suivi) des lots rattachés à cette entreprise, sur tous les
+// plans, avec une barre 3-segments par tâche (mêmes données que
+// Suivi > Récap).
+function buildCRAvancementBody(body, companyId) {
+  if (!isCRAvancementVisible(companyId)) {
+    const off = document.createElement('p');
+    off.className = 'cr-section-empty';
+    off.textContent = 'Aperçu masqué (ne sera pas inclus dans l\'export PDF).';
+    body.appendChild(off);
+    return;
+  }
+  const companyLots = getWorkBatches().filter(l => l.companyId === companyId);
+  if (companyLots.length === 0) {
+    const none = document.createElement('p');
+    none.className = 'cr-section-empty';
+    none.textContent = 'Aucun lot n\'est rattaché à cette entreprise. Allez dans Données → Lots pour faire le lien.';
+    body.appendChild(none);
+    return;
+  }
+  // Aggrège : pour chaque lot, somme les tâches sur tous les plans
+  const lotsAgg = [];
+  for (const lot of companyLots) {
+    const tasksByTitle = new Map();
+    for (const plan of getProtoPlans()) {
+      const planLots = getProtoRecapData(plan.id);
+      const lotRecap = planLots.find(l => l.lotId === lot.id);
+      if (!lotRecap) continue;
+      for (const t of lotRecap.tasks) {
+        const key = t.title + '|' + t.type;
+        if (!tasksByTitle.has(key)) {
+          tasksByTitle.set(key, {
+            title: t.title, type: t.type,
+            total: 0, vols: { todo: 0, doing: 0, done: 0 }
+          });
+        }
+        const acc = tasksByTitle.get(key);
+        acc.total     += t.total;
+        acc.vols.todo += t.vols.todo;
+        acc.vols.doing+= t.vols.doing;
+        acc.vols.done += t.vols.done;
+      }
+    }
+    const tasks = [];
+    for (const t of tasksByTitle.values()) {
+      if (t.total <= 0) continue;
+      t.pct = {
+        todo:  (t.vols.todo  / t.total) * 100,
+        doing: (t.vols.doing / t.total) * 100,
+        done:  (t.vols.done  / t.total) * 100
+      };
+      tasks.push(t);
+    }
+    tasks.sort((a, b) => (a.title || 'ZZZ').localeCompare(b.title || 'ZZZ', 'fr'));
+    lotsAgg.push({ lot, tasks });
+  }
+  const anyTask = lotsAgg.some(l => l.tasks.length > 0);
+  if (!anyTask) {
+    const none = document.createElement('p');
+    none.className = 'cr-section-empty';
+    none.textContent = 'Aucune tâche n\'a encore été documentée sur les plans pour les lots de cette entreprise.';
+    body.appendChild(none);
+    return;
+  }
+  for (const { lot, tasks } of lotsAgg) {
+    if (tasks.length === 0) continue;
+    const lotCard = document.createElement('div');
+    lotCard.className = 'cr-avanc-lot';
+    lotCard.style.borderLeftColor = lot.color || 'var(--accent)';
+    let lotTotal = 0, lotDone = 0;
+    for (const t of tasks) { lotTotal += t.total; lotDone += t.vols.done; }
+    const lotPct = lotTotal > 0 ? Math.round((lotDone / lotTotal) * 100) : 0;
+    const head = document.createElement('div');
+    head.className = 'cr-avanc-lot-head';
+    head.innerHTML = `
+      <span class="cr-avanc-lot-name"></span>
+      <span class="cr-avanc-lot-pct"></span>
+    `;
+    head.querySelector('.cr-avanc-lot-name').textContent = lot.name || '(lot sans nom)';
+    const pctEl = head.querySelector('.cr-avanc-lot-pct');
+    pctEl.textContent = lotPct + ' %';
+    pctEl.style.color = lot.color || 'var(--accent)';
+    lotCard.appendChild(head);
+    const ul = document.createElement('ul');
+    ul.className = 'cr-avanc-task-list';
+    for (const t of tasks) ul.appendChild(buildCRAvancTaskRow(t));
+    lotCard.appendChild(ul);
+    body.appendChild(lotCard);
+  }
+}
+function buildCRAvancTaskRow(task) {
+  const li = document.createElement('li');
+  li.className = 'cr-avanc-task';
+  const head = document.createElement('div');
+  head.className = 'cr-avanc-task-head';
+  const title = document.createElement('span');
+  title.className = 'cr-avanc-task-title';
+  title.textContent = task.title || '(sans intitulé)';
+  if (!task.title) title.style.fontStyle = 'italic';
+  head.appendChild(title);
+  const meta = document.createElement('span');
+  meta.className = 'cr-avanc-task-meta';
+  meta.textContent = fmtRecapVolume(task.type, task.total);
+  head.appendChild(meta);
+  li.appendChild(head);
+  const bar = document.createElement('div');
+  bar.className = 'cr-avanc-bar';
+  for (const k of ['done', 'doing', 'todo']) {
+    const seg = document.createElement('div');
+    seg.className = 'cr-avanc-bar-seg is-' + k;
+    seg.style.flex = Math.max(task.pct[k], 0);
+    bar.appendChild(seg);
+  }
+  li.appendChild(bar);
+  return li;
 }
 
 function buildCREntry(companyId, sectionKey, entry) {
@@ -5476,6 +5658,14 @@ function setWorkBatchColor(id, color) {
   save();
   renderProtoSVG(); // les formes du plan changent de couleur
 }
+function setWorkBatchCompany(id, companyId) {
+  const lot = getWorkBatch(id);
+  if (!lot) return;
+  lot.companyId = companyId || null;
+  save();
+  // Si on est sur l'onglet CR, l'aperçu Avancements peut changer
+  if (document.getElementById('page-cr')?.classList.contains('active')) renderCR();
+}
 
 function renderWorkBatchesConfig() {
   const list = document.getElementById('lotslist');
@@ -5498,16 +5688,31 @@ function buildLotRow(lot) {
   li.innerHTML = `
     <input class="lot-color" type="color" aria-label="Couleur du lot">
     <input class="lot-name" type="text" maxlength="40" placeholder="Plomberie, Électricité, Cloisons…">
+    <select class="lot-company" aria-label="Entreprise rattachée à ce lot"></select>
     <button class="eotp-remove lot-remove" type="button" aria-label="Supprimer ce lot">
       <svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
     </button>
   `;
   const color = li.querySelector('.lot-color');
   const name  = li.querySelector('.lot-name');
+  const comp  = li.querySelector('.lot-company');
   color.value = lot.color || '#0a84ff';
   name.value  = lot.name  || '';
+  // Options : « — Aucune — » + toutes les entreprises
+  const optNone = document.createElement('option');
+  optNone.value = '';
+  optNone.textContent = '— Aucune —';
+  comp.appendChild(optNone);
+  for (const c of state.companies) {
+    const o = document.createElement('option');
+    o.value = c.id;
+    o.textContent = c.name;
+    comp.appendChild(o);
+  }
+  comp.value = lot.companyId || '';
   color.addEventListener('input', () => setWorkBatchColor(lot.id, color.value));
   name.addEventListener('input',  () => setWorkBatchName(lot.id, name.value));
+  comp.addEventListener('change', () => setWorkBatchCompany(lot.id, comp.value));
   li.querySelector('.lot-remove').addEventListener('click', () => removeWorkBatch(lot.id));
   return li;
 }
@@ -7312,6 +7517,7 @@ const SYNC_EXCLUDED_KEYS = new Set([
   'protoActivePlanId',               // plan en cours d'édition
   'protoFilterLotId', 'protoFilterStatuses', // filtres Proto
   'echeckinCollapsed',               // sections eCheckIn pliées/dépliées
+  'crSelectedCompanyId',             // entreprise sélectionnée dans le slider CR (UI)
   'syncStatus', 'syncTimestamp', 'syncLastPulled',
   'protoPlan', 'protoPlanW', 'protoPlanH' // champs hérités migrés
 ]);
@@ -7751,17 +7957,19 @@ function init() {
     });
   }
 
-  // ----- CR : délégation d'événements sur le conteneur -----
-  const crRoot = document.getElementById('crroot');
-  if (crRoot) {
-    crRoot.addEventListener('click', (e) => {
+  // ----- CR : délégation d'événements sur la page entière -----
+  const crPage = document.getElementById('page-cr');
+  if (crPage) {
+    crPage.addEventListener('click', (e) => {
       const t = e.target.closest('[data-cr-action]');
       if (!t) return;
       const action = t.dataset.crAction;
       const companyId  = t.dataset.companyId;
       const sectionKey = t.dataset.sectionKey;
       const entryId    = t.dataset.entryId;
-      if (action === 'toggle-company') {
+      if (action === 'select-company') {
+        setCRSelectedCompany(companyId);
+      } else if (action === 'toggle-company') {
         toggleCRCollapsed(companyId, '_company');
         renderCR();
       } else if (action === 'toggle-section') {
@@ -7773,7 +7981,13 @@ function init() {
         if (confirm('Supprimer cette note ?')) deleteCREntry(companyId, sectionKey, entryId);
       }
     });
-    crRoot.addEventListener('input', (e) => {
+    crPage.addEventListener('change', (e) => {
+      const cb = e.target.closest('input[data-cr-action="toggle-avancement-visible"]');
+      if (!cb) return;
+      setCRAvancementVisible(cb.dataset.companyId, cb.checked);
+      renderCR();
+    });
+    crPage.addEventListener('input', (e) => {
       const ta = e.target.closest('textarea[data-cr-action="edit-entry"]');
       if (!ta) return;
       updateCREntry(ta.dataset.companyId, ta.dataset.sectionKey, ta.dataset.entryId, ta.value);
