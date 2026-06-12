@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.86';
+const APP_VERSION = '0.87';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -84,6 +84,9 @@ const state = {
   //    coords:{cx,cy} | {x1,y1,x2,y2} | {x,y,w,h},
   //    lotId, title, date, status:'todo'|'doing'|'done' }]
   protoShapes: [],
+  // CR (comptes-rendus) : entrées textuelles par entreprise et par rubrique
+  crEntries: {},             // { [companyId]: { [sectionKey]: [{ id, text }] } }
+  crCollapsed: {},           // { [companyId]: { _company: bool, [sectionKey]: bool } }
   // Synchronisation (modèle simplifié : un seul jeu partagé via Supabase)
   syncStatus: 'idle',        // 'idle' | 'syncing' | 'error' | 'offline'
   syncTimestamp: 0,          // ms epoch — dernier changement local connu
@@ -151,6 +154,8 @@ function load() {
     if (Number.isFinite(data.protoPlanW)) state.protoPlanW = data.protoPlanW;
     if (Number.isFinite(data.protoPlanH)) state.protoPlanH = data.protoPlanH;
     if (Array.isArray(data.protoShapes)) state.protoShapes = data.protoShapes;
+    if (data.crEntries   && typeof data.crEntries   === 'object') state.crEntries   = data.crEntries;
+    if (data.crCollapsed && typeof data.crCollapsed === 'object') state.crCollapsed = data.crCollapsed;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
     if (typeof data.syncTimestamp === 'number') state.syncTimestamp = data.syncTimestamp;
@@ -202,6 +207,8 @@ function save() {
     protoFilterLotId: state.protoFilterLotId,
     protoFilterStatuses: state.protoFilterStatuses,
     protoShapes: state.protoShapes,
+    crEntries: state.crEntries,
+    crCollapsed: state.crCollapsed,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange,
     syncTimestamp: state.syncTimestamp
@@ -354,6 +361,7 @@ function renderAll() {
   renderProto();
   renderStock();
   renderConsommable();
+  renderCR();
   renderDashboard();
 }
 
@@ -3373,6 +3381,8 @@ function deleteCompany(id) {
   delete state.chartHidden[id];
   delete state.adminDocs[id];
   delete state.echeckinCollapsed[id];
+  delete state.crEntries[id];
+  delete state.crCollapsed[id];
   // Nettoie les intempéries marquées pour cette entreprise
   for (const date of Object.keys(state.weather)) {
     if (state.weather[date]) {
@@ -3531,6 +3541,171 @@ function fmtRate(n) {
 
 function fmtStockQty(n) {
   return (Number(n) || 0).toLocaleString('fr-FR', { maximumFractionDigits: 3 });
+}
+
+// ====================================================================
+//   CR (comptes-rendus) — un compte-rendu par entreprise, 7 rubriques fixes
+// ====================================================================
+const CR_SECTIONS = [
+  { key: 'header',       label: 'En-tête' },
+  { key: 'avancement',   label: 'Avancements' },
+  { key: 'admin',        label: 'Administratif' },
+  { key: 'etudes',       label: 'Études' },
+  { key: 'planning',     label: 'Planning' },
+  { key: 'execution',    label: 'Exécution' },
+  { key: 'reclamations', label: 'Réclamations' }
+];
+
+function getCREntries(companyId, sectionKey) {
+  const c = state.crEntries[companyId];
+  if (!c || !Array.isArray(c[sectionKey])) return [];
+  return c[sectionKey];
+}
+function ensureCRBucket(companyId, sectionKey) {
+  if (!state.crEntries[companyId]) state.crEntries[companyId] = {};
+  if (!Array.isArray(state.crEntries[companyId][sectionKey])) state.crEntries[companyId][sectionKey] = [];
+  return state.crEntries[companyId][sectionKey];
+}
+function isCRCollapsed(companyId, sectionKey) {
+  return !!(state.crCollapsed[companyId] && state.crCollapsed[companyId][sectionKey]);
+}
+function toggleCRCollapsed(companyId, sectionKey) {
+  if (!state.crCollapsed[companyId]) state.crCollapsed[companyId] = {};
+  const bag = state.crCollapsed[companyId];
+  if (bag[sectionKey]) delete bag[sectionKey];
+  else bag[sectionKey] = true;
+  save();
+}
+function addCREntry(companyId, sectionKey) {
+  const list = ensureCRBucket(companyId, sectionKey);
+  list.push({ id: uid(), text: '' });
+  // Force le dépliage de la section quand on ajoute une note
+  if (state.crCollapsed[companyId]) delete state.crCollapsed[companyId][sectionKey];
+  save();
+  renderCR();
+  // Focus le nouveau textarea pour saisie immédiate
+  requestAnimationFrame(() => {
+    const last = document.querySelector(
+      `.cr-entry[data-company-id="${companyId}"][data-section-key="${sectionKey}"]:last-of-type textarea`
+    );
+    if (last) last.focus();
+  });
+}
+function updateCREntry(companyId, sectionKey, entryId, text) {
+  const list = getCREntries(companyId, sectionKey);
+  const entry = list.find(e => e.id === entryId);
+  if (!entry) return;
+  entry.text = text;
+  save();
+}
+function deleteCREntry(companyId, sectionKey, entryId) {
+  if (!state.crEntries[companyId]) return;
+  const list = state.crEntries[companyId][sectionKey];
+  if (!Array.isArray(list)) return;
+  state.crEntries[companyId][sectionKey] = list.filter(e => e.id !== entryId);
+  save();
+  renderCR();
+}
+
+function renderCR() {
+  const root  = document.getElementById('crroot');
+  const empty = document.getElementById('crempty');
+  if (!root) return;
+  root.innerHTML = '';
+  if (!state.companies.length) {
+    if (empty) empty.hidden = false;
+    return;
+  }
+  if (empty) empty.hidden = true;
+  for (const company of state.companies) {
+    root.appendChild(buildCRCompanyCard(company));
+  }
+}
+
+function buildCRCompanyCard(company) {
+  const card = document.createElement('div');
+  card.className = 'cr-company';
+  card.dataset.companyId = company.id;
+  const companyCollapsed = isCRCollapsed(company.id, '_company');
+  if (companyCollapsed) card.classList.add('is-collapsed');
+
+  const head = document.createElement('button');
+  head.type = 'button';
+  head.className = 'cr-company-head';
+  head.dataset.crAction = 'toggle-company';
+  head.dataset.companyId = company.id;
+  head.innerHTML = `
+    <span class="cr-collapse-icon">${companyCollapsed ? '+' : '−'}</span>
+    <span class="cr-company-name">${escapeHtml(company.name)}</span>
+  `;
+  card.appendChild(head);
+
+  const body = document.createElement('div');
+  body.className = 'cr-company-body';
+  for (const sec of CR_SECTIONS) {
+    body.appendChild(buildCRSection(company.id, sec));
+  }
+  card.appendChild(body);
+  return card;
+}
+
+function buildCRSection(companyId, sec) {
+  const wrap = document.createElement('div');
+  wrap.className = 'cr-section';
+  const collapsed = isCRCollapsed(companyId, sec.key);
+  if (collapsed) wrap.classList.add('is-collapsed');
+
+  const head = document.createElement('div');
+  head.className = 'cr-section-head';
+  head.innerHTML = `
+    <button type="button" class="cr-section-toggle" data-cr-action="toggle-section" data-company-id="${companyId}" data-section-key="${sec.key}" aria-label="${collapsed ? 'Déplier' : 'Replier'}">${collapsed ? '+' : '−'}</button>
+    <span class="cr-section-name">${sec.label}</span>
+    <button type="button" class="cr-add-entry" data-cr-action="add-entry" data-company-id="${companyId}" data-section-key="${sec.key}" aria-label="Ajouter une note">+</button>
+  `;
+  wrap.appendChild(head);
+
+  const body = document.createElement('div');
+  body.className = 'cr-section-body';
+  const entries = getCREntries(companyId, sec.key);
+  if (entries.length === 0) {
+    const placeholder = document.createElement('p');
+    placeholder.className = 'cr-section-empty';
+    placeholder.textContent = 'Aucune note. Touchez + pour en ajouter une.';
+    body.appendChild(placeholder);
+  } else {
+    for (const entry of entries) body.appendChild(buildCREntry(companyId, sec.key, entry));
+  }
+  wrap.appendChild(body);
+  return wrap;
+}
+
+function buildCREntry(companyId, sectionKey, entry) {
+  const row = document.createElement('div');
+  row.className = 'cr-entry';
+  row.dataset.companyId = companyId;
+  row.dataset.sectionKey = sectionKey;
+  row.dataset.entryId = entry.id;
+  const ta = document.createElement('textarea');
+  ta.className = 'cr-entry-text';
+  ta.rows = 2;
+  ta.placeholder = 'Saisissez votre note…';
+  ta.value = entry.text || '';
+  ta.dataset.crAction = 'edit-entry';
+  ta.dataset.companyId = companyId;
+  ta.dataset.sectionKey = sectionKey;
+  ta.dataset.entryId = entry.id;
+  row.appendChild(ta);
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'cr-entry-delete';
+  del.dataset.crAction = 'delete-entry';
+  del.dataset.companyId = companyId;
+  del.dataset.sectionKey = sectionKey;
+  del.dataset.entryId = entry.id;
+  del.setAttribute('aria-label', 'Supprimer la note');
+  del.innerHTML = '×';
+  row.appendChild(del);
+  return row;
 }
 
 // ----- Rendu : liste des entrées (sous-onglet Enregistrement) -----
@@ -5062,6 +5237,7 @@ function switchPage(name) {
   if (name === 'consommable') renderConsommable();
   if (name === 'dashboard') renderDashboard();
   if (name === 'proto') renderProto();
+  if (name === 'cr') renderCR();
   // Synchro : à chaque changement d'onglet, on tente un pull en arrière-
   // plan pour récupérer les dernières modifs des coéquipiers.
   if (isSupabaseConfigured()) {
@@ -7572,6 +7748,35 @@ function init() {
       btn.addEventListener('click', () => {
         document.querySelectorAll('.proto-status-btn').forEach(b => b.classList.toggle('is-active', b === btn));
       });
+    });
+  }
+
+  // ----- CR : délégation d'événements sur le conteneur -----
+  const crRoot = document.getElementById('crroot');
+  if (crRoot) {
+    crRoot.addEventListener('click', (e) => {
+      const t = e.target.closest('[data-cr-action]');
+      if (!t) return;
+      const action = t.dataset.crAction;
+      const companyId  = t.dataset.companyId;
+      const sectionKey = t.dataset.sectionKey;
+      const entryId    = t.dataset.entryId;
+      if (action === 'toggle-company') {
+        toggleCRCollapsed(companyId, '_company');
+        renderCR();
+      } else if (action === 'toggle-section') {
+        toggleCRCollapsed(companyId, sectionKey);
+        renderCR();
+      } else if (action === 'add-entry') {
+        addCREntry(companyId, sectionKey);
+      } else if (action === 'delete-entry') {
+        if (confirm('Supprimer cette note ?')) deleteCREntry(companyId, sectionKey, entryId);
+      }
+    });
+    crRoot.addEventListener('input', (e) => {
+      const ta = e.target.closest('textarea[data-cr-action="edit-entry"]');
+      if (!ta) return;
+      updateCREntry(ta.dataset.companyId, ta.dataset.sectionKey, ta.dataset.entryId, ta.value);
     });
   }
 
