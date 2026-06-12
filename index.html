@@ -395,101 +395,26 @@
         <div class="proto-recap-body" id="protorecapbody"></div>
       </div>
     </section>
-    <!-- ============== ONGLET : COMPTE ============== -->
+    <!-- ============== ONGLET : SYNCHRONISATION ============== -->
     <section class="page" id="page-compte">
-      <h2 class="section-title">Mon compte</h2>
+      <h2 class="section-title">Synchronisation</h2>
 
-      <!-- État : vérification de la session en cours (au démarrage) -->
-      <div class="auth-form auth-loading-form" id="authloading">
-        <div class="auth-loading-spinner" aria-hidden="true"></div>
-        <p class="hint">Vérification de la session…</p>
+      <!-- État : Supabase pas configuré -->
+      <div class="auth-form" id="syncnotconfigured" hidden>
+        <p class="section-help">La synchronisation n'est pas activée sur cette installation. Vos données restent stockées localement.</p>
+        <p class="hint">Configurez <code>SUPABASE_URL</code> et <code>SUPABASE_ANON_KEY</code> dans <code>app.js</code>.</p>
       </div>
 
-      <!-- État : Supabase pas encore configuré (URL/clé vides) -->
-      <div class="auth-form" id="authnotconfigured" hidden>
-        <p class="section-help">La synchronisation n'est pas encore activée sur cette installation. Vos données restent stockées localement sur cet appareil.</p>
-        <p class="hint">Configurez <code>SUPABASE_URL</code> et <code>SUPABASE_ANON_KEY</code> dans <code>app.js</code> pour activer la connexion à votre compte.</p>
-      </div>
-
-      <!-- État : déconnecté → formulaire login/signup -->
-      <div class="auth-form" id="authloggedout" hidden>
-        <p class="section-help">Connectez-vous pour synchroniser vos données entre tous vos appareils et partager votre chantier avec votre équipe.</p>
-        <label class="stock-form-label" for="authemail">Email</label>
-        <input id="authemail" class="stock-form-input" type="email" autocomplete="email" placeholder="vous@exemple.com">
-        <label class="stock-form-label" for="authpassword">Mot de passe</label>
-        <input id="authpassword" class="stock-form-input" type="password" autocomplete="current-password" minlength="6" placeholder="6 caractères minimum">
-        <div class="auth-actions">
-          <button class="btn-primary" id="authsigninbtn" type="button">Se connecter</button>
-          <button class="btn-secondary" id="authsignupbtn" type="button">Créer un compte</button>
-        </div>
-        <p class="auth-forgot-row">
-          <a href="#" id="authforgotlink" class="auth-forgot-link">Mot de passe oublié ?</a>
-        </p>
-        <p class="auth-error" id="autherror" hidden></p>
-      </div>
-
-      <!-- État : réinitialisation de mot de passe (revient d'un lien email) -->
-      <div class="auth-form" id="authrecovery" hidden>
-        <p class="section-help">Définissez un nouveau mot de passe pour votre compte.</p>
-        <label class="stock-form-label" for="authrecoverypwd">Nouveau mot de passe</label>
-        <input id="authrecoverypwd" class="stock-form-input" type="password" minlength="6" placeholder="6 caractères minimum">
-        <label class="stock-form-label" for="authrecoverypwd2">Confirmation</label>
-        <input id="authrecoverypwd2" class="stock-form-input" type="password" minlength="6" placeholder="Retapez le mot de passe">
-        <button class="btn-primary stock-submit-btn" id="authrecoverybtn" type="button">Mettre à jour le mot de passe</button>
-        <p class="auth-error" id="authrecoveryerror" hidden></p>
-      </div>
-
-      <!-- État : connecté — affiche le site actif (s'il y en a un) + liste
-           de tous les chantiers accessibles + formulaires create/join -->
-      <div class="auth-form" id="authloggedin" hidden>
-        <!-- Bandeau "Connecté en tant que" : email + chip Synchro toujours visibles -->
+      <!-- État : synchro active -->
+      <div class="auth-form" id="syncready" hidden>
+        <p class="section-help">Toutes les personnes ayant le lien partagent les mêmes données. Les modifications sont synchronisées automatiquement entre tous les appareils.</p>
         <div class="auth-header-row">
           <div class="auth-header-email">
-            <span class="auth-header-label">Connecté</span>
-            <span class="auth-header-value" id="authinfoemail"></span>
+            <span class="auth-header-label">État</span>
           </div>
-          <span id="authsyncchip" class="auth-sync-chip is-idle">🟢 Synchronisé</span>
+          <span id="syncchip" class="auth-sync-chip is-idle">🟢 Synchronisé</span>
         </div>
-
-        <!-- Bouton "Forcer la synchronisation" toujours visible (désactivé si
-             pas de chantier actif, avec hint expliquant pourquoi) -->
-        <button class="btn-primary stock-submit-btn" id="authforcesync" type="button">🔄 Forcer la synchronisation</button>
-
-        <!-- Encart "Chantier actif" — avec champ nom modifiable par l'admin -->
-        <div class="auth-active-box" id="authactivesitebox" hidden>
-          <div class="auth-active-box-head">Chantier actif</div>
-          <label class="stock-form-label" for="authsitenameedit">Nom</label>
-          <div class="auth-rename-row">
-            <input id="authsitenameedit" class="stock-form-input" type="text" maxlength="60">
-            <button class="btn-secondary auth-rename-btn" id="authrenamebtn" type="button" title="Enregistrer le nouveau nom">💾</button>
-          </div>
-          <div class="auth-info">
-            <div class="auth-info-row">
-              <span class="auth-info-label">Rôle</span>
-              <span class="auth-info-value" id="authinforole"></span>
-            </div>
-            <div class="auth-info-row auth-info-row-code">
-              <span class="auth-info-label">Code à partager</span>
-              <span class="auth-info-value auth-join-code" id="authinfojoincode"></span>
-              <button class="btn-secondary auth-copy-btn" id="authcopycode" type="button">📋 Copier</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Placeholder quand aucun chantier actif -->
-        <div class="auth-no-active-box" id="authnoactivebox" hidden>
-          <p class="hint"><strong>Aucun chantier actif.</strong> Demandez à votre admin le code à 6 caractères pour rejoindre votre chantier ci-dessous.</p>
-        </div>
-
-        <!-- Formulaire unique : rejoindre via code -->
-        <h3 class="auth-subsection-title">Rejoindre un autre chantier</h3>
-        <label class="stock-form-label" for="authjoincode">Code à 6 caractères</label>
-        <input id="authjoincode" class="stock-form-input auth-code-input" type="text" maxlength="6" placeholder="ABC123" autocapitalize="characters">
-        <p class="hint">Tous vos collègues qui rejoignent avec ce code partagent les mêmes données. Une seule sauvegarde, synchronisée.</p>
-        <button class="btn-primary stock-submit-btn" id="authjoinbtn" type="button">Rejoindre</button>
-        <p class="auth-error" id="authnositeerror" hidden></p>
-
-        <button class="btn-secondary auth-signout" id="authsignoutbtn" type="button">Se déconnecter</button>
+        <button class="btn-primary stock-submit-btn" id="syncforcebtn" type="button">🔄 Forcer la synchronisation</button>
       </div>
     </section>
   </main>
@@ -529,8 +454,8 @@
       <span>Proto</span>
     </button>
     <button class="tab-btn" data-page="compte" role="tab">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4Zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4Z"/></svg>
-      <span>Compte</span>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2A10 10 0 1 0 22 12 10 10 0 0 0 12 2Zm5.66 5.34a8 8 0 0 1 1.93 4H17.4a13.45 13.45 0 0 0-1.5-3.78 8 8 0 0 1 1.76-.22Zm-5.66-1.34a11 11 0 0 1 2.34 4H9.66A11 11 0 0 1 12 6Zm-7.66 8.66A8 8 0 0 1 4 12a8 8 0 0 1 .34-2h2.83a13.4 13.4 0 0 0 0 4Zm1.84-6A13.45 13.45 0 0 0 6.6 11.34h-2.19a8 8 0 0 1 1.93-4Zm.7 8h2.49a13.45 13.45 0 0 0 1.5 3.78 8 8 0 0 1-3.99-3.78Zm5.16 5.34A11 11 0 0 1 9.66 16h4.68A11 11 0 0 1 12 22Zm0-6H9.16a12.94 12.94 0 0 1 0-4h5.68a12.94 12.94 0 0 1 0 4Zm3.5 5.78a13.45 13.45 0 0 0 1.5-3.78h2.49a8 8 0 0 1-3.99 3.78Zm1.93-5.78a13.4 13.4 0 0 0 0-4h2.83a8 8 0 0 1 0 4Z"/></svg>
+      <span>Sync</span>
     </button>
   </nav>
 

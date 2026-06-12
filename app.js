@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.82';
+const APP_VERSION = '0.83';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -84,12 +84,7 @@ const state = {
   //    coords:{cx,cy} | {x1,y1,x2,y2} | {x,y,w,h},
   //    lotId, title, date, status:'todo'|'doing'|'done' }]
   protoShapes: [],
-  // Auth (non persistée — recalée à chaque démarrage via Supabase)
-  authUser: null,            // { id, email } | null
-  authSites: [],             // [{ id, name, joinCode, role }] — tous les sites accessibles
-  authSite: null,            // chantier actif (l'un des authSites)
-  authLoading: true,         // true tant que la session Supabase n'a pas été récupérée au moins une fois
-  // Synchronisation (étape 5)
+  // Synchronisation (modèle simplifié : un seul jeu partagé via Supabase)
   syncStatus: 'idle',        // 'idle' | 'syncing' | 'error' | 'offline'
   syncTimestamp: 0,          // ms epoch — dernier changement local connu
   syncLastPulled: 0,         // ms epoch — dernier pull réussi depuis le serveur
@@ -5098,9 +5093,8 @@ function switchPage(name) {
   if (name === 'proto') renderProto();
   if (name === 'compte') renderCompte();
   // Synchro : à chaque changement d'onglet, on tente un pull en arrière-
-  // plan pour récupérer les dernières modifs des coéquipiers. Borné
-  // par un timeout 5s, non-bloquant pour le rendu courant.
-  if (state.authSite && isSupabaseConfigured()) {
+  // plan pour récupérer les dernières modifs des coéquipiers.
+  if (isSupabaseConfigured()) {
     withTimeout(doSyncPull(), 'pull tab change').catch(err => console.warn('[Sync] pull tab change KO', err));
   }
 }
@@ -7096,10 +7090,14 @@ function deleteProtoShape() {
 }
 
 // ====================================================================
-//   AUTH (Supabase) — connexion + multi-chantiers via code
+//   SUPABASE + SYNCHRONISATION — modèle simplifié, sans compte
 // ====================================================================
-// Étape 4 du plan : connexion / inscription / création-rejoindre de
-// chantier. La SYNCHRO des données arrivera à l'étape 5.
+// Tout le monde partage la même ligne site_data identifiée par
+// SHARED_SITE_ID. Pas d'auth, pas de login : n'importe qui ayant le
+// lien lit/écrit les mêmes données. La RLS Supabase doit autoriser
+// anon SELECT/UPDATE sur cette ligne (SQL fourni dans le README).
+
+const SHARED_SITE_ID = '11111111-1111-1111-1111-111111111111';
 
 let supabaseClient = null;
 let supabaseLoadPromise = null;
@@ -7115,33 +7113,7 @@ function loadSupabase() {
   supabaseLoadPromise = (async () => {
     const mod = await import(/* @vite-ignore */ SUPABASE_SDK_URL);
     supabaseClient = mod.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      auth: { persistSession: true, autoRefreshToken: true, storage: window.localStorage }
-    });
-    // Maintient state.authUser synchronisé avec le SDK (token refresh, sign-out…)
-    supabaseClient.auth.onAuthStateChange(async (event, session) => {
-      // Évé. PASSWORD_RECOVERY = utilisateur revient via un lien de
-      // reset de mot de passe → on affiche le formulaire dédié au lieu
-      // du panneau principal.
-      if (event === 'PASSWORD_RECOVERY') {
-        state.authUser = session && session.user
-          ? { id: session.user.id, email: session.user.email }
-          : null;
-        switchPage('compte');
-        document.body.dataset.authRecovery = '1';
-        renderCompte();
-        return;
-      }
-      if (session && session.user) {
-        state.authUser = { id: session.user.id, email: session.user.email };
-        await refreshSiteInfo();
-      } else {
-        state.authUser = null;
-        state.authSite = null;
-        state.authSites = [];
-      }
-      delete document.body.dataset.authRecovery;
-      state.authLoading = false;
-      renderCompte();
+      auth: { persistSession: false, autoRefreshToken: false }
     });
     return supabaseClient;
   })().catch((err) => {
@@ -7152,354 +7124,22 @@ function loadSupabase() {
   return supabaseLoadPromise;
 }
 
-async function refreshAuthSession() {
-  try {
-    const supa = await loadSupabase();
-    if (!supa) {
-      state.authLoading = false;
-      renderCompte();
-      return null;
-    }
-    const { data } = await supa.auth.getSession();
-    if (data && data.session && data.session.user) {
-      state.authUser = { id: data.session.user.id, email: data.session.user.email };
-      try { await withTimeout(refreshSiteInfo(), 'refreshSiteInfo'); } catch (e) { console.warn(e); }
-      // Bootstrap : si l'utilisateur n'a aucun chantier (nouveau signup),
-      // on lui en crée un automatiquement « Mon chantier » dont il devient
-      // admin (via trigger SQL). Code généré, prêt à être partagé.
-      if (state.authUser && (state.authSites || []).length === 0) {
-        try { await withTimeout(autoCreateBootstrapSite(), 'bootstrap site'); } catch (e) { console.warn(e); }
-      }
-      // Synchro : pull initial + abonnement realtime dès qu'on est sur un chantier
-      if (state.authSite) {
-        try { await withTimeout(doSyncPull(true),      'doSyncPull');       } catch (e) { console.warn(e); }
-        try { await withTimeout(setupSyncRealtime(),   'setupSyncRealtime'); } catch (e) { console.warn(e); }
-        try { startSyncPolling(); } catch (e) { console.warn(e); }
-      }
-    } else {
-      state.authUser = null;
-      state.authSite = null;
-      state.authSites = [];
-      await teardownSyncRealtime();
-      stopSyncPolling();
-    }
-    state.authLoading = false;
-    renderCompte();
-    return data && data.session;
-  } catch (err) {
-    console.error('[Auth] refreshAuthSession KO', err);
-    state.authLoading = false;
-    renderCompte();
-    return null;
-  }
-}
-
-// Persistance locale de l'ID du chantier actif (survit aux reloads).
-// Un chantier devient ainsi un "fichier de sauvegarde" : on s'y
-// reconnecte automatiquement à chaque ouverture de l'app.
-const ACTIVE_SITE_KEY = 'chantier_active_site_id';
-function saveActiveSiteId(id) {
-  try {
-    if (id) localStorage.setItem(ACTIVE_SITE_KEY, id);
-    else localStorage.removeItem(ACTIVE_SITE_KEY);
-  } catch (_) {}
-}
-function getSavedActiveSiteId() {
-  try { return localStorage.getItem(ACTIVE_SITE_KEY) || ''; } catch (_) { return ''; }
-}
-
-async function refreshSiteInfo() {
-  if (!state.authUser) { state.authSites = []; state.authSite = null; return; }
-  const supa = await loadSupabase();
-  if (!supa) return;
-  // 1) Liste tous les sites dont on est membre
-  const { data: members, error: mErr } = await supa
-    .from('site_members').select('site_id, role').eq('user_id', state.authUser.id);
-  if (mErr) console.error('refreshSiteInfo: erreur lecture site_members', mErr);
-  if (mErr || !members || members.length === 0) {
-    state.authSites = []; state.authSite = null;
-    return;
-  }
-  const { data: sites, error: sErr } = await supa
-    .from('sites').select('id, name, join_code').in('id', members.map(m => m.site_id));
-  if (sErr) console.error('refreshSiteInfo: erreur lecture sites', sErr);
-  if (sErr || !sites) {
-    state.authSites = []; state.authSite = null;
-    return;
-  }
-  // Map vers le format authSites + tri alphabétique par nom
-  state.authSites = sites.map(s => {
-    const m = members.find(mb => mb.site_id === s.id);
-    return { id: s.id, name: s.name || '(sans nom)', joinCode: s.join_code, role: m ? m.role : 'member' };
-  }).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'fr'));
-  // Choisit le site actif : (1) celui déjà actif s'il est encore valide,
-  // (2) celui sauvegardé en localStorage (= dernière session),
-  // (3) le premier de la liste. Sauvegarde l'ID pour la prochaine ouverture.
-  if (state.authSite) {
-    const found = state.authSites.find(s => s.id === state.authSite.id);
-    state.authSite = found || null;
-  }
-  if (!state.authSite) {
-    const savedId = getSavedActiveSiteId();
-    if (savedId) {
-      const saved = state.authSites.find(s => s.id === savedId);
-      if (saved) state.authSite = saved;
-    }
-  }
-  if (!state.authSite) state.authSite = state.authSites[0] || null;
-  saveActiveSiteId(state.authSite ? state.authSite.id : null);
-}
-
-// Bascule sur un autre chantier (parmi authSites)
-async function switchActiveSite(siteId) {
-  const site = (state.authSites || []).find(s => s.id === siteId);
-  if (!site) return;
-  try { await withTimeout(teardownSyncRealtime(), 'teardown'); } catch (_) {}
-  stopSyncPolling();
-  state.authSite = site;
-  saveActiveSiteId(site.id);
-  renderCompte();
-  try { await withTimeout(doSyncPull(true),      'doSyncPull');       } catch (e) { console.warn(e); }
-  try { await withTimeout(setupSyncRealtime(),   'setupSyncRealtime'); } catch (e) { console.warn(e); }
-  try { startSyncPolling(); } catch (e) { console.warn(e); }
-}
-
-// v0.80 : leaveOrDeleteSite retiré — un chantier ne peut plus être
-// supprimé depuis l'UI. La rejointe via code remplace l'actif.
-
-// Bootstrap : crée un chantier « Mon chantier » au premier signin si
-// l'utilisateur n'en a aucun. Devient admin via le trigger SQL, code
-// auto-généré. Le chantier est prêt à être partagé immédiatement.
-async function autoCreateBootstrapSite() {
-  if (!state.authUser || (state.authSites || []).length > 0) return;
-  const supa = await loadSupabase();
-  if (!supa) return;
-  console.log('[Auth] Bootstrap : création d\'un chantier auto pour le nouvel utilisateur');
-  const { data, error } = await withTimeout(
-    supa.from('sites')
-      .insert({ name: 'Mon chantier', owner_id: state.authUser.id })
-      .select('id, name, join_code')
-      .single(),
-    'bootstrap insert'
-  );
-  if (error) {
-    console.warn('[Auth] Bootstrap create site KO', error);
-    return;
-  }
-  console.log('[Auth] Bootstrap OK', data);
-  state.authSite = { id: data.id, name: data.name, joinCode: data.join_code, role: 'admin' };
-  saveActiveSiteId(data.id);
-  try { await withTimeout(refreshSiteInfo(), 'refreshSiteInfo post-bootstrap'); } catch (e) { console.warn(e); }
-}
-
-// Traduit les messages d'erreur Supabase en français pour l'utilisateur.
-function translateAuthError(err) {
-  if (!err) return 'Erreur inconnue';
-  const msg = String(err.message || err || '');
-  const map = [
-    [/User already registered/i,                       'Cet email est déjà inscrit. Connectez-vous plutôt.'],
-    [/Invalid login credentials/i,                     'Email ou mot de passe incorrect.'],
-    [/Email not confirmed/i,                           'Vérifiez votre email — un lien de confirmation vous a été envoyé.'],
-    [/Password should be at least 6 characters/i,      'Mot de passe trop court (6 caractères minimum).'],
-    [/Unable to validate email address: invalid format/i, 'Format email invalide.'],
-    [/For security purposes.*after \d+ seconds/i,      'Trop de tentatives, patientez 60 s avant de réessayer.'],
-    [/network|fetch/i,                                 'Pas de connexion réseau. Réessayez plus tard.'],
-    [/Email rate limit exceeded/i,                     'Quota d\'envoi d\'emails atteint. Réessayez dans quelques minutes.']
-  ];
-  for (const [re, fr] of map) if (re.test(msg)) return fr;
-  return msg || 'Erreur inconnue';
-}
-
-// Validation minimaliste d'un email côté client (n'autorise pas tout
-// mais filtre les fautes de frappe évidentes).
-function isValidEmail(s) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test((s || '').trim());
-}
-
-async function signInWithPassword(email, password) {
-  const supa = await loadSupabase();
-  if (!supa) throw new Error('Synchronisation non configurée');
-  if (!isValidEmail(email)) throw new Error('Format email invalide.');
-  if (!password) throw new Error('Mot de passe requis.');
-  const { error } = await supa.auth.signInWithPassword({ email: email.trim(), password });
-  if (error) throw new Error(translateAuthError(error));
-}
-// Retourne true si une session a été créée immédiatement (confirmation
-// email désactivée ou utilisateur déjà confirmé), false si l'email de
-// confirmation a été envoyé et l'utilisateur doit cliquer le lien.
-async function signUpWithPassword(email, password) {
-  const supa = await loadSupabase();
-  if (!supa) throw new Error('Synchronisation non configurée');
-  if (!isValidEmail(email)) throw new Error('Format email invalide.');
-  if ((password || '').length < 6) throw new Error('Mot de passe trop court (6 caractères minimum).');
-  const redirectTo = window.location.origin + window.location.pathname;
-  const { data, error } = await supa.auth.signUp({
-    email: email.trim(), password,
-    options: { emailRedirectTo: redirectTo }
-  });
-  if (error) throw new Error(translateAuthError(error));
-  return !!(data && data.session);
-}
-async function signOut() {
-  // Teardown LOCAL d'abord : la déconnexion doit fonctionner même si
-  // les appels Supabase plantent ou hang. Ainsi l'UI se met à jour
-  // immédiatement, et l'utilisateur peut se reconnecter ou fermer
-  // l'onglet sans rester coincé sur un bouton désactivé.
-  try { await withTimeout(teardownSyncRealtime(), 'teardown signOut'); } catch (_) {}
-  stopSyncPolling();
-  state.authUser = null;
-  state.authSite = null;
-  state.authSites = [];
-  saveActiveSiteId(null);     // Vide la persistance locale du chantier actif
-  state.syncTimestamp = 0;    // Reset du timestamp (sinon le prochain user pourrait push avec ancien ts)
-  state.syncStatus = 'idle';
-  renderCompte();
-  // Puis on tente de fermer la session côté serveur (best-effort,
-  // borné par un timeout). Si ça plante, le user est quand même
-  // déconnecté localement.
-  try {
-    const supa = await loadSupabase();
-    if (supa) await withTimeout(supa.auth.signOut(), 'auth.signOut');
-  } catch (e) {
-    console.warn('[Auth] signOut server-side KO (déconnexion locale effective)', e);
-  }
-  showToast('Déconnecté');
-}
-
-// Demande un email de réinitialisation de mot de passe. Supabase envoie
-// un email avec un lien qui ramène sur l'app avec un hash de tokens —
-// le SDK détecte ça et émet l'événement PASSWORD_RECOVERY qu'on intercepte
-// dans onAuthStateChange pour afficher le formulaire de nouveau mot de passe.
-async function requestPasswordReset(email) {
-  const supa = await loadSupabase();
-  if (!supa) throw new Error('Synchronisation non configurée');
-  if (!isValidEmail(email)) throw new Error('Format email invalide.');
-  const redirectTo = window.location.origin + window.location.pathname;
-  const { error } = await supa.auth.resetPasswordForEmail(email.trim(), { redirectTo });
-  if (error) throw new Error(translateAuthError(error));
-}
-
-// Met à jour le mot de passe de l'utilisateur courant (utilisé après
-// une récupération PASSWORD_RECOVERY).
-async function updatePasswordTo(newPassword) {
-  const supa = await loadSupabase();
-  if (!supa) throw new Error('Non configuré');
-  if ((newPassword || '').length < 6) throw new Error('Mot de passe trop court (6 caractères minimum).');
-  const { error } = await supa.auth.updateUser({ password: newPassword });
-  if (error) throw new Error(translateAuthError(error));
-}
-async function joinSiteWithCode(code) {
-  const supa = await loadSupabase();
-  if (!supa) throw new Error('Connexion à Supabase impossible — vérifiez votre réseau.');
-  if (!state.authUser) throw new Error('Vous devez être connecté pour rejoindre un chantier.');
-  const { data, error } = await withTimeout(
-    supa.rpc('join_site_with_code', { code: (code || '').trim().toUpperCase() }),
-    'join_site_with_code'
-  );
-  if (error) throw new Error('Code invalide : ' + (error.message || ''));
-  if (data) { state.authSite = null; saveActiveSiteId(data); }
-  // Toutes les étapes post-join sont bornées et tolérantes : le join
-  // est considéré réussi dès la RPC, le reste est best-effort.
-  try { await withTimeout(refreshSiteInfo(), 'refreshSiteInfo'); } catch (e) { console.warn(e); }
-  try { await withTimeout(doSyncPull(true),  'doSyncPull');       } catch (e) { console.warn(e); }
-  try { await withTimeout(setupSyncRealtime(), 'setupSyncRealtime'); } catch (e) { console.warn(e); }
-  try { startSyncPolling(); } catch (e) { console.warn(e); }
-}
-
-// Renomme le chantier actif (admin uniquement). RLS sites_update
-// vérifie le rôle.
-async function renameActiveSite(newName) {
-  const supa = await loadSupabase();
-  if (!supa) throw new Error('Connexion à Supabase impossible — vérifiez votre réseau.');
-  if (!state.authSite) throw new Error('Aucun chantier actif.');
-  if (state.authSite.role !== 'admin') throw new Error('Seul l\'admin peut renommer le chantier.');
-  const finalName = (newName || '').trim();
-  if (!finalName) throw new Error('Nom requis.');
-  const { error } = await withTimeout(
-    supa.from('sites').update({ name: finalName }).eq('id', state.authSite.id),
-    'rename site'
-  );
-  if (error) throw new Error('Renommage impossible : ' + (error.message || ''));
-  state.authSite.name = finalName;
-  const inList = state.authSites.find(s => s.id === state.authSite.id);
-  if (inList) inList.name = finalName;
-}
-
 function renderCompte() {
-  const root = document.getElementById('page-compte');
-  if (!root) return;
-  const loading       = document.getElementById('authloading');
-  const notConfigured = document.getElementById('authnotconfigured');
-  const loggedOut     = document.getElementById('authloggedout');
-  const loggedIn      = document.getElementById('authloggedin');
-  const noSite        = document.getElementById('authnosite');
-  const recovery      = document.getElementById('authrecovery');
-  if (!notConfigured || !loggedOut || !loggedIn) return;
-  // Tout cacher par défaut
-  if (loading) loading.hidden = true;
+  const notConfigured = document.getElementById('syncnotconfigured');
+  const ready         = document.getElementById('syncready');
+  if (!notConfigured || !ready) return;
+  if (!isSupabaseConfigured()) {
+    notConfigured.hidden = false;
+    ready.hidden = true;
+    return;
+  }
   notConfigured.hidden = true;
-  loggedOut.hidden = true;
-  if (noSite) noSite.hidden = true;
-  loggedIn.hidden = true;
-  if (recovery) recovery.hidden = true;
-  // 0. Pas de config Supabase → écran "non configuré"
-  if (!isSupabaseConfigured()) { notConfigured.hidden = false; return; }
-  // 1. Tant que la session n'a pas été vérifiée au moins une fois,
-  //    on affiche un loader. Empêche le flash « déconnecté » au boot.
-  if (state.authLoading) {
-    if (loading) loading.hidden = false;
-    else        loggedOut.hidden = false; // fallback si pas de div loading
-    return;
-  }
-  // 2. Reset de mot de passe en cours (revient d'un lien email)
-  if (document.body.dataset.authRecovery === '1' && recovery) {
-    recovery.hidden = false;
-    return;
-  }
-  // 3. Déconnecté
-  if (!state.authUser) { loggedOut.hidden = false; clearAuthError(); return; }
-  // Panneau « connecté » unifié : chantier actif (1 seul) + formulaire
-  // rejoindre par code en bas. Pas de liste, pas de création.
-  loggedIn.hidden = false;
-  document.getElementById('authinfoemail').textContent = state.authUser.email;
-  const activeBox    = document.getElementById('authactivesitebox');
-  const noActiveBox  = document.getElementById('authnoactivebox');
-  const forceSyncBtn = document.getElementById('authforcesync');
-  if (state.authSite) {
-    const nameEdit  = document.getElementById('authsitenameedit');
-    const renameBtn = document.getElementById('authrenamebtn');
-    if (nameEdit && document.activeElement !== nameEdit) nameEdit.value = state.authSite.name || '';
-    if (nameEdit)  nameEdit.disabled = state.authSite.role !== 'admin';
-    if (renameBtn) renameBtn.disabled = state.authSite.role !== 'admin';
-    if (renameBtn) renameBtn.title = state.authSite.role === 'admin' ? 'Enregistrer le nouveau nom' : 'Seul l\'admin peut renommer';
-    document.getElementById('authinfojoincode').textContent = state.authSite.joinCode;
-    document.getElementById('authinforole').textContent     = state.authSite.role === 'admin' ? 'Admin' : 'Membre';
-    if (activeBox)    activeBox.hidden = false;
-    if (noActiveBox)  noActiveBox.hidden = true;
-    if (forceSyncBtn) { forceSyncBtn.disabled = false; forceSyncBtn.title = ''; }
-  } else {
-    if (activeBox)    activeBox.hidden = true;
-    if (noActiveBox)  noActiveBox.hidden = false;
-    if (forceSyncBtn) { forceSyncBtn.disabled = true;  forceSyncBtn.title = 'Rejoignez un chantier d\'abord'; }
-  }
+  ready.hidden = false;
   updateSyncChip();
-  clearAuthError('authnositeerror');
-}
-
-// v0.80 : renderSitesList retiré — un seul chantier visible à la fois.
-function showAuthError(elId, message) {
-  const e = document.getElementById(elId);
-  if (!e) return;
-  e.hidden = false;
-  e.textContent = message || 'Erreur';
-}
-function clearAuthError(elId = 'autherror') {
-  const e = document.getElementById(elId);
-  if (e) { e.hidden = true; e.textContent = ''; }
 }
 
 // ====================================================================
-//   SYNCHRONISATION (étape 5) — push/pull state ↔ site_data
+//   SYNCHRONISATION — push/pull state ↔ site_data
 // ====================================================================
 // Stratégie : last-write-wins par timestamp. Push debouncé sur 1.5 s
 // après chaque save(). Pull initial au login + realtime via WebSocket
@@ -7532,7 +7172,7 @@ function getDeviceId() {
   return id;
 }
 const DEVICE_ID = getDeviceId();
-// Clés exclues de la synchro : préférences UI per-device + auth + sync
+// Clés exclues de la synchro : préférences UI per-device + état sync
 const SYNC_EXCLUDED_KEYS = new Set([
   'currentDate',                     // curseur "aujourd'hui" local
   'chartHidden', 'chartRange',       // filtres graphique perso
@@ -7540,7 +7180,6 @@ const SYNC_EXCLUDED_KEYS = new Set([
   'protoActivePlanId',               // plan en cours d'édition
   'protoFilterLotId', 'protoFilterStatuses', // filtres Proto
   'echeckinCollapsed',               // sections eCheckIn pliées/dépliées
-  'authUser', 'authSite',            // auth (regénéré par Supabase)
   'syncStatus', 'syncTimestamp', 'syncLastPulled',
   'protoPlan', 'protoPlanW', 'protoPlanH' // champs hérités migrés
 ]);
@@ -7552,7 +7191,7 @@ let syncPollTimer = null;
 let syncRealtimeChannel = null;
 
 function schedulePush() {
-  if (!isSupabaseConfigured() || !state.authSite || !state.authUser) return;
+  if (!isSupabaseConfigured()) return;
   clearTimeout(syncPushTimer);
   syncPushTimer = setTimeout(() => {
     withTimeout(doSyncPush(), 'push debounced').catch(err => console.warn('[Sync] push debounced KO', err));
@@ -7577,18 +7216,18 @@ function setSyncStatus(s) {
 }
 
 async function doSyncPush() {
-  if (!state.authSite || !state.authUser) return;
   const supa = await loadSupabase();
   if (!supa) return;
   setSyncStatus('syncing');
   try {
     const payload = getSyncablePayload();
     const updatedAt = new Date(state.syncTimestamp || Date.now()).toISOString();
-    const { error } = await supa.from('site_data').update({
+    // Upsert : crée la ligne au premier push, puis met à jour à chaque sauvegarde.
+    const { error } = await supa.from('site_data').upsert({
+      site_id: SHARED_SITE_ID,
       state: payload,
-      updated_at: updatedAt,
-      updated_by: state.authUser.id
-    }).eq('site_id', state.authSite.id);
+      updated_at: updatedAt
+    }, { onConflict: 'site_id' });
     if (error) throw error;
     _hasPendingPush = false;
     setSyncStatus('idle');
@@ -7599,15 +7238,14 @@ async function doSyncPush() {
 }
 
 async function doSyncPull(initial = false) {
-  if (!state.authSite || !state.authUser) return;
   const supa = await loadSupabase();
   if (!supa) return;
   setSyncStatus('syncing');
   try {
     const { data, error } = await supa
       .from('site_data')
-      .select('state, updated_at, updated_by')
-      .eq('site_id', state.authSite.id)
+      .select('state, updated_at')
+      .eq('site_id', SHARED_SITE_ID)
       .maybeSingle();
     if (error) throw error;
     if (data) {
@@ -7646,21 +7284,19 @@ async function doSyncPull(initial = false) {
 }
 
 async function setupSyncRealtime() {
-  if (!state.authSite || !state.authUser) return;
   const supa = await loadSupabase();
   if (!supa || typeof supa.channel !== 'function') return;
   await teardownSyncRealtime();
   try {
-    syncRealtimeChannel = supa.channel('site_data_' + state.authSite.id)
+    syncRealtimeChannel = supa.channel('site_data_shared')
       .on('postgres_changes', {
         event: 'UPDATE',
         schema: 'public',
         table: 'site_data',
-        filter: 'site_id=eq.' + state.authSite.id
+        filter: 'site_id=eq.' + SHARED_SITE_ID
       }, () => {
-        // Toujours pull : doSyncPull saute en interne si le state distant
-        // vient de cet appareil (via _sourceDeviceId). Ça gère
-        // correctement le cas « 2 appareils du même compte ».
+        // doSyncPull saute en interne si le state distant vient de cet
+        // appareil (via _sourceDeviceId), donc OK d'appeler à chaque event.
         doSyncPull();
       })
       .subscribe();
@@ -7683,7 +7319,7 @@ async function teardownSyncRealtime() {
 function startSyncPolling() {
   stopSyncPolling();
   syncPollTimer = setInterval(() => {
-    if (state.authSite && state.authUser && document.visibilityState === 'visible') {
+    if (document.visibilityState === 'visible' && isSupabaseConfigured()) {
       withTimeout(doSyncPull(), 'pull polling').catch(err => console.warn('[Sync] pull polling KO', err));
     }
   }, SYNC_POLL_INTERVAL_MS);
@@ -7696,8 +7332,8 @@ function stopSyncPolling() {
 // Force une synchro complète : push immédiat si des modifs locales
 // sont en attente, puis pull. Utilisé par le bouton « Forcer la sync ».
 async function forceFullSync() {
-  if (!state.authSite || !state.authUser) {
-    showToast('Connectez-vous d\'abord', 'error');
+  if (!isSupabaseConfigured()) {
+    showToast('Synchronisation non configurée', 'error');
     return;
   }
   clearTimeout(syncPushTimer);
@@ -7709,7 +7345,7 @@ async function forceFullSync() {
 }
 
 function updateSyncChip() {
-  const chip = document.getElementById('authsyncchip');
+  const chip = document.getElementById('syncchip');
   if (!chip) return;
   const labels = {
     idle:    { txt: '🟢 Synchronisé',           cls: 'is-idle' },
@@ -7725,18 +7361,18 @@ function updateSyncChip() {
 // Détecte le passage online/offline pour mettre à jour le chip et
 // déclencher un push des changements en attente
 window.addEventListener('online', () => {
-  if (state.authSite && state.syncStatus === 'offline') {
+  if (state.syncStatus === 'offline') {
     setSyncStatus('idle');
     schedulePush();
   }
 });
 window.addEventListener('offline', () => {
-  if (state.authSite) setSyncStatus('offline');
+  if (isSupabaseConfigured()) setSyncStatus('offline');
 });
 // Quand l'utilisateur revient sur l'onglet (focus), pull immédiat pour
 // rattraper les changements éventuels des coéquipiers.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && state.authSite && isSupabaseConfigured()) {
+  if (document.visibilityState === 'visible' && isSupabaseConfigured()) {
     withTimeout(doSyncPull(), 'pull visibility').catch(err => console.warn('[Sync] pull visibility KO', err));
   }
 });
@@ -7983,176 +7619,28 @@ function init() {
     });
   }
 
-  // ----- Auth (Compte) -----
-  const authSignIn = document.getElementById('authsigninbtn');
-  if (authSignIn) authSignIn.addEventListener('click', async () => {
-    clearAuthError();
-    const email = document.getElementById('authemail').value;
-    const pwd   = document.getElementById('authpassword').value;
-    const origText = authSignIn.textContent;
+  // ----- Sync (Compte) -----
+  const syncForceBtn = document.getElementById('syncforcebtn');
+  if (syncForceBtn) syncForceBtn.addEventListener('click', async () => {
+    const origText = syncForceBtn.textContent;
     try {
-      authSignIn.disabled = true;
-      authSignIn.textContent = '⏳ Connexion…';
-      // Timeout généreux (20s) pour les actions user — leur retard est
-      // visible (bouton disabled), pas besoin d'avorter trop vite.
-      await withTimeout(signInWithPassword(email, pwd), 'signIn', 20000);
-      await withTimeout(refreshAuthSession(), 'refresh session', 15000);
-      showToast('Connecté ✓');
-    } catch (e) {
-      showAuthError('autherror', e.message || 'Connexion échouée');
-    } finally {
-      authSignIn.disabled = false;
-      authSignIn.textContent = origText || 'Se connecter';
-    }
-  });
-  const authSignUp = document.getElementById('authsignupbtn');
-  if (authSignUp) authSignUp.addEventListener('click', async () => {
-    clearAuthError();
-    const email = document.getElementById('authemail').value;
-    const pwd   = document.getElementById('authpassword').value;
-    const origText = authSignUp.textContent;
-    try {
-      authSignUp.disabled = true;
-      authSignUp.textContent = '⏳ Création…';
-      const hasSession = await withTimeout(signUpWithPassword(email, pwd), 'signUp', 20000);
-      if (hasSession) {
-        await withTimeout(refreshAuthSession(), 'refresh session', 15000);
-        showToast('Compte créé — bienvenue !');
-      } else {
-        showAuthError('autherror', 'Compte créé. Cliquez sur le lien reçu par email pour activer votre compte.');
-      }
-    } catch (e) {
-      showAuthError('autherror', e.message || 'Inscription échouée');
-    } finally {
-      authSignUp.disabled = false;
-      authSignUp.textContent = origText || 'Créer un compte';
-    }
-  });
-  // Lien "Mot de passe oublié" → demande envoi de l'email de reset
-  const authForgot = document.getElementById('authforgotlink');
-  if (authForgot) authForgot.addEventListener('click', async (e) => {
-    e.preventDefault();
-    clearAuthError();
-    const email = document.getElementById('authemail').value;
-    if (!isValidEmail(email)) { showAuthError('autherror', 'Saisissez d\'abord votre email ci-dessus, puis cliquez à nouveau.'); return; }
-    try {
-      authForgot.style.pointerEvents = 'none';
-      await requestPasswordReset(email);
-      showAuthError('autherror', 'Email envoyé. Vérifiez votre boîte de réception pour le lien de réinitialisation.');
-    } catch (err) {
-      showAuthError('autherror', err.message);
-    } finally { setTimeout(() => { authForgot.style.pointerEvents = ''; }, 60000); }
-  });
-  // Formulaire "nouveau mot de passe" après clic sur le lien de reset
-  const authRecoverBtn = document.getElementById('authrecoverybtn');
-  if (authRecoverBtn) authRecoverBtn.addEventListener('click', async () => {
-    clearAuthError('authrecoveryerror');
-    const pwd1 = document.getElementById('authrecoverypwd').value;
-    const pwd2 = document.getElementById('authrecoverypwd2').value;
-    if (pwd1 !== pwd2) { showAuthError('authrecoveryerror', 'Les 2 mots de passe ne correspondent pas.'); return; }
-    try {
-      authRecoverBtn.disabled = true;
-      await updatePasswordTo(pwd1);
-      delete document.body.dataset.authRecovery;
-      await refreshAuthSession();
-      showToast('Mot de passe mis à jour');
-    } catch (e) {
-      showAuthError('authrecoveryerror', e.message);
-    } finally { authRecoverBtn.disabled = false; }
-  });
-  // v0.80 : plus de pill switcher ni de bouton « Créer ». Seul le bouton
-  // « Rejoindre » subsiste, et un bouton 💾 pour renommer le chantier
-  // actif (admin uniquement).
-  const authRename = document.getElementById('authrenamebtn');
-  if (authRename) authRename.addEventListener('click', async () => {
-    clearAuthError('authnositeerror');
-    const newName = document.getElementById('authsitenameedit').value;
-    const origText = authRename.textContent;
-    try {
-      authRename.disabled = true;
-      authRename.textContent = '⏳';
-      await renameActiveSite(newName);
-      renderCompte();
-      showToast('Chantier renommé ✓');
-    } catch (e) {
-      console.error('[Auth] Renommage KO', e);
-      showAuthError('authnositeerror', e.message || 'Renommage impossible');
-    } finally {
-      authRename.disabled = false;
-      authRename.textContent = origText || '💾';
-    }
-  });
-  const authJoin = document.getElementById('authjoinbtn');
-  if (authJoin) authJoin.addEventListener('click', async () => {
-    clearAuthError('authnositeerror');
-    const code = document.getElementById('authjoincode').value;
-    if (!code) { showAuthError('authnositeerror', 'Code requis'); return; }
-    const origText = authJoin.textContent;
-    try {
-      authJoin.disabled = true;
-      authJoin.textContent = '⏳ Connexion au chantier…';
-      await joinSiteWithCode(code);
-      document.getElementById('authjoincode').value = '';
-      renderCompte();
-      showToast('Chantier rejoint ✓');
-    } catch (e) {
-      showAuthError('authnositeerror', e.message || 'Code invalide');
-    } finally {
-      authJoin.disabled = false;
-      authJoin.textContent = origText || 'Rejoindre';
-    }
-  });
-  const authSignOut = document.getElementById('authsignoutbtn');
-  if (authSignOut) authSignOut.addEventListener('click', async () => {
-    const origText = authSignOut.textContent;
-    try {
-      authSignOut.disabled = true;
-      authSignOut.textContent = '⏳ Déconnexion…';
-      await withTimeout(signOut(), 'signOut', 15000);
-    } catch (e) {
-      console.error('[Auth] signOut KO', e);
-      showToast('Erreur déconnexion : ' + (e.message || ''), 'error');
-    } finally {
-      authSignOut.disabled = false;
-      authSignOut.textContent = origText || 'Se déconnecter';
-    }
-  });
-  const authForceSync = document.getElementById('authforcesync');
-  if (authForceSync) authForceSync.addEventListener('click', async () => {
-    try {
-      authForceSync.disabled = true;
+      syncForceBtn.disabled = true;
+      syncForceBtn.textContent = '⏳ Synchronisation…';
       await forceFullSync();
     } catch (e) {
       showToast('Sync KO : ' + (e.message || 'erreur'), 'error');
-    } finally { authForceSync.disabled = false; }
+    } finally {
+      syncForceBtn.disabled = false;
+      syncForceBtn.textContent = origText || '🔄 Forcer la synchronisation';
+    }
   });
-  const authCopyCode = document.getElementById('authcopycode');
-  if (authCopyCode) authCopyCode.addEventListener('click', async () => {
-    const code = state.authSite && state.authSite.joinCode;
-    if (!code) return;
-    try {
-      await navigator.clipboard.writeText(code);
-      showToast('Code copié');
-    } catch (_) { /* l'utilisateur peut sélectionner manuellement */ }
-  });
-  // Restaure la session si déjà connecté + tente de charger le SDK.
-  // Filet de sécurité : si le SDK ne répond pas en 10 s (CDN bloqué,
-  // offline complet…), on sort du mode loading pour ne pas bloquer
-  // l'utilisateur sur un spinner infini.
+  renderCompte();
   if (isSupabaseConfigured()) {
-    const safetyTimeout = setTimeout(() => {
-      if (state.authLoading) {
-        console.warn('[Auth] Timeout 10s : abandon du chargement SDK Supabase');
-        state.authLoading = false;
-        renderCompte();
-      }
-    }, 10000);
-    refreshAuthSession()
-      .catch((err) => console.error('Auth init KO', err))
-      .finally(() => clearTimeout(safetyTimeout));
-  } else {
-    state.authLoading = false;
-    renderCompte();
+    (async () => {
+      try { await withTimeout(doSyncPull(true), 'initial pull', 15000); } catch (e) { console.warn('[Sync] initial pull KO', e); }
+      try { await withTimeout(setupSyncRealtime(), 'setupSyncRealtime'); } catch (e) { console.warn(e); }
+      try { startSyncPolling(); } catch (e) { console.warn(e); }
+    })();
   }
 
   // Service worker : enregistrement + rechargement auto à chaque mise à jour
