@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.83';
+const APP_VERSION = '0.84';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -257,11 +257,6 @@ function getZoneOuvrages(zoneId) {
   return list
     .map(o => ({ setup: getSetup(o.setupId), quantity: o.quantity || 0 }))
     .filter(o => o.setup);
-}
-// Premier ouvrage (compat. pour le code qui n'a pas encore conscience du multi)
-function getZoneSetup(zoneId) {
-  const list = getZoneOuvrages(zoneId);
-  return list.length > 0 ? list[0].setup : null;
 }
 function zoneIsTaskBearing(zoneId) {
   return getZoneOuvrages(zoneId).length > 0;
@@ -2668,9 +2663,6 @@ function buildExpiryReport() {
     html: blocksHtml.length > 0 ? blocksHtml.join('<br><br>') : ''
   };
 }
-// Wrapper historique (utilisé dans certains anciens tests)
-function buildExpiryReportText() { return buildExpiryReport().text; }
-
 async function copyExpiryReport() {
   const { text, html } = buildExpiryReport();
   if (!text) {
@@ -3313,13 +3305,6 @@ function fmtFR(dateStr) {
   const d = new Date(dateStr + 'T00:00:00');
   return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
 }
-function daysUntil(dateStr, today = new Date()) {
-  const d = new Date(dateStr + 'T00:00:00');
-  const t = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  return Math.round((d - t) / 86400000);
-}
-
-
 // ---------- Sub-tabs ----------
 function switchSubPage(group, name) {
   const buttons = Array.from(document.querySelectorAll(`.seg-btn[data-group="${group}"]`));
@@ -3472,20 +3457,6 @@ function getAllArticleNames() {
   return Array.from(set.values()).sort((a, b) => a.localeCompare(b, 'fr'));
 }
 
-// Consommation moyenne par jour sur la base des inventaires successifs.
-// Entre deux inventaires (qty_prev → qty_cur), on retire de cur le total
-// des réceptions intercalées (dates strictement entre les deux
-// inventaires) puis on rapporte le tout au nombre de jours écoulés.
-// Renvoie null si moins de 2 inventaires existent ou si aucune fenêtre
-// utile (≥ 1 jour) n'a pu être trouvée.
-function daysBetweenISO(d1, d2) {
-  return Math.round((Date.parse(d2 + 'T00:00:00') - Date.parse(d1 + 'T00:00:00')) / 86400000);
-}
-function addDaysISO(iso, n) {
-  const d = fromISO(iso);
-  d.setDate(d.getDate() + n);
-  return toISO(d);
-}
 // Jours ouvrés (lun-ven) strictement après d1 et jusqu'à d2 inclus.
 // Une semaine pleine entre lundi et lundi suivant → 5 jours.
 function businessDaysBetweenISO(d1, d2) {
