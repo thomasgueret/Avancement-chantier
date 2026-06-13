@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.97';
+const APP_VERSION = '0.98';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -3716,18 +3716,19 @@ function addCRWeek(companyId) {
     const newSecs = {};
     for (const secKey of Object.keys(prevSecs)) {
       if (!Array.isArray(prevSecs[secKey])) continue;
-      // Copie verbatim sauf l'ID. crOrigin préservé pour conserver la
-      // trace du CR où la tâche est née ; échéance et responsable
-      // copiés tels quels (à terme on ne reportera que les non-Faite).
-      newSecs[secKey] = prevSecs[secKey].map(e => ({
-        id: uid(),
-        text: e.text || '',
-        crOrigin: e.crOrigin || prev.label,
-        echeance: e.echeance || null,
-        responsable: e.responsable || null,
-        done: !!e.done  // Le statut « Faite » est copié — à terme on pourra
-                        // décider de ne reporter que les non-Faite.
-      }));
+      // Ne propage que les tâches NON cochées « Faite ». Les notes Faite
+      // restent visibles dans le CR d'origine mais ne polluent plus les
+      // CR suivants. crOrigin préservé pour tracer la naissance d'une tâche.
+      newSecs[secKey] = prevSecs[secKey]
+        .filter(e => !e.done)
+        .map(e => ({
+          id: uid(),
+          text: e.text || '',
+          crOrigin: e.crOrigin || prev.label,
+          echeance: e.echeance || null,
+          responsable: e.responsable || null,
+          done: false
+        }));
     }
     state.crEntries[companyId][newWeek.id] = newSecs;
   }
