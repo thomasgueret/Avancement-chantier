@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.94';
+const APP_VERSION = '0.95';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -3836,77 +3836,145 @@ async function exportCRToPDF(companyId, weekId) {
   pdf.line(MARGIN, y, PAGE_W - MARGIN, y);
   y += 8;
 
-  // ----- Rubriques numérotées -----
+  // ----- Rubriques en tableaux -----
+  // Bandeau orange + tableau 4 colonnes (CR | Tâche | Échéance | Entreprise).
+  // Pour Avancements et Administratif, on garde au-dessous l'aperçu riche
+  // (barres / docs périmés) si l'interrupteur dans l'app est sur ON.
+  const ORANGE = [237, 108, 2];
+  const HEADER_GREY = [232, 232, 232];
+  const ALT_ROW = [248, 248, 248];
+  const colW = { cr: 18, task: 92, ech: 22, ent: CONTENT_W - 18 - 92 - 22 }; // = 42
+  const colX = {
+    cr:  MARGIN,
+    task: MARGIN + colW.cr,
+    ech:  MARGIN + colW.cr + colW.task,
+    ent:  MARGIN + colW.cr + colW.task + colW.ech
+  };
+  const fmtEch = (iso) => {
+    const [yy, mm, dd] = iso.split('-');
+    return dd + '/' + mm + '/' + yy.slice(2);
+  };
+  const colorForEch = (iso) => {
+    if (!iso) return { rgb: [60,60,60], bold: false };
+    const target = new Date(iso + 'T00:00:00');
+    const ref = new Date(); ref.setHours(0,0,0,0);
+    const diff = Math.round((target - ref) / 86400000);
+    if (diff < 0)  return { rgb: [183, 28, 28], bold: true };  // dépassé → rouge gras
+    if (diff <= 7) return { rgb: [183, 80, 8],  bold: true };  // imminent → orange gras
+    return { rgb: [60, 60, 60], bold: false };
+  };
+  const respLabelFor = (e) =>
+    (e.responsable === null || e.responsable === 'BBGO' || !e.responsable)
+      ? CR_INTERNAL_LABEL
+      : (state.companies.find(c => c.id === e.responsable)?.name || CR_INTERNAL_LABEL);
+
+  const drawSectionBanner = (num, label) => {
+    ensureSpace(7);
+    pdf.setFillColor(...ORANGE);
+    pdf.rect(MARGIN, y, CONTENT_W, 6.5, 'F');
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(11); pdf.setTextColor(255);
+    pdf.text(`${num}.  ${label.toUpperCase()}`, MARGIN + 3, y + 4.5);
+    pdf.setTextColor(0);
+    y += 6.5;
+  };
+  const drawTableHeader = () => {
+    ensureSpace(6);
+    pdf.setFillColor(...HEADER_GREY);
+    pdf.rect(MARGIN, y, CONTENT_W, 5.5, 'F');
+    pdf.setDrawColor(180); pdf.setLineWidth(0.15);
+    pdf.line(colX.task, y, colX.task, y + 5.5);
+    pdf.line(colX.ech,  y, colX.ech,  y + 5.5);
+    pdf.line(colX.ent,  y, colX.ent,  y + 5.5);
+    pdf.line(MARGIN, y, MARGIN + CONTENT_W, y);
+    pdf.line(MARGIN, y + 5.5, MARGIN + CONTENT_W, y + 5.5);
+    pdf.line(MARGIN, y, MARGIN, y + 5.5);
+    pdf.line(MARGIN + CONTENT_W, y, MARGIN + CONTENT_W, y + 5.5);
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8.5); pdf.setTextColor(50);
+    pdf.text('CR',         colX.cr  + colW.cr / 2,  y + 3.7, { align: 'center' });
+    pdf.text('Tâche',      colX.task + 2,           y + 3.7);
+    pdf.text('Échéance',   colX.ech + colW.ech / 2, y + 3.7, { align: 'center' });
+    pdf.text('Entreprise', colX.ent + 2,            y + 3.7);
+    pdf.setTextColor(0);
+    y += 5.5;
+  };
+  const drawTableRow = (e, isAlt) => {
+    const padX = 1.8, padY = 1.6, lineH = 3.4;
+    const taskText = (e.text || '').trim() || '(sans texte)';
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9);
+    const taskLines = pdf.splitTextToSize(taskText, colW.task - padX * 2);
+    const respText = respLabelFor(e);
+    const respLines = pdf.splitTextToSize(respText, colW.ent - padX * 2);
+    const nLines = Math.max(taskLines.length, respLines.length, 1);
+    const rowH = nLines * lineH + padY * 2;
+    ensureSpace(rowH);
+    if (isAlt) {
+      pdf.setFillColor(...ALT_ROW);
+      pdf.rect(MARGIN, y, CONTENT_W, rowH, 'F');
+    }
+    pdf.setDrawColor(180); pdf.setLineWidth(0.15);
+    pdf.line(MARGIN, y + rowH, MARGIN + CONTENT_W, y + rowH);
+    pdf.line(MARGIN, y, MARGIN, y + rowH);
+    pdf.line(colX.task, y, colX.task, y + rowH);
+    pdf.line(colX.ech,  y, colX.ech,  y + rowH);
+    pdf.line(colX.ent,  y, colX.ent,  y + rowH);
+    pdf.line(MARGIN + CONTENT_W, y, MARGIN + CONTENT_W, y + rowH);
+    // CR origin (centré, gras léger)
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(40);
+    pdf.text(e.crOrigin || '—', colX.cr + colW.cr / 2, y + padY + 2.6, { align: 'center' });
+    // Tâche (multi-ligne)
+    pdf.setFont('helvetica', 'normal'); pdf.setTextColor(20);
+    for (let i = 0; i < taskLines.length; i++) {
+      pdf.text(taskLines[i], colX.task + padX, y + padY + 2.6 + i * lineH);
+    }
+    // Échéance (couleur selon proximité)
+    const ech = colorForEch(e.echeance);
+    pdf.setFont('helvetica', ech.bold ? 'bold' : 'normal');
+    pdf.setTextColor(...ech.rgb);
+    pdf.text(e.echeance ? fmtEch(e.echeance) : '—', colX.ech + colW.ech / 2, y + padY + 2.6, { align: 'center' });
+    pdf.setTextColor(0);
+    // Entreprise (multi-ligne si nom long)
+    pdf.setFont('helvetica', 'normal'); pdf.setTextColor(20);
+    for (let i = 0; i < respLines.length; i++) {
+      pdf.text(respLines[i], colX.ent + padX, y + padY + 2.6 + i * lineH);
+    }
+    pdf.setTextColor(0);
+    y += rowH;
+  };
+  const drawEmptyTableRow = () => {
+    const rowH = 6;
+    ensureSpace(rowH);
+    pdf.setDrawColor(180); pdf.setLineWidth(0.15);
+    pdf.rect(MARGIN, y, CONTENT_W, rowH);
+    pdf.setFont('helvetica', 'italic'); pdf.setFontSize(9); pdf.setTextColor(140);
+    pdf.text('Aucune tâche pour cette rubrique', PAGE_W / 2, y + 4, { align: 'center' });
+    pdf.setTextColor(0);
+    y += rowH;
+  };
+
   let secNum = 0;
   for (const sec of CR_SECTIONS) {
     secNum++;
     const entries = getCREntries(companyId, weekId, sec.key);
     const showAvancPreview = sec.key === 'avancement' && isCRAvancementVisible(companyId, weekId);
     const showAdminPreview = sec.key === 'admin'      && isCRAdminVisible(companyId, weekId);
-    let isEmpty = entries.length === 0 && !showAvancPreview && !showAdminPreview;
-    if (sec.key === 'avancement' && showAvancPreview) {
-      const data = isLatest ? computeAvancementForCompany(companyId) : (Array.isArray(week.avancementSnapshot) ? week.avancementSnapshot : computeAvancementForCompany(companyId));
-      isEmpty = isEmpty && (!data || data.length === 0 || !data.some(l => l.tasks.length > 0));
-    }
-    if (sec.key === 'admin' && showAdminPreview) {
-      const data = isLatest ? computeAdminAlertsForCompany(companyId) : (Array.isArray(week.adminSnapshot) ? week.adminSnapshot : computeAdminAlertsForCompany(companyId));
-      isEmpty = isEmpty && (!data || data.length === 0);
-    }
 
-    // Titre rubrique
-    ensureSpace(10);
-    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(12); pdf.setTextColor(20);
-    pdf.text(`${secNum}.  ${sec.label.toUpperCase()}`, MARGIN, y);
-    y += 5;
-    pdf.setDrawColor(180); pdf.setLineWidth(0.2);
-    pdf.line(MARGIN, y, PAGE_W - MARGIN, y);
-    y += 4;
-    pdf.setTextColor(0);
-
-    if (isEmpty) {
-      pdf.setFont('helvetica', 'italic'); pdf.setFontSize(10); pdf.setTextColor(140);
-      ensureSpace(6);
-      pdf.text('— Néant', MARGIN + 4, y);
-      pdf.setTextColor(0);
-      y += 8;
-      continue;
+    // Bandeau orange + tableau de tâches
+    drawSectionBanner(secNum, sec.label);
+    drawTableHeader();
+    if (entries.length === 0) {
+      drawEmptyTableRow();
+    } else {
+      let i = 0;
+      for (const e of entries) { drawTableRow(e, i % 2 === 1); i++; }
     }
 
-    // Notes libres (textareas) avec metadata (CR origine / échéance / responsable)
-    for (const e of entries) {
-      const text = (e.text || '').trim();
-      if (!text && !e.echeance && !e.responsable) continue;
-      // Puce + texte indenté pour que les retours à la ligne s'alignent.
-      ensureSpace(5);
-      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10);
-      pdf.text('•', MARGIN + 3, y);
-      wrapWrite(text || '(sans texte)', MARGIN + 8, CONTENT_W - 8, { size: 10 });
-      // Ligne meta sous le texte : « ↳ CR 3 · échéance 15/06/26 · BBGO »
-      const metaParts = [];
-      if (e.crOrigin) metaParts.push(e.crOrigin);
-      if (e.echeance) {
-        const [yy, mm, dd] = e.echeance.split('-');
-        metaParts.push('échéance ' + dd + '/' + mm + '/' + yy.slice(2));
-      }
-      const respLabel = e.responsable === null || e.responsable === 'BBGO' || !e.responsable
-        ? CR_INTERNAL_LABEL
-        : (state.companies.find(c => c.id === e.responsable)?.name || CR_INTERNAL_LABEL);
-      metaParts.push(respLabel);
-      const metaTxt = '↳ ' + metaParts.join(' · ');
-      ensureSpace(4);
-      pdf.setFont('helvetica', 'italic'); pdf.setFontSize(8.5); pdf.setTextColor(110);
-      pdf.text(metaTxt, MARGIN + 8, y);
-      pdf.setTextColor(0);
-      y += 4.5;
-    }
-
-    // Aperçu Avancements
-    if (sec.key === 'avancement' && showAvancPreview) {
+    // Aperçu Avancements (conditionné à l'interrupteur app)
+    if (showAvancPreview) {
       const lotsAgg = isLatest
         ? computeAvancementForCompany(companyId)
         : (Array.isArray(week.avancementSnapshot) ? week.avancementSnapshot : computeAvancementForCompany(companyId));
       if (lotsAgg && lotsAgg.length > 0 && lotsAgg.some(l => l.tasks.length > 0)) {
-        if (entries.length > 0) y += 2;
+        y += 3;
         for (const lot of lotsAgg) {
           if (!lot.tasks || lot.tasks.length === 0) continue;
           let lotTotal = 0, lotDone = 0;
@@ -3928,7 +3996,6 @@ async function exportCRToPDF(companyId, weekId) {
             pdf.text(fmtRecapVolume(task.type, task.total), PAGE_W - MARGIN, y, { align: 'right' });
             pdf.setTextColor(0); pdf.setFontSize(10);
             y += 2;
-            // Barre 3-segments
             const barX = MARGIN + 8;
             const barW = CONTENT_W - 8;
             const barH = 2.4;
@@ -3943,11 +4010,7 @@ async function exportCRToPDF(companyId, weekId) {
             if (wDone  > 0) { pdf.setFillColor(46, 125, 50);  pdf.rect(bx, y, wDone,  barH, 'F'); bx += wDone;  }
             if (wDoing > 0) { pdf.setFillColor(237, 108, 2);  pdf.rect(bx, y, wDoing, barH, 'F'); bx += wDoing; }
             if (wTodo  > 0) { pdf.setFillColor(211, 47, 47);  pdf.rect(bx, y, wTodo,  barH, 'F'); }
-            // Le baseline de la ligne légende doit être *en-dessous* de la
-            // barre — sinon la pastille et le texte chevauchent la barre.
-            // baseline_legend = bottom_bar + interligne (3.5 mm)
             y += barH + 3.5;
-            // Légende
             pdf.setFontSize(8.5);
             let legX = MARGIN + 8;
             const labels = { done: 'Réalisée', doing: 'En cours', todo: 'À faire' };
@@ -3955,8 +4018,6 @@ async function exportCRToPDF(companyId, weekId) {
             for (const k of ['done', 'doing', 'todo']) {
               if (task.pct[k] <= 0.01) continue;
               pdf.setFillColor(...palette[k]);
-              // Pastille verticalement centrée sur la hauteur des x-heights
-              // de la ligne légende (~0.6 mm sous le baseline).
               pdf.circle(legX, y - 1.0, 0.9, 'F');
               pdf.setFont('helvetica', 'bold');
               pdf.text(`${Math.round(task.pct[k])} %`, legX + 2.2, y);
@@ -3968,7 +4029,6 @@ async function exportCRToPDF(companyId, weekId) {
               legX += 2.2 + pctTxtW + 1.5 + lblW + 7;
             }
             pdf.setFontSize(10);
-            // Espace inter-tâches confortable (3.5 mm)
             y += 3.5;
           }
           y += 1;
@@ -3976,13 +4036,13 @@ async function exportCRToPDF(companyId, weekId) {
       }
     }
 
-    // Aperçu Administratif
-    if (sec.key === 'admin' && showAdminPreview) {
+    // Aperçu Administratif (conditionné à l'interrupteur app)
+    if (showAdminPreview) {
       const data = isLatest
         ? computeAdminAlertsForCompany(companyId)
         : (Array.isArray(week.adminSnapshot) ? week.adminSnapshot : computeAdminAlertsForCompany(companyId));
       if (data && data.length > 0) {
-        if (entries.length > 0) y += 2;
+        y += 3;
         for (const w of data) {
           ensureSpace(6);
           pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10);
@@ -3994,7 +4054,6 @@ async function exportCRToPDF(companyId, weekId) {
             pdf.setFontSize(9.5);
             if (it.isExpired) pdf.setTextColor(183, 28, 28);
             else pdf.setTextColor(70);
-            // Puce alignée gauche, texte en wrap
             pdf.text('•', MARGIN + 9, y);
             const lines = pdf.splitTextToSize(it.text, CONTENT_W - 16);
             for (let li = 0; li < lines.length; li++) {
@@ -4010,7 +4069,7 @@ async function exportCRToPDF(companyId, weekId) {
       }
     }
 
-    y += 4;
+    y += 6;
   }
 
   addFooter();
