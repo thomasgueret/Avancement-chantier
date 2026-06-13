@@ -3552,3 +3552,55 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   font-size: 13px; color: var(--text);
   font-family: inherit;
 }
+
+/* ----- CR : second slider (semaines) + bouton "+ Nouvelle semaine" ----- */
+.cr-week-slider {
+  display: flex; gap: 6px;
+  overflow-x: auto; overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px;
+  margin: -2px -4px 8px;
+  align-items: center;
+}
+.cr-week-slider::-webkit-scrollbar { display: none; }
+.cr-week-chip {
+  scroll-snap-align: start;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 12px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  white-space: nowrap;
+}
+.cr-week-chip.is-active {
+  background: var(--text); border-color: var(--text); color: white;
+}
+.cr-week-add {
+  flex: 0 0 auto;
+  border: 1px dashed var(--accent);
+  background: transparent;
+  color: var(--accent);
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 12px; font-weight: 700;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  white-space: nowrap;
+}
+.cr-week-add:active { background: var(--accent-soft); }
+
+/* Sous-titre « — CR N » dans le nom d'entreprise de la carte */
+.cr-company-week {
+  font-size: 12px; font-weight: 600;
+  color: var(--text-3);
+  margin-left: 2px;
+}
+
+/* Conteneur de l'aperçu Avancements sous les notes libres */
+.cr-avanc-preview { margin-top: 8px; }

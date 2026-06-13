@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.88';
+const APP_VERSION = '0.89';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -84,11 +84,16 @@ const state = {
   //    coords:{cx,cy} | {x1,y1,x2,y2} | {x,y,w,h},
   //    lotId, title, date, status:'todo'|'doing'|'done' }]
   protoShapes: [],
-  // CR (comptes-rendus) : entrées textuelles par entreprise et par rubrique
-  crEntries: {},             // { [companyId]: { [sectionKey]: [{ id, text }] } }
-  crCollapsed: {},           // { [companyId]: { _company: bool, [sectionKey]: bool } }
+  // CR (comptes-rendus) : un CR par semaine et par entreprise.
+  // crEntries[companyId][weekId][sectionKey] = [{ id, text }]
+  // crCollapsed[companyId][weekId][sectionKey | '_company'] = bool
+  // crAvancementVisible[companyId][weekId] = bool (défaut true)
+  crEntries: {},
+  crCollapsed: {},
   crSelectedCompanyId: null, // entreprise affichée dans le slider CR (UI per-device)
-  crAvancementVisible: {},   // { [companyId]: bool } — afficher l'aperçu Avancements (défaut true)
+  crAvancementVisible: {},
+  crWeeks: {},               // { [companyId]: [{ id, label, createdAt }] }
+  crSelectedWeekId: {},      // { [companyId]: weekId } — semaine active (UI per-device)
   // Synchronisation (modèle simplifié : un seul jeu partagé via Supabase)
   syncStatus: 'idle',        // 'idle' | 'syncing' | 'error' | 'offline'
   syncTimestamp: 0,          // ms epoch — dernier changement local connu
@@ -159,6 +164,7 @@ function load() {
     if (data.crEntries   && typeof data.crEntries   === 'object') state.crEntries   = data.crEntries;
     if (data.crCollapsed && typeof data.crCollapsed === 'object') state.crCollapsed = data.crCollapsed;
     if (data.crAvancementVisible && typeof data.crAvancementVisible === 'object') state.crAvancementVisible = data.crAvancementVisible;
+    if (data.crWeeks && typeof data.crWeeks === 'object') state.crWeeks = data.crWeeks;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
     if (typeof data.syncTimestamp === 'number') state.syncTimestamp = data.syncTimestamp;
@@ -175,6 +181,7 @@ function load() {
   migrateConsoProductsFromEntries();
   migrateEOTPsFromConsoEntries();
   migrateProtoPlansFromLegacy();
+  migrateCRState();
 }
 function save() {
   const data = {
@@ -213,6 +220,7 @@ function save() {
     crEntries: state.crEntries,
     crCollapsed: state.crCollapsed,
     crAvancementVisible: state.crAvancementVisible,
+    crWeeks: state.crWeeks,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange,
     syncTimestamp: state.syncTimestamp
@@ -3388,6 +3396,8 @@ function deleteCompany(id) {
   delete state.crEntries[id];
   delete state.crCollapsed[id];
   delete state.crAvancementVisible[id];
+  delete state.crWeeks[id];
+  delete state.crSelectedWeekId[id];
   if (state.crSelectedCompanyId === id) state.crSelectedCompanyId = null;
   // Libère les lots qui pointaient sur cette entreprise (lien rompu)
   for (const lot of getWorkBatches()) if (lot.companyId === id) lot.companyId = null;
@@ -3552,7 +3562,8 @@ function fmtStockQty(n) {
 }
 
 // ====================================================================
-//   CR (comptes-rendus) — un compte-rendu par entreprise, 7 rubriques fixes
+//   CR (comptes-rendus) — un CR par semaine et par entreprise.
+//   Structure : crEntries[companyId][weekId][sectionKey] = [{ id, text }]
 // ====================================================================
 const CR_SECTIONS = [
   { key: 'header',       label: 'En-tête' },
@@ -3563,54 +3574,167 @@ const CR_SECTIONS = [
   { key: 'execution',    label: 'Exécution' },
   { key: 'reclamations', label: 'Réclamations' }
 ];
+const CR_SECTION_KEYS = new Set(CR_SECTIONS.map(s => s.key));
 
-function getCREntries(companyId, sectionKey) {
+// Migre les anciennes structures CR (sans niveau « semaine ») vers la
+// nouvelle. Idempotent : ne fait rien si déjà au bon format. Appelée
+// au load et avant chaque render.
+function migrateCRState() {
+  if (!state.crEntries)           state.crEntries           = {};
+  if (!state.crCollapsed)         state.crCollapsed         = {};
+  if (!state.crAvancementVisible) state.crAvancementVisible = {};
+  if (!state.crWeeks)             state.crWeeks             = {};
+  if (!state.crSelectedWeekId)    state.crSelectedWeekId    = {};
+  // Pour chaque entreprise qui a une donnée CR : s'assure qu'au moins une
+  // semaine existe ; si l'ancien format (clés = sectionKey) est détecté,
+  // tout est replié sous CR 1.
+  const allCompanyIds = new Set([
+    ...Object.keys(state.crEntries),
+    ...Object.keys(state.crCollapsed),
+    ...Object.keys(state.crAvancementVisible)
+  ]);
+  for (const companyId of allCompanyIds) {
+    const ensureWeek = () => {
+      if (!state.crWeeks[companyId] || state.crWeeks[companyId].length === 0) {
+        const w = { id: 'wk_' + uid(), label: 'CR 1', createdAt: Date.now() };
+        state.crWeeks[companyId] = [w];
+        return w.id;
+      }
+      return state.crWeeks[companyId][0].id;
+    };
+    // crEntries : ancien format = { [sectionKey]: [...] }
+    const entries = state.crEntries[companyId];
+    if (entries && typeof entries === 'object') {
+      const someSec = Object.keys(entries).find(k => CR_SECTION_KEYS.has(k));
+      if (someSec && Array.isArray(entries[someSec])) {
+        const wid = ensureWeek();
+        state.crEntries[companyId] = { [wid]: entries };
+      }
+    }
+    // crCollapsed : ancien format = { _company, [sectionKey]: bool }
+    const collapsed = state.crCollapsed[companyId];
+    if (collapsed && typeof collapsed === 'object') {
+      const hasOld = Object.keys(collapsed).some(k => k === '_company' || CR_SECTION_KEYS.has(k));
+      if (hasOld) {
+        const wid = ensureWeek();
+        state.crCollapsed[companyId] = { [wid]: collapsed };
+      }
+    }
+    // crAvancementVisible : ancien format = bool direct
+    const av = state.crAvancementVisible[companyId];
+    if (typeof av === 'boolean') {
+      const wid = ensureWeek();
+      state.crAvancementVisible[companyId] = { [wid]: av };
+    }
+  }
+}
+
+function getCRWeeks(companyId) {
+  let weeks = state.crWeeks[companyId];
+  if (!Array.isArray(weeks) || weeks.length === 0) {
+    weeks = [{ id: 'wk_' + uid(), label: 'CR 1', createdAt: Date.now() }];
+    state.crWeeks[companyId] = weeks;
+  }
+  return weeks;
+}
+function getCRSelectedWeek(companyId) {
+  const weeks = getCRWeeks(companyId);
+  const wantedId = state.crSelectedWeekId[companyId];
+  if (wantedId) {
+    const found = weeks.find(w => w.id === wantedId);
+    if (found) return found;
+  }
+  // Par défaut : la dernière (la plus récente)
+  return weeks[weeks.length - 1];
+}
+function setCRSelectedWeek(companyId, weekId) {
+  state.crSelectedWeekId[companyId] = weekId;
+  save();
+}
+function addCRWeek(companyId) {
+  const weeks = getCRWeeks(companyId);
+  const prev = weeks[weeks.length - 1];
+  const newWeek = { id: 'wk_' + uid(), label: 'CR ' + (weeks.length + 1), createdAt: Date.now() };
+  weeks.push(newWeek);
+  // Recopie intégrale du contenu de la semaine précédente vers la nouvelle.
+  // À terme : on ne transmettra que les tâches non cochées « Faite » — mais
+  // pour l'instant, full copy pour ne perdre aucune info.
+  if (state.crEntries[companyId] && state.crEntries[companyId][prev.id]) {
+    const prevSecs = state.crEntries[companyId][prev.id];
+    const newSecs = {};
+    for (const secKey of Object.keys(prevSecs)) {
+      if (!Array.isArray(prevSecs[secKey])) continue;
+      newSecs[secKey] = prevSecs[secKey].map(e => ({ id: uid(), text: e.text || '' }));
+    }
+    state.crEntries[companyId][newWeek.id] = newSecs;
+  }
+  // Recopie l'état des collapses
+  if (state.crCollapsed[companyId] && state.crCollapsed[companyId][prev.id]) {
+    state.crCollapsed[companyId][newWeek.id] = { ...state.crCollapsed[companyId][prev.id] };
+  }
+  // Recopie l'état de visibilité de l'aperçu Avancements
+  if (state.crAvancementVisible[companyId] && state.crAvancementVisible[companyId][prev.id] === false) {
+    if (!state.crAvancementVisible[companyId]) state.crAvancementVisible[companyId] = {};
+    state.crAvancementVisible[companyId][newWeek.id] = false;
+  }
+  state.crSelectedWeekId[companyId] = newWeek.id;
+  save();
+  renderCR();
+}
+
+function getCREntries(companyId, weekId, sectionKey) {
   const c = state.crEntries[companyId];
-  if (!c || !Array.isArray(c[sectionKey])) return [];
-  return c[sectionKey];
+  if (!c || !c[weekId] || !Array.isArray(c[weekId][sectionKey])) return [];
+  return c[weekId][sectionKey];
 }
-function ensureCRBucket(companyId, sectionKey) {
+function ensureCRBucket(companyId, weekId, sectionKey) {
   if (!state.crEntries[companyId]) state.crEntries[companyId] = {};
-  if (!Array.isArray(state.crEntries[companyId][sectionKey])) state.crEntries[companyId][sectionKey] = [];
-  return state.crEntries[companyId][sectionKey];
+  if (!state.crEntries[companyId][weekId]) state.crEntries[companyId][weekId] = {};
+  if (!Array.isArray(state.crEntries[companyId][weekId][sectionKey])) {
+    state.crEntries[companyId][weekId][sectionKey] = [];
+  }
+  return state.crEntries[companyId][weekId][sectionKey];
 }
-function isCRCollapsed(companyId, sectionKey) {
-  return !!(state.crCollapsed[companyId] && state.crCollapsed[companyId][sectionKey]);
+function isCRCollapsed(companyId, weekId, sectionKey) {
+  return !!(state.crCollapsed[companyId] && state.crCollapsed[companyId][weekId] && state.crCollapsed[companyId][weekId][sectionKey]);
 }
-function toggleCRCollapsed(companyId, sectionKey) {
+function toggleCRCollapsed(companyId, weekId, sectionKey) {
   if (!state.crCollapsed[companyId]) state.crCollapsed[companyId] = {};
-  const bag = state.crCollapsed[companyId];
+  if (!state.crCollapsed[companyId][weekId]) state.crCollapsed[companyId][weekId] = {};
+  const bag = state.crCollapsed[companyId][weekId];
   if (bag[sectionKey]) delete bag[sectionKey];
   else bag[sectionKey] = true;
   save();
 }
-function addCREntry(companyId, sectionKey) {
-  const list = ensureCRBucket(companyId, sectionKey);
+function addCREntry(companyId, weekId, sectionKey) {
+  const list = ensureCRBucket(companyId, weekId, sectionKey);
   list.push({ id: uid(), text: '' });
   // Force le dépliage de la section quand on ajoute une note
-  if (state.crCollapsed[companyId]) delete state.crCollapsed[companyId][sectionKey];
+  if (state.crCollapsed[companyId] && state.crCollapsed[companyId][weekId]) {
+    delete state.crCollapsed[companyId][weekId][sectionKey];
+  }
   save();
   renderCR();
   // Focus le nouveau textarea pour saisie immédiate
   requestAnimationFrame(() => {
     const last = document.querySelector(
-      `.cr-entry[data-company-id="${companyId}"][data-section-key="${sectionKey}"]:last-of-type textarea`
+      `.cr-entry[data-company-id="${companyId}"][data-week-id="${weekId}"][data-section-key="${sectionKey}"]:last-of-type textarea`
     );
     if (last) last.focus();
   });
 }
-function updateCREntry(companyId, sectionKey, entryId, text) {
-  const list = getCREntries(companyId, sectionKey);
+function updateCREntry(companyId, weekId, sectionKey, entryId, text) {
+  const list = getCREntries(companyId, weekId, sectionKey);
   const entry = list.find(e => e.id === entryId);
   if (!entry) return;
   entry.text = text;
   save();
 }
-function deleteCREntry(companyId, sectionKey, entryId) {
-  if (!state.crEntries[companyId]) return;
-  const list = state.crEntries[companyId][sectionKey];
+function deleteCREntry(companyId, weekId, sectionKey, entryId) {
+  if (!state.crEntries[companyId] || !state.crEntries[companyId][weekId]) return;
+  const list = state.crEntries[companyId][weekId][sectionKey];
   if (!Array.isArray(list)) return;
-  state.crEntries[companyId][sectionKey] = list.filter(e => e.id !== entryId);
+  state.crEntries[companyId][weekId][sectionKey] = list.filter(e => e.id !== entryId);
   save();
   renderCR();
 }
@@ -3628,33 +3752,41 @@ function setCRSelectedCompany(companyId) {
   save();
   renderCR();
 }
-function isCRAvancementVisible(companyId) {
+function isCRAvancementVisible(companyId, weekId) {
   // Visible par défaut (clé absente = true)
-  return state.crAvancementVisible[companyId] !== false;
+  const bag = state.crAvancementVisible[companyId];
+  if (!bag) return true;
+  return bag[weekId] !== false;
 }
-function setCRAvancementVisible(companyId, visible) {
-  if (visible) delete state.crAvancementVisible[companyId];
-  else state.crAvancementVisible[companyId] = false;
+function setCRAvancementVisible(companyId, weekId, visible) {
+  if (!state.crAvancementVisible[companyId]) state.crAvancementVisible[companyId] = {};
+  if (visible) delete state.crAvancementVisible[companyId][weekId];
+  else state.crAvancementVisible[companyId][weekId] = false;
   save();
 }
 
 function renderCR() {
-  const slider = document.getElementById('crslider');
-  const body   = document.getElementById('crbody');
-  const empty  = document.getElementById('crempty');
+  migrateCRState();
+  const slider     = document.getElementById('crslider');
+  const weekSlider = document.getElementById('crweekslider');
+  const body       = document.getElementById('crbody');
+  const empty      = document.getElementById('crempty');
   if (!slider || !body) return;
   slider.innerHTML = '';
+  if (weekSlider) weekSlider.innerHTML = '';
   body.innerHTML = '';
   if (!state.companies.length) {
     if (empty) empty.hidden = false;
     slider.hidden = true;
+    if (weekSlider) weekSlider.hidden = true;
     body.hidden = true;
     return;
   }
   if (empty) empty.hidden = true;
   slider.hidden = false;
+  if (weekSlider) weekSlider.hidden = false;
   body.hidden = false;
-  // Slider : un chip par entreprise
+  // Slider 1 : un chip par entreprise
   const selected = getCRSelectedCompany();
   for (const c of state.companies) {
     const chip = document.createElement('button');
@@ -3665,15 +3797,40 @@ function renderCR() {
     chip.textContent = c.name;
     slider.appendChild(chip);
   }
-  // Body : la carte de l'entreprise sélectionnée
-  if (selected) body.appendChild(buildCRCompanyCard(selected));
+  if (!selected) return;
+  // Slider 2 : un chip par semaine de CR + bouton « + Nouvelle semaine »
+  const weeks = getCRWeeks(selected.id);
+  const activeWeek = getCRSelectedWeek(selected.id);
+  if (weekSlider) {
+    for (const w of weeks) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'cr-week-chip' + (activeWeek && w.id === activeWeek.id ? ' is-active' : '');
+      chip.dataset.crAction = 'select-week';
+      chip.dataset.companyId = selected.id;
+      chip.dataset.weekId = w.id;
+      chip.textContent = w.label;
+      weekSlider.appendChild(chip);
+    }
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'cr-week-add';
+    addBtn.dataset.crAction = 'add-week';
+    addBtn.dataset.companyId = selected.id;
+    addBtn.setAttribute('aria-label', 'Nouvelle semaine');
+    addBtn.textContent = '+ Nouvelle semaine';
+    weekSlider.appendChild(addBtn);
+  }
+  // Body : la carte de l'entreprise/semaine sélectionnées
+  body.appendChild(buildCRCompanyCard(selected, activeWeek));
 }
 
-function buildCRCompanyCard(company) {
+function buildCRCompanyCard(company, week) {
   const card = document.createElement('div');
   card.className = 'cr-company';
   card.dataset.companyId = company.id;
-  const companyCollapsed = isCRCollapsed(company.id, '_company');
+  card.dataset.weekId = week.id;
+  const companyCollapsed = isCRCollapsed(company.id, week.id, '_company');
   if (companyCollapsed) card.classList.add('is-collapsed');
 
   const head = document.createElement('button');
@@ -3681,64 +3838,72 @@ function buildCRCompanyCard(company) {
   head.className = 'cr-company-head';
   head.dataset.crAction = 'toggle-company';
   head.dataset.companyId = company.id;
+  head.dataset.weekId = week.id;
   head.innerHTML = `
     <span class="cr-collapse-icon">${companyCollapsed ? '+' : '−'}</span>
-    <span class="cr-company-name">${escapeHtml(company.name)}</span>
+    <span class="cr-company-name">${escapeHtml(company.name)} <span class="cr-company-week">— ${escapeHtml(week.label)}</span></span>
   `;
   card.appendChild(head);
 
   const body = document.createElement('div');
   body.className = 'cr-company-body';
   for (const sec of CR_SECTIONS) {
-    body.appendChild(buildCRSection(company.id, sec));
+    body.appendChild(buildCRSection(company.id, week.id, sec));
   }
   card.appendChild(body);
   return card;
 }
 
-function buildCRSection(companyId, sec) {
+function buildCRSection(companyId, weekId, sec) {
   const wrap = document.createElement('div');
   wrap.className = 'cr-section';
-  const collapsed = isCRCollapsed(companyId, sec.key);
+  const collapsed = isCRCollapsed(companyId, weekId, sec.key);
   if (collapsed) wrap.classList.add('is-collapsed');
 
   const head = document.createElement('div');
   head.className = 'cr-section-head';
-  // Avancements : aperçu read-only + interrupteur (pour l'export PDF)
-  // au lieu du bouton « + Ajouter une note ».
+  const toggleBtn = `<button type="button" class="cr-section-toggle" data-cr-action="toggle-section" data-company-id="${companyId}" data-week-id="${weekId}" data-section-key="${sec.key}" aria-label="${collapsed ? 'Déplier' : 'Replier'}">${collapsed ? '+' : '−'}</button>`;
+  const addBtn    = `<button type="button" class="cr-add-entry" data-cr-action="add-entry" data-company-id="${companyId}" data-week-id="${weekId}" data-section-key="${sec.key}" aria-label="Ajouter une note">+</button>`;
+  // Avancements : aperçu read-only + interrupteur ; mais on garde aussi le
+  // bouton « + » pour permettre d'ajouter des notes libres au-dessus
+  // de l'aperçu (cohérent avec les autres rubriques).
   if (sec.key === 'avancement') {
-    const visible = isCRAvancementVisible(companyId);
+    const visible = isCRAvancementVisible(companyId, weekId);
     head.innerHTML = `
-      <button type="button" class="cr-section-toggle" data-cr-action="toggle-section" data-company-id="${companyId}" data-section-key="${sec.key}" aria-label="${collapsed ? 'Déplier' : 'Replier'}">${collapsed ? '+' : '−'}</button>
+      ${toggleBtn}
       <span class="cr-section-name">${sec.label}</span>
-      <label class="cr-switch" title="Inclure dans le compte-rendu">
-        <input type="checkbox" data-cr-action="toggle-avancement-visible" data-company-id="${companyId}" ${visible ? 'checked' : ''}>
+      <label class="cr-switch" title="Inclure l'aperçu dans le compte-rendu">
+        <input type="checkbox" data-cr-action="toggle-avancement-visible" data-company-id="${companyId}" data-week-id="${weekId}" ${visible ? 'checked' : ''}>
         <span class="cr-switch-track"><span class="cr-switch-thumb"></span></span>
       </label>
+      ${addBtn}
     `;
   } else {
     head.innerHTML = `
-      <button type="button" class="cr-section-toggle" data-cr-action="toggle-section" data-company-id="${companyId}" data-section-key="${sec.key}" aria-label="${collapsed ? 'Déplier' : 'Replier'}">${collapsed ? '+' : '−'}</button>
+      ${toggleBtn}
       <span class="cr-section-name">${sec.label}</span>
-      <button type="button" class="cr-add-entry" data-cr-action="add-entry" data-company-id="${companyId}" data-section-key="${sec.key}" aria-label="Ajouter une note">+</button>
+      ${addBtn}
     `;
   }
   wrap.appendChild(head);
 
   const body = document.createElement('div');
   body.className = 'cr-section-body';
+  // Notes libres en haut, aperçu en bas pour Avancements.
+  const entries = getCREntries(companyId, weekId, sec.key);
+  if (entries.length > 0) {
+    for (const entry of entries) body.appendChild(buildCREntry(companyId, weekId, sec.key, entry));
+  } else if (sec.key !== 'avancement') {
+    const placeholder = document.createElement('p');
+    placeholder.className = 'cr-section-empty';
+    placeholder.textContent = 'Aucune note. Touchez + pour en ajouter une.';
+    body.appendChild(placeholder);
+  }
   if (sec.key === 'avancement') {
-    buildCRAvancementBody(body, companyId);
-  } else {
-    const entries = getCREntries(companyId, sec.key);
-    if (entries.length === 0) {
-      const placeholder = document.createElement('p');
-      placeholder.className = 'cr-section-empty';
-      placeholder.textContent = 'Aucune note. Touchez + pour en ajouter une.';
-      body.appendChild(placeholder);
-    } else {
-      for (const entry of entries) body.appendChild(buildCREntry(companyId, sec.key, entry));
-    }
+    const previewWrap = document.createElement('div');
+    previewWrap.className = 'cr-avanc-preview';
+    buildCRAvancementBody(previewWrap, companyId, weekId);
+    body.appendChild(previewWrap);
   }
   wrap.appendChild(body);
   return wrap;
@@ -3748,8 +3913,8 @@ function buildCRSection(companyId, sec) {
 // formes (Suivi) des lots rattachés à cette entreprise, sur tous les
 // plans, avec une barre 3-segments par tâche (mêmes données que
 // Suivi > Récap).
-function buildCRAvancementBody(body, companyId) {
-  if (!isCRAvancementVisible(companyId)) {
+function buildCRAvancementBody(body, companyId, weekId) {
+  if (!isCRAvancementVisible(companyId, weekId)) {
     const off = document.createElement('p');
     off.className = 'cr-section-empty';
     off.textContent = 'Aperçu masqué (ne sera pas inclus dans l\'export PDF).';
@@ -3861,10 +4026,11 @@ function buildCRAvancTaskRow(task) {
   return li;
 }
 
-function buildCREntry(companyId, sectionKey, entry) {
+function buildCREntry(companyId, weekId, sectionKey, entry) {
   const row = document.createElement('div');
   row.className = 'cr-entry';
   row.dataset.companyId = companyId;
+  row.dataset.weekId = weekId;
   row.dataset.sectionKey = sectionKey;
   row.dataset.entryId = entry.id;
   const ta = document.createElement('textarea');
@@ -3874,6 +4040,7 @@ function buildCREntry(companyId, sectionKey, entry) {
   ta.value = entry.text || '';
   ta.dataset.crAction = 'edit-entry';
   ta.dataset.companyId = companyId;
+  ta.dataset.weekId = weekId;
   ta.dataset.sectionKey = sectionKey;
   ta.dataset.entryId = entry.id;
   row.appendChild(ta);
@@ -3882,6 +4049,7 @@ function buildCREntry(companyId, sectionKey, entry) {
   del.className = 'cr-entry-delete';
   del.dataset.crAction = 'delete-entry';
   del.dataset.companyId = companyId;
+  del.dataset.weekId = weekId;
   del.dataset.sectionKey = sectionKey;
   del.dataset.entryId = entry.id;
   del.setAttribute('aria-label', 'Supprimer la note');
@@ -7518,6 +7686,7 @@ const SYNC_EXCLUDED_KEYS = new Set([
   'protoFilterLotId', 'protoFilterStatuses', // filtres Proto
   'echeckinCollapsed',               // sections eCheckIn pliées/dépliées
   'crSelectedCompanyId',             // entreprise sélectionnée dans le slider CR (UI)
+  'crSelectedWeekId',                // semaine CR sélectionnée par entreprise (UI)
   'syncStatus', 'syncTimestamp', 'syncLastPulled',
   'protoPlan', 'protoPlanW', 'protoPlanH' // champs hérités migrés
 ]);
@@ -7965,32 +8134,38 @@ function init() {
       if (!t) return;
       const action = t.dataset.crAction;
       const companyId  = t.dataset.companyId;
+      const weekId     = t.dataset.weekId;
       const sectionKey = t.dataset.sectionKey;
       const entryId    = t.dataset.entryId;
       if (action === 'select-company') {
         setCRSelectedCompany(companyId);
+      } else if (action === 'select-week') {
+        setCRSelectedWeek(companyId, weekId);
+        renderCR();
+      } else if (action === 'add-week') {
+        addCRWeek(companyId);
       } else if (action === 'toggle-company') {
-        toggleCRCollapsed(companyId, '_company');
+        toggleCRCollapsed(companyId, weekId, '_company');
         renderCR();
       } else if (action === 'toggle-section') {
-        toggleCRCollapsed(companyId, sectionKey);
+        toggleCRCollapsed(companyId, weekId, sectionKey);
         renderCR();
       } else if (action === 'add-entry') {
-        addCREntry(companyId, sectionKey);
+        addCREntry(companyId, weekId, sectionKey);
       } else if (action === 'delete-entry') {
-        if (confirm('Supprimer cette note ?')) deleteCREntry(companyId, sectionKey, entryId);
+        if (confirm('Supprimer cette note ?')) deleteCREntry(companyId, weekId, sectionKey, entryId);
       }
     });
     crPage.addEventListener('change', (e) => {
       const cb = e.target.closest('input[data-cr-action="toggle-avancement-visible"]');
       if (!cb) return;
-      setCRAvancementVisible(cb.dataset.companyId, cb.checked);
+      setCRAvancementVisible(cb.dataset.companyId, cb.dataset.weekId, cb.checked);
       renderCR();
     });
     crPage.addEventListener('input', (e) => {
       const ta = e.target.closest('textarea[data-cr-action="edit-entry"]');
       if (!ta) return;
-      updateCREntry(ta.dataset.companyId, ta.dataset.sectionKey, ta.dataset.entryId, ta.value);
+      updateCREntry(ta.dataset.companyId, ta.dataset.weekId, ta.dataset.sectionKey, ta.dataset.entryId, ta.value);
     });
   }
 
