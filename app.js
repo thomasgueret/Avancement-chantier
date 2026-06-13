@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.99';
+const APP_VERSION = '1.00';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -8968,6 +8968,21 @@ function init() {
       const ech = e.target.closest('input[data-cr-action="set-entry-echeance"]');
       if (ech) {
         setCREntryField(ech.dataset.companyId, ech.dataset.weekId, ech.dataset.sectionKey, ech.dataset.entryId, 'echeance', ech.value);
+        // Refresh inline du label + couleur du chip date
+        const chip = ech.closest('.cr-chip-date');
+        const lbl  = chip?.querySelector('.cr-chip-text');
+        chip?.classList.remove('is-overdue', 'is-soon');
+        if (ech.value) {
+          const [yy, mm, dd] = ech.value.split('-');
+          if (lbl) lbl.textContent = '📅 ' + dd + '/' + mm + '/' + yy.slice(2);
+          const target = new Date(ech.value + 'T00:00:00');
+          const ref = new Date(); ref.setHours(0,0,0,0);
+          const diff = Math.round((target - ref) / 86400000);
+          if (diff < 0) chip?.classList.add('is-overdue');
+          else if (diff <= 7) chip?.classList.add('is-soon');
+        } else if (lbl) {
+          lbl.textContent = '📅 Échéance';
+        }
         return;
       }
       const pm = e.target.closest('input[data-cr-action="set-entry-pm"]');
@@ -8988,6 +9003,16 @@ function init() {
       const resp = e.target.closest('select[data-cr-action="set-entry-responsable"]');
       if (resp) {
         setCREntryField(resp.dataset.companyId, resp.dataset.weekId, resp.dataset.sectionKey, resp.dataset.entryId, 'responsable', resp.value);
+        // Refresh inline du label du chip Responsable
+        const chip = resp.closest('.cr-chip-resp');
+        const lbl  = chip?.querySelector('.cr-chip-text');
+        if (lbl) {
+          const company = state.companies.find(c => c.id === resp.dataset.companyId);
+          const respDisplay = (resp.value === 'BBGO' || !resp.value)
+            ? CR_INTERNAL_LABEL
+            : (company?.name || CR_INTERNAL_LABEL);
+          lbl.textContent = '👤 ' + respDisplay;
+        }
         return;
       }
     });
