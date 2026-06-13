@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.89';
+const APP_VERSION = '0.90';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -3651,10 +3651,27 @@ function setCRSelectedWeek(companyId, weekId) {
   state.crSelectedWeekId[companyId] = weekId;
   save();
 }
+// Renvoie le prochain label « CR N » en se basant sur le max numérique
+// trouvé dans les labels existants, +1. Robuste aux suppressions :
+// supprimer CR 2 dans [CR 1, CR 2, CR 3] et ré-ajouter → CR 4.
+function getNextCRWeekLabel(weeks) {
+  let max = 0;
+  for (const w of weeks) {
+    const m = /^CR\s+(\d+)$/i.exec(w.label || '');
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return 'CR ' + (max + 1);
+}
 function addCRWeek(companyId) {
   const weeks = getCRWeeks(companyId);
   const prev = weeks[weeks.length - 1];
-  const newWeek = { id: 'wk_' + uid(), label: 'CR ' + (weeks.length + 1), createdAt: Date.now() };
+  // Fige l'aperçu Avancements de la semaine précédente AVANT d'en
+  // ajouter une nouvelle : à partir de maintenant, la précédente est
+  // un cliché immuable du Récap au moment de la bascule.
+  if (prev && !Array.isArray(prev.avancementSnapshot)) {
+    prev.avancementSnapshot = computeAvancementForCompany(companyId);
+  }
+  const newWeek = { id: 'wk_' + uid(), label: getNextCRWeekLabel(weeks), createdAt: Date.now() };
   weeks.push(newWeek);
   // Recopie intégrale du contenu de la semaine précédente vers la nouvelle.
   // À terme : on ne transmettra que les tâches non cochées « Faite » — mais
@@ -3680,6 +3697,28 @@ function addCRWeek(companyId) {
   state.crSelectedWeekId[companyId] = newWeek.id;
   save();
   renderCR();
+}
+
+// Supprime une semaine + son contenu (entries, collapses, visibilité).
+// Si on supprime la semaine la plus récente, on « dégèle » la nouvelle
+// dernière (qui redevient live).
+function deleteCRWeek(companyId, weekId) {
+  const weeks = getCRWeeks(companyId);
+  const idx = weeks.findIndex(w => w.id === weekId);
+  if (idx < 0) return;
+  const wasLatest = idx === weeks.length - 1;
+  weeks.splice(idx, 1);
+  if (state.crEntries[companyId])           delete state.crEntries[companyId][weekId];
+  if (state.crCollapsed[companyId])         delete state.crCollapsed[companyId][weekId];
+  if (state.crAvancementVisible[companyId]) delete state.crAvancementVisible[companyId][weekId];
+  if (state.crSelectedWeekId[companyId] === weekId) delete state.crSelectedWeekId[companyId];
+  if (wasLatest && weeks.length > 0) {
+    const newLast = weeks[weeks.length - 1];
+    delete newLast.avancementSnapshot;
+  }
+  save();
+  renderCR();
+  showToast('Compte-rendu supprimé');
 }
 
 function getCREntries(companyId, weekId, sectionKey) {
@@ -3822,10 +3861,11 @@ function renderCR() {
     weekSlider.appendChild(addBtn);
   }
   // Body : la carte de l'entreprise/semaine sélectionnées
-  body.appendChild(buildCRCompanyCard(selected, activeWeek));
+  const isLatest = activeWeek.id === weeks[weeks.length - 1].id;
+  body.appendChild(buildCRCompanyCard(selected, activeWeek, isLatest));
 }
 
-function buildCRCompanyCard(company, week) {
+function buildCRCompanyCard(company, week, isLatest) {
   const card = document.createElement('div');
   card.className = 'cr-company';
   card.dataset.companyId = company.id;
@@ -3833,6 +3873,11 @@ function buildCRCompanyCard(company, week) {
   const companyCollapsed = isCRCollapsed(company.id, week.id, '_company');
   if (companyCollapsed) card.classList.add('is-collapsed');
 
+  const headWrap = document.createElement('div');
+  headWrap.className = 'cr-company-head-wrap';
+  // Le bandeau d'en-tête est un bouton pour permettre de replier la
+  // carte. Le bouton de suppression est mis HORS du bouton pour qu'un
+  // tap dessus ne déclenche pas aussi le collapse.
   const head = document.createElement('button');
   head.type = 'button';
   head.className = 'cr-company-head';
@@ -3841,20 +3886,32 @@ function buildCRCompanyCard(company, week) {
   head.dataset.weekId = week.id;
   head.innerHTML = `
     <span class="cr-collapse-icon">${companyCollapsed ? '+' : '−'}</span>
-    <span class="cr-company-name">${escapeHtml(company.name)} <span class="cr-company-week">— ${escapeHtml(week.label)}</span></span>
+    <span class="cr-company-name">${escapeHtml(company.name)} <span class="cr-company-week">— ${escapeHtml(week.label)}${isLatest ? '' : ' (figé)'}</span></span>
   `;
-  card.appendChild(head);
+  headWrap.appendChild(head);
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'cr-week-delete';
+  del.dataset.crAction = 'delete-week';
+  del.dataset.companyId = company.id;
+  del.dataset.weekId = week.id;
+  del.setAttribute('aria-label', 'Supprimer ce compte-rendu');
+  del.setAttribute('title', 'Supprimer ce compte-rendu');
+  del.innerHTML = '×';
+  headWrap.appendChild(del);
+  card.appendChild(headWrap);
 
   const body = document.createElement('div');
   body.className = 'cr-company-body';
   for (const sec of CR_SECTIONS) {
-    body.appendChild(buildCRSection(company.id, week.id, sec));
+    body.appendChild(buildCRSection(company.id, week, isLatest, sec));
   }
   card.appendChild(body);
   return card;
 }
 
-function buildCRSection(companyId, weekId, sec) {
+function buildCRSection(companyId, week, isLatest, sec) {
+  const weekId = week.id;
   const wrap = document.createElement('div');
   wrap.className = 'cr-section';
   const collapsed = isCRCollapsed(companyId, weekId, sec.key);
@@ -3902,35 +3959,19 @@ function buildCRSection(companyId, weekId, sec) {
   if (sec.key === 'avancement') {
     const previewWrap = document.createElement('div');
     previewWrap.className = 'cr-avanc-preview';
-    buildCRAvancementBody(previewWrap, companyId, weekId);
+    buildCRAvancementBody(previewWrap, companyId, week, isLatest);
     body.appendChild(previewWrap);
   }
   wrap.appendChild(body);
   return wrap;
 }
 
-// Aperçu read-only des avancements d'une entreprise : agrège les
-// formes (Suivi) des lots rattachés à cette entreprise, sur tous les
-// plans, avec une barre 3-segments par tâche (mêmes données que
-// Suivi > Récap).
-function buildCRAvancementBody(body, companyId, weekId) {
-  if (!isCRAvancementVisible(companyId, weekId)) {
-    const off = document.createElement('p');
-    off.className = 'cr-section-empty';
-    off.textContent = 'Aperçu masqué (ne sera pas inclus dans l\'export PDF).';
-    body.appendChild(off);
-    return;
-  }
+// Calcule la structure de données « Avancements » pour une entreprise
+// (mêmes données que Suivi → Récap, agrégées sur tous les plans).
+// Retourne { lots: [{ lotId, name, color, tasks: [{title,type,total,vols,pct}] }] }.
+function computeAvancementForCompany(companyId) {
   const companyLots = getWorkBatches().filter(l => l.companyId === companyId);
-  if (companyLots.length === 0) {
-    const none = document.createElement('p');
-    none.className = 'cr-section-empty';
-    none.textContent = 'Aucun lot n\'est rattaché à cette entreprise. Allez dans Données → Lots pour faire le lien.';
-    body.appendChild(none);
-    return;
-  }
-  // Aggrège : pour chaque lot, somme les tâches sur tous les plans
-  const lotsAgg = [];
+  const out = [];
   for (const lot of companyLots) {
     const tasksByTitle = new Map();
     for (const plan of getProtoPlans()) {
@@ -3963,23 +4004,74 @@ function buildCRAvancementBody(body, companyId, weekId) {
       tasks.push(t);
     }
     tasks.sort((a, b) => (a.title || 'ZZZ').localeCompare(b.title || 'ZZZ', 'fr'));
-    lotsAgg.push({ lot, tasks });
+    out.push({
+      lotId: lot.id,
+      name: lot.name || '(lot sans nom)',
+      color: lot.color || '#9aa0a6',
+      tasks
+    });
+  }
+  return out;
+}
+
+// Aperçu des avancements d'une entreprise pour une semaine donnée :
+// - Si week est la dernière (isLatest) → données live (recalculées
+//   à chaque rendu, suivent Suivi → Récap).
+// - Sinon → snapshot figé pris au moment où une semaine suivante a été
+//   créée. Si aucun snapshot n'existe (CR créés avant v0.90), on en
+//   construit un à la volée à partir des données actuelles et on le
+//   persiste : à partir de là, la rubrique est figée.
+function buildCRAvancementBody(body, companyId, week, isLatest) {
+  if (!isCRAvancementVisible(companyId, week.id)) {
+    const off = document.createElement('p');
+    off.className = 'cr-section-empty';
+    off.textContent = 'Aperçu masqué (ne sera pas inclus dans l\'export PDF).';
+    body.appendChild(off);
+    return;
+  }
+  const companyLots = getWorkBatches().filter(l => l.companyId === companyId);
+  if (companyLots.length === 0 && isLatest) {
+    const none = document.createElement('p');
+    none.className = 'cr-section-empty';
+    none.textContent = 'Aucun lot n\'est rattaché à cette entreprise. Allez dans Données → Lots pour faire le lien.';
+    body.appendChild(none);
+    return;
+  }
+  let lotsAgg;
+  if (isLatest) {
+    lotsAgg = computeAvancementForCompany(companyId);
+  } else {
+    // Snapshot : utilise celui stocké sur la semaine, sinon back-fill
+    // (semaines créées avant v0.90).
+    if (!Array.isArray(week.avancementSnapshot)) {
+      week.avancementSnapshot = computeAvancementForCompany(companyId);
+      save();
+    }
+    lotsAgg = week.avancementSnapshot;
   }
   const anyTask = lotsAgg.some(l => l.tasks.length > 0);
   if (!anyTask) {
     const none = document.createElement('p');
     none.className = 'cr-section-empty';
-    none.textContent = 'Aucune tâche n\'a encore été documentée sur les plans pour les lots de cette entreprise.';
+    none.textContent = isLatest
+      ? 'Aucune tâche n\'a encore été documentée sur les plans pour les lots de cette entreprise.'
+      : 'Aucun avancement n\'avait été enregistré pour cette semaine.';
     body.appendChild(none);
     return;
   }
-  for (const { lot, tasks } of lotsAgg) {
-    if (tasks.length === 0) continue;
+  if (!isLatest) {
+    const badge = document.createElement('p');
+    badge.className = 'cr-avanc-frozen-note';
+    badge.textContent = '🔒 Aperçu figé à la création de la semaine suivante.';
+    body.appendChild(badge);
+  }
+  for (const lotData of lotsAgg) {
+    if (lotData.tasks.length === 0) continue;
     const lotCard = document.createElement('div');
     lotCard.className = 'cr-avanc-lot';
-    lotCard.style.borderLeftColor = lot.color || 'var(--accent)';
+    lotCard.style.borderLeftColor = lotData.color || 'var(--accent)';
     let lotTotal = 0, lotDone = 0;
-    for (const t of tasks) { lotTotal += t.total; lotDone += t.vols.done; }
+    for (const t of lotData.tasks) { lotTotal += t.total; lotDone += t.vols.done; }
     const lotPct = lotTotal > 0 ? Math.round((lotDone / lotTotal) * 100) : 0;
     const head = document.createElement('div');
     head.className = 'cr-avanc-lot-head';
@@ -3987,14 +4079,14 @@ function buildCRAvancementBody(body, companyId, weekId) {
       <span class="cr-avanc-lot-name"></span>
       <span class="cr-avanc-lot-pct"></span>
     `;
-    head.querySelector('.cr-avanc-lot-name').textContent = lot.name || '(lot sans nom)';
+    head.querySelector('.cr-avanc-lot-name').textContent = lotData.name || '(lot sans nom)';
     const pctEl = head.querySelector('.cr-avanc-lot-pct');
     pctEl.textContent = lotPct + ' %';
-    pctEl.style.color = lot.color || 'var(--accent)';
+    pctEl.style.color = lotData.color || 'var(--accent)';
     lotCard.appendChild(head);
     const ul = document.createElement('ul');
     ul.className = 'cr-avanc-task-list';
-    for (const t of tasks) ul.appendChild(buildCRAvancTaskRow(t));
+    for (const t of lotData.tasks) ul.appendChild(buildCRAvancTaskRow(t));
     lotCard.appendChild(ul);
     body.appendChild(lotCard);
   }
@@ -8144,6 +8236,13 @@ function init() {
         renderCR();
       } else if (action === 'add-week') {
         addCRWeek(companyId);
+      } else if (action === 'delete-week') {
+        const weeks = getCRWeeks(companyId);
+        const w = weeks.find(x => x.id === weekId);
+        if (!w) return;
+        if (confirm(`Supprimer définitivement le compte-rendu « ${w.label} » ?\nLes notes saisies dedans seront perdues.`)) {
+          deleteCRWeek(companyId, weekId);
+        }
       } else if (action === 'toggle-company') {
         toggleCRCollapsed(companyId, weekId, '_company');
         renderCR();

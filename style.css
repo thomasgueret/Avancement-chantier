@@ -3604,3 +3604,32 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 
 /* Conteneur de l'aperçu Avancements sous les notes libres */
 .cr-avanc-preview { margin-top: 8px; }
+
+/* ----- CR : bouton ✕ rouge pour supprimer la semaine active ----- */
+.cr-company-head-wrap {
+  display: flex; align-items: stretch;
+  background: var(--surface-2);
+}
+.cr-company-head-wrap .cr-company-head {
+  background: transparent;
+  flex: 1; min-width: 0;
+}
+.cr-week-delete {
+  flex: 0 0 auto;
+  width: 44px;
+  border: none; background: transparent;
+  color: var(--danger);
+  font-size: 22px; font-weight: 700; line-height: 1;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-left: 1px solid var(--border);
+}
+.cr-week-delete:active { background: rgba(211, 47, 47, 0.10); }
+
+/* Badge « 🔒 figé » au-dessus de l'aperçu d'une semaine précédente */
+.cr-avanc-frozen-note {
+  margin: 0 0 6px;
+  font-size: 11px; color: var(--text-3);
+  font-style: italic;
+}
