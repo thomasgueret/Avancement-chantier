@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.96';
+const APP_VERSION = '0.97';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -3654,6 +3654,7 @@ function migrateCRState() {
           if (typeof e.crOrigin    === 'undefined') e.crOrigin    = fallbackLabel;
           if (typeof e.echeance    === 'undefined') e.echeance    = null;
           if (typeof e.responsable === 'undefined') e.responsable = null;
+          if (typeof e.done        === 'undefined') e.done        = false;
         }
       }
     }
@@ -3723,7 +3724,9 @@ function addCRWeek(companyId) {
         text: e.text || '',
         crOrigin: e.crOrigin || prev.label,
         echeance: e.echeance || null,
-        responsable: e.responsable || null
+        responsable: e.responsable || null,
+        done: !!e.done  // Le statut « Faite » est copié — à terme on pourra
+                        // décider de ne reporter que les non-Faite.
       }));
     }
     state.crEntries[companyId][newWeek.id] = newSecs;
@@ -3855,13 +3858,19 @@ async function exportCRToPDF(companyId, weekId) {
     return dd + '/' + mm + '/' + yy.slice(2);
   };
   const colorForEch = (iso) => {
-    if (!iso) return { rgb: [60,60,60], bold: false };
+    if (!iso || iso === 'PM') return { rgb: [60,60,60], bold: false };
     const target = new Date(iso + 'T00:00:00');
     const ref = new Date(); ref.setHours(0,0,0,0);
     const diff = Math.round((target - ref) / 86400000);
     if (diff < 0)  return { rgb: [183, 28, 28], bold: true };  // dépassé → rouge gras
     if (diff <= 7) return { rgb: [183, 80, 8],  bold: true };  // imminent → orange gras
     return { rgb: [60, 60, 60], bold: false };
+  };
+  // Affichage colonne échéance : PM = 'PM' (gris foncé italique), date = JJ/MM/AA, sinon '—'
+  const echDisplay = (iso) => {
+    if (iso === 'PM') return 'PM';
+    if (iso) return fmtEch(iso);
+    return '—';
   };
   const respLabelFor = (e) =>
     (e.responsable === null || e.responsable === 'BBGO' || !e.responsable)
@@ -3921,16 +3930,24 @@ async function exportCRToPDF(companyId, weekId) {
     // CR origin (centré, gras léger)
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(40);
     pdf.text(e.crOrigin || '—', colX.cr + colW.cr / 2, y + padY + 2.6, { align: 'center' });
-    // Tâche (multi-ligne)
-    pdf.setFont('helvetica', 'normal'); pdf.setTextColor(20);
+    // Tâche (multi-ligne) — barrée + grisée si « Faite »
+    pdf.setFont('helvetica', 'normal');
+    pdf.setTextColor(e.done ? 140 : 20);
     for (let i = 0; i < taskLines.length; i++) {
-      pdf.text(taskLines[i], colX.task + padX, y + padY + 2.6 + i * lineH);
+      const ty = y + padY + 2.6 + i * lineH;
+      pdf.text(taskLines[i], colX.task + padX, ty);
+      if (e.done) {
+        // Barre horizontale au milieu de la ligne pour matérialiser le ✓
+        const lineW = pdf.getTextWidth(taskLines[i]);
+        pdf.setDrawColor(140); pdf.setLineWidth(0.25);
+        pdf.line(colX.task + padX, ty - 1, colX.task + padX + lineW, ty - 1);
+      }
     }
-    // Échéance (couleur selon proximité)
+    // Échéance (couleur selon proximité ; PM affiché tel quel)
     const ech = colorForEch(e.echeance);
-    pdf.setFont('helvetica', ech.bold ? 'bold' : 'normal');
+    pdf.setFont('helvetica', e.echeance === 'PM' ? 'italic' : (ech.bold ? 'bold' : 'normal'));
     pdf.setTextColor(...ech.rgb);
-    pdf.text(e.echeance ? fmtEch(e.echeance) : '—', colX.ech + colW.ech / 2, y + padY + 2.6, { align: 'center' });
+    pdf.text(echDisplay(e.echeance), colX.ech + colW.ech / 2, y + padY + 2.6, { align: 'center' });
     pdf.setTextColor(0);
     // Entreprise (multi-ligne si nom long)
     pdf.setFont('helvetica', 'normal'); pdf.setTextColor(20);
@@ -4134,8 +4151,9 @@ function addCREntry(companyId, weekId, sectionKey) {
     id: uid(),
     text: '',
     crOrigin: wk ? wk.label : '',  // ← n° du CR où la note est née
-    echeance: null,                // ← date 'YYYY-MM-DD' ou null
-    responsable: null              // ← 'BBGO' | companyId | null (défaut BBGO au render)
+    echeance: null,                // ← 'YYYY-MM-DD' | 'PM' (pour mémoire) | null
+    responsable: null,             // ← 'BBGO' | companyId | null (défaut BBGO au render)
+    done: false                    // ← case « Faite » cochée par l'utilisateur
   });
   // Force le dépliage de la section quand on ajoute une note
   if (state.crCollapsed[companyId] && state.crCollapsed[companyId][weekId]) {
@@ -4158,9 +4176,10 @@ function setCREntryField(companyId, weekId, sectionKey, entryId, field, value) {
   const list = getCREntries(companyId, weekId, sectionKey);
   const entry = list.find(e => e.id === entryId);
   if (!entry) return;
-  if (field === 'echeance')    entry.echeance    = value || null;
+  if (field === 'echeance')         entry.echeance    = value || null;
   else if (field === 'responsable') entry.responsable = value || null;
-  else if (field === 'text')   entry.text        = value;
+  else if (field === 'text')        entry.text        = value;
+  else if (field === 'done')        entry.done        = !!value;
   save();
 }
 function deleteCREntry(companyId, weekId, sectionKey, entryId) {
@@ -4673,13 +4692,13 @@ function buildCRAvancTaskRow(task) {
 
 function buildCREntry(companyId, weekId, sectionKey, entry) {
   const row = document.createElement('div');
-  row.className = 'cr-entry';
+  row.className = 'cr-entry' + (entry.done ? ' is-done' : '');
   row.dataset.companyId = companyId;
   row.dataset.weekId = weekId;
   row.dataset.sectionKey = sectionKey;
   row.dataset.entryId = entry.id;
 
-  // ----- Ligne 1 : textarea + croix supprimer -----
+  // ----- Ligne 1 : textarea + checkbox Faite + croix supprimer -----
   const topRow = document.createElement('div');
   topRow.className = 'cr-entry-top';
   const ta = document.createElement('textarea');
@@ -4693,6 +4712,24 @@ function buildCREntry(companyId, weekId, sectionKey, entry) {
   ta.dataset.sectionKey = sectionKey;
   ta.dataset.entryId = entry.id;
   topRow.appendChild(ta);
+  // Case Faite (juste à gauche de la croix supprimer)
+  const doneLabel = document.createElement('label');
+  doneLabel.className = 'cr-entry-done';
+  doneLabel.title = 'Tâche faite';
+  const doneCb = document.createElement('input');
+  doneCb.type = 'checkbox';
+  doneCb.checked = !!entry.done;
+  doneCb.dataset.crAction = 'set-entry-done';
+  doneCb.dataset.companyId = companyId;
+  doneCb.dataset.weekId = weekId;
+  doneCb.dataset.sectionKey = sectionKey;
+  doneCb.dataset.entryId = entry.id;
+  doneLabel.appendChild(doneCb);
+  const doneTxt = document.createElement('span');
+  doneTxt.className = 'cr-entry-done-label';
+  doneTxt.textContent = 'Faite';
+  doneLabel.appendChild(doneTxt);
+  topRow.appendChild(doneLabel);
   const del = document.createElement('button');
   del.type = 'button';
   del.className = 'cr-entry-delete';
@@ -4715,14 +4752,16 @@ function buildCREntry(companyId, weekId, sectionKey, entry) {
   originBadge.title = 'Compte-rendu d\'origine';
   originBadge.textContent = entry.crOrigin || '—';
   meta.appendChild(originBadge);
-  // Échéance
+  // Échéance : date OU « Pour mémoire » (toggle PM)
+  const isPM = entry.echeance === 'PM';
   const echLabel = document.createElement('label');
-  echLabel.className = 'cr-entry-echeance';
+  echLabel.className = 'cr-entry-echeance' + (isPM ? ' is-pm' : '');
   echLabel.title = 'Échéance';
   echLabel.innerHTML = '📅 ';
   const echInput = document.createElement('input');
   echInput.type = 'date';
-  echInput.value = entry.echeance || '';
+  echInput.value = isPM ? '' : (entry.echeance || '');
+  echInput.disabled = isPM;
   echInput.dataset.crAction = 'set-entry-echeance';
   echInput.dataset.companyId = companyId;
   echInput.dataset.weekId = weekId;
@@ -4730,6 +4769,23 @@ function buildCREntry(companyId, weekId, sectionKey, entry) {
   echInput.dataset.entryId = entry.id;
   echLabel.appendChild(echInput);
   meta.appendChild(echLabel);
+  // Toggle « Pour mémoire » : désactive la date et stocke 'PM'
+  const pmLabel = document.createElement('label');
+  pmLabel.className = 'cr-entry-pm' + (isPM ? ' is-active' : '');
+  pmLabel.title = 'Pour mémoire (pas d\'échéance précise)';
+  const pmCb = document.createElement('input');
+  pmCb.type = 'checkbox';
+  pmCb.checked = isPM;
+  pmCb.dataset.crAction = 'set-entry-pm';
+  pmCb.dataset.companyId = companyId;
+  pmCb.dataset.weekId = weekId;
+  pmCb.dataset.sectionKey = sectionKey;
+  pmCb.dataset.entryId = entry.id;
+  pmLabel.appendChild(pmCb);
+  const pmTxt = document.createElement('span');
+  pmTxt.textContent = 'PM';
+  pmLabel.appendChild(pmTxt);
+  meta.appendChild(pmLabel);
   // Responsable : BBGO + entreprise du CR
   const respLabel = document.createElement('label');
   respLabel.className = 'cr-entry-resp';
@@ -8886,6 +8942,21 @@ function init() {
       const ech = e.target.closest('input[data-cr-action="set-entry-echeance"]');
       if (ech) {
         setCREntryField(ech.dataset.companyId, ech.dataset.weekId, ech.dataset.sectionKey, ech.dataset.entryId, 'echeance', ech.value);
+        return;
+      }
+      const pm = e.target.closest('input[data-cr-action="set-entry-pm"]');
+      if (pm) {
+        // Coché → echeance = 'PM' ; décoché → null (revient à champ vide)
+        setCREntryField(pm.dataset.companyId, pm.dataset.weekId, pm.dataset.sectionKey, pm.dataset.entryId, 'echeance', pm.checked ? 'PM' : null);
+        renderCR();
+        return;
+      }
+      const done = e.target.closest('input[data-cr-action="set-entry-done"]');
+      if (done) {
+        setCREntryField(done.dataset.companyId, done.dataset.weekId, done.dataset.sectionKey, done.dataset.entryId, 'done', done.checked);
+        // Toggle visuel direct via classe sans re-render complet
+        const row = done.closest('.cr-entry');
+        if (row) row.classList.toggle('is-done', done.checked);
         return;
       }
       const resp = e.target.closest('select[data-cr-action="set-entry-responsable"]');

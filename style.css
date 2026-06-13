@@ -3760,3 +3760,56 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 }
 .cr-entry-echeance input:focus,
 .cr-entry-resp select:focus { outline: none; }
+
+/* ----- CR : checkbox « Faite » dans le coin haut droit de la note ----- */
+.cr-entry-done {
+  display: inline-flex; align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11px; font-weight: 700;
+  color: var(--text-2);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  flex-shrink: 0;
+}
+.cr-entry-done input { margin: 0; cursor: pointer; }
+.cr-entry-done-label { user-select: none; }
+.cr-entry.is-done .cr-entry-text {
+  text-decoration: line-through;
+  color: var(--text-3);
+  opacity: 0.7;
+}
+.cr-entry.is-done .cr-entry-done {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ----- CR : toggle « PM » (Pour mémoire) à droite de la date ----- */
+.cr-entry-pm {
+  display: inline-flex; align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11px; font-weight: 700;
+  color: var(--text-3);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  flex-shrink: 0;
+}
+.cr-entry-pm input {
+  width: 0; height: 0;
+  opacity: 0; pointer-events: none;
+  position: absolute;
+}
+.cr-entry-pm.is-active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+.cr-entry-echeance.is-pm input { opacity: 0.4; }
