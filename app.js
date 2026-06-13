@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.92';
+const APP_VERSION = '0.93';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -3715,9 +3715,254 @@ function addCRWeek(companyId) {
 // Supprime une semaine + son contenu (entries, collapses, visibilité).
 // Si on supprime la semaine la plus récente, on « dégèle » la nouvelle
 // dernière (qui redevient live).
-// Export PDF — placeholder en attendant le choix de design.
-function exportCRToPDF(companyId, weekId) {
-  showToast('Export PDF — choisissez d\'abord un design (voir le chat)');
+// ====================================================================
+//   Export PDF d'un CR — Design A « Rapport classique sobre »
+//   A4 portrait, en-tête centré, rubriques numérotées, pagination
+//   automatique, footer avec date + n° de page. Pure jsPDF (texte +
+//   primitives géométriques), pas de html2canvas pour rester léger.
+// ====================================================================
+async function exportCRToPDF(companyId, weekId) {
+  const company = state.companies.find(c => c.id === companyId);
+  if (!company) { showToast('Entreprise introuvable', 'error'); return; }
+  const weeks = getCRWeeks(companyId);
+  const weekIdx = weeks.findIndex(w => w.id === weekId);
+  if (weekIdx < 0) { showToast('Semaine introuvable', 'error'); return; }
+  const week = weeks[weekIdx];
+  const isLatest = weekIdx === weeks.length - 1;
+
+  let jspdf;
+  try {
+    showToast('Génération du PDF…');
+    jspdf = await loadJsPdf();
+  } catch (e) {
+    showToast('Impossible de charger jsPDF (connexion requise au 1er usage)', 'error');
+    return;
+  }
+  const pdf = new jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const PAGE_W = 210, PAGE_H = 297;
+  const MARGIN = 18;
+  const CONTENT_W = PAGE_W - 2 * MARGIN;
+  let y = MARGIN;
+  let pageNum = 1;
+
+  // ----- Helpers internes -----
+  const ensureSpace = (h) => {
+    if (y + h > PAGE_H - 18) { addFooter(); pdf.addPage(); pageNum++; y = MARGIN; }
+  };
+  const addFooter = () => {
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(120);
+    const d = new Date();
+    const stamp = `Édité le ${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()} ` +
+                  `à ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    pdf.text(stamp, MARGIN, PAGE_H - 10);
+    pdf.text(`Page ${pageNum}`, PAGE_W - MARGIN, PAGE_H - 10, { align: 'right' });
+    pdf.setTextColor(0);
+  };
+  const drawText = (txt, x, opts = {}) => {
+    pdf.setFont(opts.font || 'helvetica', opts.style || 'normal');
+    pdf.setFontSize(opts.size || 10);
+    if (opts.color) pdf.setTextColor(...opts.color); else pdf.setTextColor(0);
+    pdf.text(txt, x, y, opts.textOpts || {});
+  };
+  const wrapWrite = (txt, x, w, opts = {}) => {
+    pdf.setFont(opts.font || 'helvetica', opts.style || 'normal');
+    pdf.setFontSize(opts.size || 10);
+    if (opts.color) pdf.setTextColor(...opts.color); else pdf.setTextColor(0);
+    const lines = pdf.splitTextToSize(txt, w);
+    const lh = (opts.size || 10) * 0.42;
+    for (const line of lines) {
+      ensureSpace(lh + 1);
+      pdf.text(line, x, y);
+      y += lh;
+    }
+  };
+  // Convertit "#RRGGBB" → [r,g,b]
+  const hexToRgb = (hex) => {
+    const m = /^#?([a-f0-9]{6})$/i.exec((hex || '').trim());
+    if (!m) return [128, 128, 128];
+    const n = parseInt(m[1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  };
+
+  // ----- En-tête centré -----
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(16);
+  pdf.text('COMPTE-RENDU DE CHANTIER', PAGE_W / 2, y, { align: 'center' });
+  y += 8;
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(11);
+  pdf.text(`Entreprise : ${company.name}    Semaine : ${week.label}`, PAGE_W / 2, y, { align: 'center' });
+  y += 5;
+  const today = new Date();
+  const dateStr = `${String(today.getDate()).padStart(2,'0')}/${String(today.getMonth()+1).padStart(2,'0')}/${today.getFullYear()}`;
+  pdf.setFontSize(9); pdf.setTextColor(100);
+  pdf.text(`Édité le ${dateStr}${isLatest ? '' : ' — données figées'}`, PAGE_W / 2, y, { align: 'center' });
+  pdf.setTextColor(0);
+  y += 6;
+  pdf.setDrawColor(60); pdf.setLineWidth(0.4);
+  pdf.line(MARGIN, y, PAGE_W - MARGIN, y);
+  y += 8;
+
+  // ----- Rubriques numérotées -----
+  let secNum = 0;
+  for (const sec of CR_SECTIONS) {
+    secNum++;
+    const entries = getCREntries(companyId, weekId, sec.key);
+    const showAvancPreview = sec.key === 'avancement' && isCRAvancementVisible(companyId, weekId);
+    const showAdminPreview = sec.key === 'admin'      && isCRAdminVisible(companyId, weekId);
+    let isEmpty = entries.length === 0 && !showAvancPreview && !showAdminPreview;
+    if (sec.key === 'avancement' && showAvancPreview) {
+      const data = isLatest ? computeAvancementForCompany(companyId) : (Array.isArray(week.avancementSnapshot) ? week.avancementSnapshot : computeAvancementForCompany(companyId));
+      isEmpty = isEmpty && (!data || data.length === 0 || !data.some(l => l.tasks.length > 0));
+    }
+    if (sec.key === 'admin' && showAdminPreview) {
+      const data = isLatest ? computeAdminAlertsForCompany(companyId) : (Array.isArray(week.adminSnapshot) ? week.adminSnapshot : computeAdminAlertsForCompany(companyId));
+      isEmpty = isEmpty && (!data || data.length === 0);
+    }
+
+    // Titre rubrique
+    ensureSpace(10);
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(12); pdf.setTextColor(20);
+    pdf.text(`${secNum}.  ${sec.label.toUpperCase()}`, MARGIN, y);
+    y += 5;
+    pdf.setDrawColor(180); pdf.setLineWidth(0.2);
+    pdf.line(MARGIN, y, PAGE_W - MARGIN, y);
+    y += 4;
+    pdf.setTextColor(0);
+
+    if (isEmpty) {
+      pdf.setFont('helvetica', 'italic'); pdf.setFontSize(10); pdf.setTextColor(140);
+      ensureSpace(6);
+      pdf.text('— Néant', MARGIN + 4, y);
+      pdf.setTextColor(0);
+      y += 8;
+      continue;
+    }
+
+    // Notes libres (textareas)
+    for (const e of entries) {
+      const text = (e.text || '').trim();
+      if (!text) continue;
+      // Puce + texte indenté pour que les retours à la ligne s'alignent.
+      ensureSpace(5);
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10);
+      pdf.text('•', MARGIN + 3, y);
+      wrapWrite(text, MARGIN + 8, CONTENT_W - 8, { size: 10 });
+      y += 1;
+    }
+
+    // Aperçu Avancements
+    if (sec.key === 'avancement' && showAvancPreview) {
+      const lotsAgg = isLatest
+        ? computeAvancementForCompany(companyId)
+        : (Array.isArray(week.avancementSnapshot) ? week.avancementSnapshot : computeAvancementForCompany(companyId));
+      if (lotsAgg && lotsAgg.length > 0 && lotsAgg.some(l => l.tasks.length > 0)) {
+        if (entries.length > 0) y += 2;
+        for (const lot of lotsAgg) {
+          if (!lot.tasks || lot.tasks.length === 0) continue;
+          let lotTotal = 0, lotDone = 0;
+          for (const t of lot.tasks) { lotTotal += t.total; lotDone += t.vols.done; }
+          const lotPct = lotTotal > 0 ? Math.round((lotDone / lotTotal) * 100) : 0;
+          ensureSpace(7);
+          pdf.setFont('helvetica', 'bold'); pdf.setFontSize(11);
+          const lotRgb = hexToRgb(lot.color);
+          pdf.setFillColor(...lotRgb);
+          pdf.rect(MARGIN + 4, y - 3, 2.2, 4, 'F');
+          pdf.text(lot.name.toUpperCase(), MARGIN + 8, y);
+          pdf.text(`${lotPct} %`, PAGE_W - MARGIN, y, { align: 'right' });
+          y += 5;
+          for (const task of lot.tasks) {
+            ensureSpace(11);
+            pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10);
+            pdf.text(task.title || '(sans intitulé)', MARGIN + 8, y);
+            pdf.setTextColor(120); pdf.setFontSize(9);
+            pdf.text(fmtRecapVolume(task.type, task.total), PAGE_W - MARGIN, y, { align: 'right' });
+            pdf.setTextColor(0); pdf.setFontSize(10);
+            y += 2;
+            // Barre 3-segments
+            const barX = MARGIN + 8;
+            const barW = CONTENT_W - 8;
+            const barH = 2.4;
+            const pctSum = (task.pct.done || 0) + (task.pct.doing || 0) + (task.pct.todo || 0);
+            const norm = pctSum > 0 ? pctSum : 1;
+            const wDone  = barW * (task.pct.done  / norm);
+            const wDoing = barW * (task.pct.doing / norm);
+            const wTodo  = barW * (task.pct.todo  / norm);
+            pdf.setFillColor(220, 220, 220);
+            pdf.rect(barX, y, barW, barH, 'F');
+            let bx = barX;
+            if (wDone  > 0) { pdf.setFillColor(46, 125, 50);  pdf.rect(bx, y, wDone,  barH, 'F'); bx += wDone;  }
+            if (wDoing > 0) { pdf.setFillColor(237, 108, 2);  pdf.rect(bx, y, wDoing, barH, 'F'); bx += wDoing; }
+            if (wTodo  > 0) { pdf.setFillColor(211, 47, 47);  pdf.rect(bx, y, wTodo,  barH, 'F'); }
+            y += barH + 2;
+            // Légende
+            pdf.setFontSize(8.5);
+            let legX = MARGIN + 8;
+            const labels = { done: 'Réalisée', doing: 'En cours', todo: 'À faire' };
+            const palette = { done: [46,125,50], doing: [237,108,2], todo: [211,47,47] };
+            for (const k of ['done', 'doing', 'todo']) {
+              if (task.pct[k] <= 0.01) continue;
+              pdf.setFillColor(...palette[k]);
+              pdf.circle(legX, y - 1.2, 0.8, 'F');
+              pdf.setFont('helvetica', 'bold');
+              pdf.text(`${Math.round(task.pct[k])} %`, legX + 1.8, y);
+              const pctTxtW = pdf.getTextWidth(`${Math.round(task.pct[k])} %`);
+              pdf.setFont('helvetica', 'normal'); pdf.setTextColor(110);
+              pdf.text(labels[k], legX + 1.8 + pctTxtW + 1.2, y);
+              const lblW = pdf.getTextWidth(labels[k]);
+              pdf.setTextColor(0);
+              legX += 1.8 + pctTxtW + 1.2 + lblW + 7;
+            }
+            pdf.setFontSize(10);
+            y += 3;
+          }
+          y += 1;
+        }
+      }
+    }
+
+    // Aperçu Administratif
+    if (sec.key === 'admin' && showAdminPreview) {
+      const data = isLatest
+        ? computeAdminAlertsForCompany(companyId)
+        : (Array.isArray(week.adminSnapshot) ? week.adminSnapshot : computeAdminAlertsForCompany(companyId));
+      if (data && data.length > 0) {
+        if (entries.length > 0) y += 2;
+        for (const w of data) {
+          ensureSpace(6);
+          pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10);
+          pdf.text(w.workerName, MARGIN + 4, y);
+          y += 4;
+          for (const it of w.items) {
+            ensureSpace(5);
+            pdf.setFont('helvetica', it.isExpired ? 'bold' : 'normal');
+            pdf.setFontSize(9.5);
+            if (it.isExpired) pdf.setTextColor(183, 28, 28);
+            else pdf.setTextColor(70);
+            // Puce alignée gauche, texte en wrap
+            pdf.text('•', MARGIN + 9, y);
+            const lines = pdf.splitTextToSize(it.text, CONTENT_W - 16);
+            for (let li = 0; li < lines.length; li++) {
+              if (li > 0) { ensureSpace(4); }
+              pdf.text(lines[li], MARGIN + 13, y);
+              if (li < lines.length - 1) y += 3.8;
+            }
+            pdf.setTextColor(0);
+            y += 4.2;
+          }
+          y += 1;
+        }
+      }
+    }
+
+    y += 4;
+  }
+
+  addFooter();
+
+  // Nom de fichier sûr (pas de caractères chemin)
+  const safe = (s) => (s || '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+  const fname = `CR_${safe(company.name)}_${safe(week.label)}_${dateStr.replace(/\//g, '-')}.pdf`;
+  pdf.save(fname);
+  showToast('PDF exporté ✓');
 }
 
 function deleteCRWeek(companyId, weekId) {
