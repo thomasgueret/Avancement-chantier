@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.95';
+const APP_VERSION = '0.96';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -3974,7 +3974,7 @@ async function exportCRToPDF(companyId, weekId) {
         ? computeAvancementForCompany(companyId)
         : (Array.isArray(week.avancementSnapshot) ? week.avancementSnapshot : computeAvancementForCompany(companyId));
       if (lotsAgg && lotsAgg.length > 0 && lotsAgg.some(l => l.tasks.length > 0)) {
-        y += 3;
+        y += 8;
         for (const lot of lotsAgg) {
           if (!lot.tasks || lot.tasks.length === 0) continue;
           let lotTotal = 0, lotDone = 0;
@@ -4042,7 +4042,7 @@ async function exportCRToPDF(companyId, weekId) {
         ? computeAdminAlertsForCompany(companyId)
         : (Array.isArray(week.adminSnapshot) ? week.adminSnapshot : computeAdminAlertsForCompany(companyId));
       if (data && data.length > 0) {
-        y += 3;
+        y += 8;
         for (const w of data) {
           ensureSpace(6);
           pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10);
