@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.93';
+const APP_VERSION = '0.94';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -3579,6 +3579,9 @@ const CR_SECTIONS = [
   { key: 'reclamations', label: 'Réclamations' }
 ];
 const CR_SECTION_KEYS = new Set(CR_SECTIONS.map(s => s.key));
+// Libellé de l'entreprise « interne » (gestionnaire de chantier) toujours
+// proposé dans le menu Responsable, en plus de l'entreprise du CR courant.
+const CR_INTERNAL_LABEL = 'BBGO';
 
 // Migre les anciennes structures CR (sans niveau « semaine ») vers la
 // nouvelle. Idempotent : ne fait rien si déjà au bon format. Appelée
@@ -3630,6 +3633,29 @@ function migrateCRState() {
     if (typeof av === 'boolean') {
       const wid = ensureWeek();
       state.crAvancementVisible[companyId] = { [wid]: av };
+    }
+  }
+  // v0.94 : chaque entrée gagne crOrigin, echeance, responsable. Pour les
+  // entrées préexistantes, on tag avec le label de la semaine où elles
+  // sont actuellement stockées (approximation faute d'historique).
+  for (const companyId of Object.keys(state.crEntries)) {
+    const byWeek = state.crEntries[companyId];
+    if (!byWeek || typeof byWeek !== 'object') continue;
+    const weeks = state.crWeeks[companyId] || [];
+    for (const wid of Object.keys(byWeek)) {
+      const bySec = byWeek[wid];
+      if (!bySec || typeof bySec !== 'object') continue;
+      const wk = weeks.find(w => w.id === wid);
+      const fallbackLabel = wk ? wk.label : '';
+      for (const secKey of Object.keys(bySec)) {
+        const list = bySec[secKey];
+        if (!Array.isArray(list)) continue;
+        for (const e of list) {
+          if (typeof e.crOrigin    === 'undefined') e.crOrigin    = fallbackLabel;
+          if (typeof e.echeance    === 'undefined') e.echeance    = null;
+          if (typeof e.responsable === 'undefined') e.responsable = null;
+        }
+      }
     }
   }
 }
@@ -3689,7 +3715,16 @@ function addCRWeek(companyId) {
     const newSecs = {};
     for (const secKey of Object.keys(prevSecs)) {
       if (!Array.isArray(prevSecs[secKey])) continue;
-      newSecs[secKey] = prevSecs[secKey].map(e => ({ id: uid(), text: e.text || '' }));
+      // Copie verbatim sauf l'ID. crOrigin préservé pour conserver la
+      // trace du CR où la tâche est née ; échéance et responsable
+      // copiés tels quels (à terme on ne reportera que les non-Faite).
+      newSecs[secKey] = prevSecs[secKey].map(e => ({
+        id: uid(),
+        text: e.text || '',
+        crOrigin: e.crOrigin || prev.label,
+        echeance: e.echeance || null,
+        responsable: e.responsable || null
+      }));
     }
     state.crEntries[companyId][newWeek.id] = newSecs;
   }
@@ -3837,16 +3872,32 @@ async function exportCRToPDF(companyId, weekId) {
       continue;
     }
 
-    // Notes libres (textareas)
+    // Notes libres (textareas) avec metadata (CR origine / échéance / responsable)
     for (const e of entries) {
       const text = (e.text || '').trim();
-      if (!text) continue;
+      if (!text && !e.echeance && !e.responsable) continue;
       // Puce + texte indenté pour que les retours à la ligne s'alignent.
       ensureSpace(5);
       pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10);
       pdf.text('•', MARGIN + 3, y);
-      wrapWrite(text, MARGIN + 8, CONTENT_W - 8, { size: 10 });
-      y += 1;
+      wrapWrite(text || '(sans texte)', MARGIN + 8, CONTENT_W - 8, { size: 10 });
+      // Ligne meta sous le texte : « ↳ CR 3 · échéance 15/06/26 · BBGO »
+      const metaParts = [];
+      if (e.crOrigin) metaParts.push(e.crOrigin);
+      if (e.echeance) {
+        const [yy, mm, dd] = e.echeance.split('-');
+        metaParts.push('échéance ' + dd + '/' + mm + '/' + yy.slice(2));
+      }
+      const respLabel = e.responsable === null || e.responsable === 'BBGO' || !e.responsable
+        ? CR_INTERNAL_LABEL
+        : (state.companies.find(c => c.id === e.responsable)?.name || CR_INTERNAL_LABEL);
+      metaParts.push(respLabel);
+      const metaTxt = '↳ ' + metaParts.join(' · ');
+      ensureSpace(4);
+      pdf.setFont('helvetica', 'italic'); pdf.setFontSize(8.5); pdf.setTextColor(110);
+      pdf.text(metaTxt, MARGIN + 8, y);
+      pdf.setTextColor(0);
+      y += 4.5;
     }
 
     // Aperçu Avancements
@@ -3892,7 +3943,10 @@ async function exportCRToPDF(companyId, weekId) {
             if (wDone  > 0) { pdf.setFillColor(46, 125, 50);  pdf.rect(bx, y, wDone,  barH, 'F'); bx += wDone;  }
             if (wDoing > 0) { pdf.setFillColor(237, 108, 2);  pdf.rect(bx, y, wDoing, barH, 'F'); bx += wDoing; }
             if (wTodo  > 0) { pdf.setFillColor(211, 47, 47);  pdf.rect(bx, y, wTodo,  barH, 'F'); }
-            y += barH + 2;
+            // Le baseline de la ligne légende doit être *en-dessous* de la
+            // barre — sinon la pastille et le texte chevauchent la barre.
+            // baseline_legend = bottom_bar + interligne (3.5 mm)
+            y += barH + 3.5;
             // Légende
             pdf.setFontSize(8.5);
             let legX = MARGIN + 8;
@@ -3901,18 +3955,21 @@ async function exportCRToPDF(companyId, weekId) {
             for (const k of ['done', 'doing', 'todo']) {
               if (task.pct[k] <= 0.01) continue;
               pdf.setFillColor(...palette[k]);
-              pdf.circle(legX, y - 1.2, 0.8, 'F');
+              // Pastille verticalement centrée sur la hauteur des x-heights
+              // de la ligne légende (~0.6 mm sous le baseline).
+              pdf.circle(legX, y - 1.0, 0.9, 'F');
               pdf.setFont('helvetica', 'bold');
-              pdf.text(`${Math.round(task.pct[k])} %`, legX + 1.8, y);
+              pdf.text(`${Math.round(task.pct[k])} %`, legX + 2.2, y);
               const pctTxtW = pdf.getTextWidth(`${Math.round(task.pct[k])} %`);
               pdf.setFont('helvetica', 'normal'); pdf.setTextColor(110);
-              pdf.text(labels[k], legX + 1.8 + pctTxtW + 1.2, y);
+              pdf.text(labels[k], legX + 2.2 + pctTxtW + 1.5, y);
               const lblW = pdf.getTextWidth(labels[k]);
               pdf.setTextColor(0);
-              legX += 1.8 + pctTxtW + 1.2 + lblW + 7;
+              legX += 2.2 + pctTxtW + 1.5 + lblW + 7;
             }
             pdf.setFontSize(10);
-            y += 3;
+            // Espace inter-tâches confortable (3.5 mm)
+            y += 3.5;
           }
           y += 1;
         }
@@ -4012,7 +4069,15 @@ function toggleCRCollapsed(companyId, weekId, sectionKey) {
 }
 function addCREntry(companyId, weekId, sectionKey) {
   const list = ensureCRBucket(companyId, weekId, sectionKey);
-  list.push({ id: uid(), text: '' });
+  const weeks = getCRWeeks(companyId);
+  const wk = weeks.find(w => w.id === weekId);
+  list.push({
+    id: uid(),
+    text: '',
+    crOrigin: wk ? wk.label : '',  // ← n° du CR où la note est née
+    echeance: null,                // ← date 'YYYY-MM-DD' ou null
+    responsable: null              // ← 'BBGO' | companyId | null (défaut BBGO au render)
+  });
   // Force le dépliage de la section quand on ajoute une note
   if (state.crCollapsed[companyId] && state.crCollapsed[companyId][weekId]) {
     delete state.crCollapsed[companyId][weekId][sectionKey];
@@ -4028,10 +4093,15 @@ function addCREntry(companyId, weekId, sectionKey) {
   });
 }
 function updateCREntry(companyId, weekId, sectionKey, entryId, text) {
+  setCREntryField(companyId, weekId, sectionKey, entryId, 'text', text);
+}
+function setCREntryField(companyId, weekId, sectionKey, entryId, field, value) {
   const list = getCREntries(companyId, weekId, sectionKey);
   const entry = list.find(e => e.id === entryId);
   if (!entry) return;
-  entry.text = text;
+  if (field === 'echeance')    entry.echeance    = value || null;
+  else if (field === 'responsable') entry.responsable = value || null;
+  else if (field === 'text')   entry.text        = value;
   save();
 }
 function deleteCREntry(companyId, weekId, sectionKey, entryId) {
@@ -4549,6 +4619,10 @@ function buildCREntry(companyId, weekId, sectionKey, entry) {
   row.dataset.weekId = weekId;
   row.dataset.sectionKey = sectionKey;
   row.dataset.entryId = entry.id;
+
+  // ----- Ligne 1 : textarea + croix supprimer -----
+  const topRow = document.createElement('div');
+  topRow.className = 'cr-entry-top';
   const ta = document.createElement('textarea');
   ta.className = 'cr-entry-text';
   ta.rows = 2;
@@ -4559,7 +4633,7 @@ function buildCREntry(companyId, weekId, sectionKey, entry) {
   ta.dataset.weekId = weekId;
   ta.dataset.sectionKey = sectionKey;
   ta.dataset.entryId = entry.id;
-  row.appendChild(ta);
+  topRow.appendChild(ta);
   const del = document.createElement('button');
   del.type = 'button';
   del.className = 'cr-entry-delete';
@@ -4570,7 +4644,63 @@ function buildCREntry(companyId, weekId, sectionKey, entry) {
   del.dataset.entryId = entry.id;
   del.setAttribute('aria-label', 'Supprimer la note');
   del.innerHTML = '×';
-  row.appendChild(del);
+  topRow.appendChild(del);
+  row.appendChild(topRow);
+
+  // ----- Ligne 2 : metadata (origin CR, échéance, responsable) -----
+  const meta = document.createElement('div');
+  meta.className = 'cr-entry-meta';
+  // Badge origine (read-only)
+  const originBadge = document.createElement('span');
+  originBadge.className = 'cr-entry-origin';
+  originBadge.title = 'Compte-rendu d\'origine';
+  originBadge.textContent = entry.crOrigin || '—';
+  meta.appendChild(originBadge);
+  // Échéance
+  const echLabel = document.createElement('label');
+  echLabel.className = 'cr-entry-echeance';
+  echLabel.title = 'Échéance';
+  echLabel.innerHTML = '📅 ';
+  const echInput = document.createElement('input');
+  echInput.type = 'date';
+  echInput.value = entry.echeance || '';
+  echInput.dataset.crAction = 'set-entry-echeance';
+  echInput.dataset.companyId = companyId;
+  echInput.dataset.weekId = weekId;
+  echInput.dataset.sectionKey = sectionKey;
+  echInput.dataset.entryId = entry.id;
+  echLabel.appendChild(echInput);
+  meta.appendChild(echLabel);
+  // Responsable : BBGO + entreprise du CR
+  const respLabel = document.createElement('label');
+  respLabel.className = 'cr-entry-resp';
+  respLabel.title = 'Responsable';
+  respLabel.innerHTML = '👤 ';
+  const respSel = document.createElement('select');
+  respSel.dataset.crAction = 'set-entry-responsable';
+  respSel.dataset.companyId = companyId;
+  respSel.dataset.weekId = weekId;
+  respSel.dataset.sectionKey = sectionKey;
+  respSel.dataset.entryId = entry.id;
+  const optBBGO = document.createElement('option');
+  optBBGO.value = 'BBGO';
+  optBBGO.textContent = CR_INTERNAL_LABEL;
+  respSel.appendChild(optBBGO);
+  const company = state.companies.find(c => c.id === companyId);
+  if (company && company.name !== CR_INTERNAL_LABEL) {
+    const optC = document.createElement('option');
+    optC.value = companyId;
+    optC.textContent = company.name;
+    respSel.appendChild(optC);
+  }
+  // Valeur courante (BBGO par défaut)
+  respSel.value = (entry.responsable && [...respSel.options].some(o => o.value === entry.responsable))
+    ? entry.responsable
+    : 'BBGO';
+  respLabel.appendChild(respSel);
+  meta.appendChild(respLabel);
+
+  row.appendChild(meta);
   return row;
 }
 
@@ -8692,6 +8822,16 @@ function init() {
       if (ad) {
         setCRAdminVisible(ad.dataset.companyId, ad.dataset.weekId, ad.checked);
         renderCR();
+        return;
+      }
+      const ech = e.target.closest('input[data-cr-action="set-entry-echeance"]');
+      if (ech) {
+        setCREntryField(ech.dataset.companyId, ech.dataset.weekId, ech.dataset.sectionKey, ech.dataset.entryId, 'echeance', ech.value);
+        return;
+      }
+      const resp = e.target.closest('select[data-cr-action="set-entry-responsable"]');
+      if (resp) {
+        setCREntryField(resp.dataset.companyId, resp.dataset.weekId, resp.dataset.sectionKey, resp.dataset.entryId, 'responsable', resp.value);
         return;
       }
     });

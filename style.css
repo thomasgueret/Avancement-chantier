@@ -3712,3 +3712,51 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   border-left: 1px solid var(--border);
 }
 .cr-export-btn:active { background: var(--accent-soft); }
+
+/* ----- CR : entrée avec métadonnées (origine CR / échéance / responsable) ----- */
+.cr-entry {
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+.cr-entry-top {
+  display: flex; align-items: stretch; gap: 6px;
+}
+.cr-entry-top .cr-entry-text { flex: 1; min-width: 0; background: var(--surface); }
+.cr-entry-meta {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.cr-entry-origin {
+  display: inline-flex; align-items: center;
+  padding: 3px 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 999px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.cr-entry-echeance,
+.cr-entry-resp {
+  display: inline-flex; align-items: center;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+}
+.cr-entry-echeance input,
+.cr-entry-resp select {
+  border: none; background: transparent;
+  font: inherit; font-size: 12px;
+  color: var(--text);
+  padding: 2px 0;
+  min-width: 90px;
+  -webkit-tap-highlight-color: transparent;
+}
+.cr-entry-echeance input:focus,
+.cr-entry-resp select:focus { outline: none; }
