@@ -3633,3 +3633,68 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   font-size: 11px; color: var(--text-3);
   font-style: italic;
 }
+
+/* ----- CR Avancements : légende sous chaque barre (% par statut) ----- */
+.cr-avanc-task-legend {
+  display: flex; flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 4px;
+  font-size: 11px;
+}
+.cr-avanc-task-legend-item {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--text-3);
+}
+.cr-avanc-task-legend-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  display: inline-block;
+}
+.cr-avanc-task-legend-dot.is-done  { background: #2e7d32; }
+.cr-avanc-task-legend-dot.is-doing { background: #ed6c02; }
+.cr-avanc-task-legend-dot.is-todo  { background: #d32f2f; }
+.cr-avanc-task-legend-pct {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+/* ----- CR Administratif : aperçu docs périmés / bientôt périmés ----- */
+.cr-admin-preview { margin-top: 8px; }
+.cr-admin-list {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-direction: column;
+  gap: 8px;
+}
+.cr-admin-worker {
+  background: var(--surface-2);
+  border-left: 3px solid var(--warning, #ed6c02);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+.cr-admin-worker-name {
+  font-size: 13px; font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.cr-admin-items {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-direction: column;
+  gap: 3px;
+}
+.cr-admin-item {
+  font-size: 12px;
+  color: var(--text-2);
+  padding-left: 12px;
+  position: relative;
+}
+.cr-admin-item::before {
+  content: '•';
+  position: absolute; left: 0;
+  color: var(--text-3);
+}
+.cr-admin-item.is-expired {
+  color: var(--danger);
+  font-weight: 700;
+  text-decoration: underline;
+}
+.cr-admin-item.is-expired::before { color: var(--danger); }

@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.90';
+const APP_VERSION = '0.91';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -92,6 +92,7 @@ const state = {
   crCollapsed: {},
   crSelectedCompanyId: null, // entreprise affichée dans le slider CR (UI per-device)
   crAvancementVisible: {},
+  crAdminVisible: {},        // { [companyId]: { [weekId]: bool } } — aperçu Administratif
   crWeeks: {},               // { [companyId]: [{ id, label, createdAt }] }
   crSelectedWeekId: {},      // { [companyId]: weekId } — semaine active (UI per-device)
   // Synchronisation (modèle simplifié : un seul jeu partagé via Supabase)
@@ -164,6 +165,7 @@ function load() {
     if (data.crEntries   && typeof data.crEntries   === 'object') state.crEntries   = data.crEntries;
     if (data.crCollapsed && typeof data.crCollapsed === 'object') state.crCollapsed = data.crCollapsed;
     if (data.crAvancementVisible && typeof data.crAvancementVisible === 'object') state.crAvancementVisible = data.crAvancementVisible;
+    if (data.crAdminVisible      && typeof data.crAdminVisible      === 'object') state.crAdminVisible      = data.crAdminVisible;
     if (data.crWeeks && typeof data.crWeeks === 'object') state.crWeeks = data.crWeeks;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
@@ -220,6 +222,7 @@ function save() {
     crEntries: state.crEntries,
     crCollapsed: state.crCollapsed,
     crAvancementVisible: state.crAvancementVisible,
+    crAdminVisible: state.crAdminVisible,
     crWeeks: state.crWeeks,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange,
@@ -3396,6 +3399,7 @@ function deleteCompany(id) {
   delete state.crEntries[id];
   delete state.crCollapsed[id];
   delete state.crAvancementVisible[id];
+  delete state.crAdminVisible[id];
   delete state.crWeeks[id];
   delete state.crSelectedWeekId[id];
   if (state.crSelectedCompanyId === id) state.crSelectedCompanyId = null;
@@ -3583,6 +3587,7 @@ function migrateCRState() {
   if (!state.crEntries)           state.crEntries           = {};
   if (!state.crCollapsed)         state.crCollapsed         = {};
   if (!state.crAvancementVisible) state.crAvancementVisible = {};
+  if (!state.crAdminVisible)      state.crAdminVisible      = {};
   if (!state.crWeeks)             state.crWeeks             = {};
   if (!state.crSelectedWeekId)    state.crSelectedWeekId    = {};
   // Pour chaque entreprise qui a une donnée CR : s'assure qu'au moins une
@@ -3665,11 +3670,14 @@ function getNextCRWeekLabel(weeks) {
 function addCRWeek(companyId) {
   const weeks = getCRWeeks(companyId);
   const prev = weeks[weeks.length - 1];
-  // Fige l'aperçu Avancements de la semaine précédente AVANT d'en
-  // ajouter une nouvelle : à partir de maintenant, la précédente est
-  // un cliché immuable du Récap au moment de la bascule.
+  // Fige les aperçus Avancements + Administratif de la semaine précédente
+  // AVANT d'en ajouter une nouvelle. À partir de maintenant, la
+  // précédente est un cliché immuable au moment de la bascule.
   if (prev && !Array.isArray(prev.avancementSnapshot)) {
     prev.avancementSnapshot = computeAvancementForCompany(companyId);
+  }
+  if (prev && !Array.isArray(prev.adminSnapshot)) {
+    prev.adminSnapshot = computeAdminAlertsForCompany(companyId);
   }
   const newWeek = { id: 'wk_' + uid(), label: getNextCRWeekLabel(weeks), createdAt: Date.now() };
   weeks.push(newWeek);
@@ -3694,6 +3702,11 @@ function addCRWeek(companyId) {
     if (!state.crAvancementVisible[companyId]) state.crAvancementVisible[companyId] = {};
     state.crAvancementVisible[companyId][newWeek.id] = false;
   }
+  // Idem pour l'aperçu Administratif
+  if (state.crAdminVisible[companyId] && state.crAdminVisible[companyId][prev.id] === false) {
+    if (!state.crAdminVisible[companyId]) state.crAdminVisible[companyId] = {};
+    state.crAdminVisible[companyId][newWeek.id] = false;
+  }
   state.crSelectedWeekId[companyId] = newWeek.id;
   save();
   renderCR();
@@ -3711,10 +3724,12 @@ function deleteCRWeek(companyId, weekId) {
   if (state.crEntries[companyId])           delete state.crEntries[companyId][weekId];
   if (state.crCollapsed[companyId])         delete state.crCollapsed[companyId][weekId];
   if (state.crAvancementVisible[companyId]) delete state.crAvancementVisible[companyId][weekId];
+  if (state.crAdminVisible[companyId])      delete state.crAdminVisible[companyId][weekId];
   if (state.crSelectedWeekId[companyId] === weekId) delete state.crSelectedWeekId[companyId];
   if (wasLatest && weeks.length > 0) {
     const newLast = weeks[weeks.length - 1];
     delete newLast.avancementSnapshot;
+    delete newLast.adminSnapshot;
   }
   save();
   renderCR();
@@ -3802,6 +3817,60 @@ function setCRAvancementVisible(companyId, weekId, visible) {
   if (visible) delete state.crAvancementVisible[companyId][weekId];
   else state.crAvancementVisible[companyId][weekId] = false;
   save();
+}
+function isCRAdminVisible(companyId, weekId) {
+  const bag = state.crAdminVisible[companyId];
+  if (!bag) return true;
+  return bag[weekId] !== false;
+}
+function setCRAdminVisible(companyId, weekId, visible) {
+  if (!state.crAdminVisible[companyId]) state.crAdminVisible[companyId] = {};
+  if (visible) delete state.crAdminVisible[companyId][weekId];
+  else state.crAdminVisible[companyId][weekId] = false;
+  save();
+}
+
+// Calcule la liste des alertes documentaires (statut expired/danger/
+// warning) pour les ouvriers d'une entreprise. Retourne une structure
+// snapshot-able :
+//   [{ workerName, items: [{ text, isExpired }] }]
+// Mêmes règles métier que buildExpiryReport, juste filtrées par entreprise.
+function computeAdminAlertsForCompany(companyId) {
+  const out = [];
+  const workers = (typeof getCompanyWorkers === 'function')
+    ? getCompanyWorkers(companyId)
+    : (state.workers || []).filter(w => w.companyId === companyId);
+  for (const worker of workers) {
+    const docs = getWorkerDocs(worker.id);
+    const items = [];
+    for (const docId of getApplicableDocIds(docs.employmentType)) {
+      const type = getDocType(docId);
+      const status = getDocStatus(worker.id, docId);
+      if (status !== 'expired' && status !== 'danger' && status !== 'warning') continue;
+      const label = getDocLabel(docId);
+      if (type === 'echeance') {
+        const date = getDocValue(worker.id, docId);
+        if (!date) continue;
+        const verb = (status === 'expired') ? 'est arrivé à échéance le' : 'arrivera à échéance le';
+        items.push({ text: `${label} ${verb} ${fmtFR(date)}`, isExpired: status === 'expired' });
+      } else if (type === 'validation') {
+        items.push({ text: `${label} est non conforme`, isExpired: true });
+      } else if (type === 'caces') {
+        const list = getDocValue(worker.id, docId) || [];
+        for (const c of list) {
+          const s = expiryStatus(c.expiresAt);
+          if (s !== 'expired' && s !== 'danger' && s !== 'warning') continue;
+          const subName = (c.name?.trim()) || label;
+          const verb = (s === 'expired') ? 'est arrivé à échéance le' : 'arrivera à échéance le';
+          items.push({ text: `${subName} ${verb} ${fmtFR(c.expiresAt)}`, isExpired: s === 'expired' });
+        }
+      }
+    }
+    if (items.length > 0) {
+      out.push({ workerName: worker.name?.trim() || '(ouvrier sans nom)', items });
+    }
+  }
+  return out;
 }
 
 function renderCR() {
@@ -3935,6 +4004,17 @@ function buildCRSection(companyId, week, isLatest, sec) {
       </label>
       ${addBtn}
     `;
+  } else if (sec.key === 'admin') {
+    const visible = isCRAdminVisible(companyId, weekId);
+    head.innerHTML = `
+      ${toggleBtn}
+      <span class="cr-section-name">${sec.label}</span>
+      <label class="cr-switch" title="Inclure l'aperçu dans le compte-rendu">
+        <input type="checkbox" data-cr-action="toggle-admin-visible" data-company-id="${companyId}" data-week-id="${weekId}" ${visible ? 'checked' : ''}>
+        <span class="cr-switch-track"><span class="cr-switch-thumb"></span></span>
+      </label>
+      ${addBtn}
+    `;
   } else {
     head.innerHTML = `
       ${toggleBtn}
@@ -3946,11 +4026,12 @@ function buildCRSection(companyId, week, isLatest, sec) {
 
   const body = document.createElement('div');
   body.className = 'cr-section-body';
-  // Notes libres en haut, aperçu en bas pour Avancements.
+  // Notes libres en haut, aperçu en bas pour Avancements / Administratif.
+  const hasPreview = sec.key === 'avancement' || sec.key === 'admin';
   const entries = getCREntries(companyId, weekId, sec.key);
   if (entries.length > 0) {
     for (const entry of entries) body.appendChild(buildCREntry(companyId, weekId, sec.key, entry));
-  } else if (sec.key !== 'avancement') {
+  } else if (!hasPreview) {
     const placeholder = document.createElement('p');
     placeholder.className = 'cr-section-empty';
     placeholder.textContent = 'Aucune note. Touchez + pour en ajouter une.';
@@ -3960,6 +4041,11 @@ function buildCRSection(companyId, week, isLatest, sec) {
     const previewWrap = document.createElement('div');
     previewWrap.className = 'cr-avanc-preview';
     buildCRAvancementBody(previewWrap, companyId, week, isLatest);
+    body.appendChild(previewWrap);
+  } else if (sec.key === 'admin') {
+    const previewWrap = document.createElement('div');
+    previewWrap.className = 'cr-admin-preview';
+    buildCRAdminBody(previewWrap, companyId, week, isLatest);
     body.appendChild(previewWrap);
   }
   wrap.appendChild(body);
@@ -4091,6 +4177,65 @@ function buildCRAvancementBody(body, companyId, week, isLatest) {
     body.appendChild(lotCard);
   }
 }
+// Aperçu Administratif : liste des ouvriers de l'entreprise dont au
+// moins un document a un statut expired/danger/warning. Live pour la
+// dernière semaine, snapshot pour les précédentes (back-fill auto).
+function buildCRAdminBody(body, companyId, week, isLatest) {
+  if (!isCRAdminVisible(companyId, week.id)) {
+    const off = document.createElement('p');
+    off.className = 'cr-section-empty';
+    off.textContent = 'Aperçu masqué (ne sera pas inclus dans l\'export PDF).';
+    body.appendChild(off);
+    return;
+  }
+  let data;
+  if (isLatest) {
+    data = computeAdminAlertsForCompany(companyId);
+  } else {
+    if (!Array.isArray(week.adminSnapshot)) {
+      week.adminSnapshot = computeAdminAlertsForCompany(companyId);
+      save();
+    }
+    data = week.adminSnapshot;
+  }
+  if (!data || data.length === 0) {
+    const ok = document.createElement('p');
+    ok.className = 'cr-section-empty';
+    ok.textContent = isLatest
+      ? 'Aucun document à signaler pour les ouvriers de cette entreprise.'
+      : 'Aucun document signalé lors de cette semaine.';
+    body.appendChild(ok);
+    return;
+  }
+  if (!isLatest) {
+    const badge = document.createElement('p');
+    badge.className = 'cr-avanc-frozen-note';
+    badge.textContent = '🔒 Aperçu figé à la création de la semaine suivante.';
+    body.appendChild(badge);
+  }
+  const list = document.createElement('ul');
+  list.className = 'cr-admin-list';
+  for (const w of data) {
+    const li = document.createElement('li');
+    li.className = 'cr-admin-worker';
+    const head = document.createElement('div');
+    head.className = 'cr-admin-worker-name';
+    head.textContent = w.workerName;
+    li.appendChild(head);
+    const inner = document.createElement('ul');
+    inner.className = 'cr-admin-items';
+    for (const it of w.items) {
+      const itemLi = document.createElement('li');
+      itemLi.className = 'cr-admin-item' + (it.isExpired ? ' is-expired' : '');
+      itemLi.textContent = it.text;
+      inner.appendChild(itemLi);
+    }
+    li.appendChild(inner);
+    list.appendChild(li);
+  }
+  body.appendChild(list);
+}
+
 function buildCRAvancTaskRow(task) {
   const li = document.createElement('li');
   li.className = 'cr-avanc-task';
@@ -4115,6 +4260,25 @@ function buildCRAvancTaskRow(task) {
     bar.appendChild(seg);
   }
   li.appendChild(bar);
+  // Légende sous la barre : % par statut (omis si <= 0,01 %)
+  const lg = document.createElement('div');
+  lg.className = 'cr-avanc-task-legend';
+  const labels = { done: 'Réalisée', doing: 'En cours', todo: 'À faire' };
+  for (const k of ['done', 'doing', 'todo']) {
+    if (task.pct[k] <= 0.01) continue;
+    const item = document.createElement('span');
+    item.className = 'cr-avanc-task-legend-item';
+    const dot = document.createElement('span');
+    dot.className = 'cr-avanc-task-legend-dot is-' + k;
+    const pct = document.createElement('span');
+    pct.className = 'cr-avanc-task-legend-pct';
+    pct.textContent = Math.round(task.pct[k]) + ' %';
+    const lbl = document.createElement('span');
+    lbl.textContent = labels[k];
+    item.append(dot, pct, lbl);
+    lg.appendChild(item);
+  }
+  if (lg.childNodes.length > 0) li.appendChild(lg);
   return li;
 }
 
@@ -8256,10 +8420,18 @@ function init() {
       }
     });
     crPage.addEventListener('change', (e) => {
-      const cb = e.target.closest('input[data-cr-action="toggle-avancement-visible"]');
-      if (!cb) return;
-      setCRAvancementVisible(cb.dataset.companyId, cb.dataset.weekId, cb.checked);
-      renderCR();
+      const av = e.target.closest('input[data-cr-action="toggle-avancement-visible"]');
+      if (av) {
+        setCRAvancementVisible(av.dataset.companyId, av.dataset.weekId, av.checked);
+        renderCR();
+        return;
+      }
+      const ad = e.target.closest('input[data-cr-action="toggle-admin-visible"]');
+      if (ad) {
+        setCRAdminVisible(ad.dataset.companyId, ad.dataset.weekId, ad.checked);
+        renderCR();
+        return;
+      }
     });
     crPage.addEventListener('input', (e) => {
       const ta = e.target.closest('textarea[data-cr-action="edit-entry"]');
