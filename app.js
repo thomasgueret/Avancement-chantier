@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.98';
+const APP_VERSION = '0.99';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -4699,24 +4699,12 @@ function buildCREntry(companyId, weekId, sectionKey, entry) {
   row.dataset.sectionKey = sectionKey;
   row.dataset.entryId = entry.id;
 
-  // ----- Ligne 1 : textarea + checkbox Faite + croix supprimer -----
+  // ----- Ligne 1 : checkbox ronde « Faite » + textarea + croix -----
   const topRow = document.createElement('div');
-  topRow.className = 'cr-entry-top';
-  const ta = document.createElement('textarea');
-  ta.className = 'cr-entry-text';
-  ta.rows = 2;
-  ta.placeholder = 'Saisissez votre note…';
-  ta.value = entry.text || '';
-  ta.dataset.crAction = 'edit-entry';
-  ta.dataset.companyId = companyId;
-  ta.dataset.weekId = weekId;
-  ta.dataset.sectionKey = sectionKey;
-  ta.dataset.entryId = entry.id;
-  topRow.appendChild(ta);
-  // Case Faite (juste à gauche de la croix supprimer)
+  topRow.className = 'cr-entry-row';
   const doneLabel = document.createElement('label');
-  doneLabel.className = 'cr-entry-done';
-  doneLabel.title = 'Tâche faite';
+  doneLabel.className = 'cr-entry-check';
+  doneLabel.title = 'Marquer comme faite';
   const doneCb = document.createElement('input');
   doneCb.type = 'checkbox';
   doneCb.checked = !!entry.done;
@@ -4726,11 +4714,25 @@ function buildCREntry(companyId, weekId, sectionKey, entry) {
   doneCb.dataset.sectionKey = sectionKey;
   doneCb.dataset.entryId = entry.id;
   doneLabel.appendChild(doneCb);
-  const doneTxt = document.createElement('span');
-  doneTxt.className = 'cr-entry-done-label';
-  doneTxt.textContent = 'Faite';
-  doneLabel.appendChild(doneTxt);
   topRow.appendChild(doneLabel);
+  const ta = document.createElement('textarea');
+  ta.className = 'cr-entry-text';
+  ta.rows = 1;
+  ta.placeholder = 'Décrivez la tâche…';
+  ta.value = entry.text || '';
+  ta.dataset.crAction = 'edit-entry';
+  ta.dataset.companyId = companyId;
+  ta.dataset.weekId = weekId;
+  ta.dataset.sectionKey = sectionKey;
+  ta.dataset.entryId = entry.id;
+  // Auto-resize (recalcul après ajout dans le DOM)
+  const autoResize = () => {
+    ta.style.height = 'auto';
+    ta.style.height = (ta.scrollHeight + 2) + 'px';
+  };
+  ta.addEventListener('input', autoResize);
+  setTimeout(autoResize, 0);
+  topRow.appendChild(ta);
   const del = document.createElement('button');
   del.type = 'button';
   del.className = 'cr-entry-delete';
@@ -4739,84 +4741,107 @@ function buildCREntry(companyId, weekId, sectionKey, entry) {
   del.dataset.weekId = weekId;
   del.dataset.sectionKey = sectionKey;
   del.dataset.entryId = entry.id;
-  del.setAttribute('aria-label', 'Supprimer la note');
+  del.setAttribute('aria-label', 'Supprimer');
   del.innerHTML = '×';
   topRow.appendChild(del);
   row.appendChild(topRow);
 
-  // ----- Ligne 2 : metadata (origin CR, échéance, responsable) -----
-  const meta = document.createElement('div');
-  meta.className = 'cr-entry-meta';
-  // Badge origine (read-only)
-  const originBadge = document.createElement('span');
-  originBadge.className = 'cr-entry-origin';
-  originBadge.title = 'Compte-rendu d\'origine';
-  originBadge.textContent = entry.crOrigin || '—';
-  meta.appendChild(originBadge);
-  // Échéance : date OU « Pour mémoire » (toggle PM)
+  // ----- Ligne 2 : chips (CR | Date | PM | Responsable) -----
+  const chips = document.createElement('div');
+  chips.className = 'cr-entry-chips';
+
+  // Chip CR (origine, read-only)
+  const crChip = document.createElement('span');
+  crChip.className = 'cr-chip cr-chip-cr';
+  crChip.textContent = entry.crOrigin || '—';
+  chips.appendChild(crChip);
+
+  // Chip Date — l'input date est superposé en transparent pour intercepter
+  // le tap et déclencher le picker natif iOS/Android.
   const isPM = entry.echeance === 'PM';
-  const echLabel = document.createElement('label');
-  echLabel.className = 'cr-entry-echeance' + (isPM ? ' is-pm' : '');
-  echLabel.title = 'Échéance';
-  echLabel.innerHTML = '📅 ';
-  const echInput = document.createElement('input');
-  echInput.type = 'date';
-  echInput.value = isPM ? '' : (entry.echeance || '');
-  echInput.disabled = isPM;
-  echInput.dataset.crAction = 'set-entry-echeance';
-  echInput.dataset.companyId = companyId;
-  echInput.dataset.weekId = weekId;
-  echInput.dataset.sectionKey = sectionKey;
-  echInput.dataset.entryId = entry.id;
-  echLabel.appendChild(echInput);
-  meta.appendChild(echLabel);
-  // Toggle « Pour mémoire » : désactive la date et stocke 'PM'
-  const pmLabel = document.createElement('label');
-  pmLabel.className = 'cr-entry-pm' + (isPM ? ' is-active' : '');
-  pmLabel.title = 'Pour mémoire (pas d\'échéance précise)';
+  const dateChip = document.createElement('label');
+  dateChip.className = 'cr-chip cr-chip-date' + (isPM ? ' is-disabled' : '');
+  if (entry.echeance && entry.echeance !== 'PM') {
+    const target = new Date(entry.echeance + 'T00:00:00');
+    const ref = new Date(); ref.setHours(0,0,0,0);
+    const diff = Math.round((target - ref) / 86400000);
+    if (diff < 0) dateChip.classList.add('is-overdue');
+    else if (diff <= 7) dateChip.classList.add('is-soon');
+  }
+  const dateLabel = document.createElement('span');
+  dateLabel.className = 'cr-chip-text';
+  if (entry.echeance && entry.echeance !== 'PM') {
+    const [yy, mm, dd] = entry.echeance.split('-');
+    dateLabel.textContent = '📅 ' + dd + '/' + mm + '/' + yy.slice(2);
+  } else {
+    dateLabel.textContent = '📅 Échéance';
+  }
+  dateChip.appendChild(dateLabel);
+  const dateInput = document.createElement('input');
+  dateInput.type = 'date';
+  dateInput.value = isPM ? '' : (entry.echeance || '');
+  dateInput.className = 'cr-chip-hidden-input';
+  dateInput.dataset.crAction = 'set-entry-echeance';
+  dateInput.dataset.companyId = companyId;
+  dateInput.dataset.weekId = weekId;
+  dateInput.dataset.sectionKey = sectionKey;
+  dateInput.dataset.entryId = entry.id;
+  dateChip.appendChild(dateInput);
+  chips.appendChild(dateChip);
+
+  // Chip PM (toggle)
+  const pmChip = document.createElement('label');
+  pmChip.className = 'cr-chip cr-chip-pm' + (isPM ? ' is-active' : '');
+  pmChip.title = 'Pour mémoire (pas d\'échéance précise)';
   const pmCb = document.createElement('input');
   pmCb.type = 'checkbox';
   pmCb.checked = isPM;
+  pmCb.className = 'cr-chip-hidden-input';
   pmCb.dataset.crAction = 'set-entry-pm';
   pmCb.dataset.companyId = companyId;
   pmCb.dataset.weekId = weekId;
   pmCb.dataset.sectionKey = sectionKey;
   pmCb.dataset.entryId = entry.id;
-  pmLabel.appendChild(pmCb);
-  const pmTxt = document.createElement('span');
-  pmTxt.textContent = 'PM';
-  pmLabel.appendChild(pmTxt);
-  meta.appendChild(pmLabel);
-  // Responsable : BBGO + entreprise du CR
-  const respLabel = document.createElement('label');
-  respLabel.className = 'cr-entry-resp';
-  respLabel.title = 'Responsable';
-  respLabel.innerHTML = '👤 ';
+  pmChip.appendChild(pmCb);
+  const pmText = document.createElement('span');
+  pmText.className = 'cr-chip-text';
+  pmText.textContent = 'PM';
+  pmChip.appendChild(pmText);
+  chips.appendChild(pmChip);
+
+  // Chip Responsable
+  const respChip = document.createElement('label');
+  respChip.className = 'cr-chip cr-chip-resp';
+  const respLabelEl = document.createElement('span');
+  respLabelEl.className = 'cr-chip-text';
+  const company = state.companies.find(c => c.id === companyId);
+  const respDisplay = (entry.responsable === null || !entry.responsable || entry.responsable === 'BBGO')
+    ? CR_INTERNAL_LABEL
+    : (company?.name || CR_INTERNAL_LABEL);
+  respLabelEl.textContent = '👤 ' + respDisplay;
+  respChip.appendChild(respLabelEl);
   const respSel = document.createElement('select');
+  respSel.className = 'cr-chip-hidden-input';
   respSel.dataset.crAction = 'set-entry-responsable';
   respSel.dataset.companyId = companyId;
   respSel.dataset.weekId = weekId;
   respSel.dataset.sectionKey = sectionKey;
   respSel.dataset.entryId = entry.id;
   const optBBGO = document.createElement('option');
-  optBBGO.value = 'BBGO';
-  optBBGO.textContent = CR_INTERNAL_LABEL;
+  optBBGO.value = 'BBGO'; optBBGO.textContent = CR_INTERNAL_LABEL;
   respSel.appendChild(optBBGO);
-  const company = state.companies.find(c => c.id === companyId);
   if (company && company.name !== CR_INTERNAL_LABEL) {
-    const optC = document.createElement('option');
-    optC.value = companyId;
-    optC.textContent = company.name;
-    respSel.appendChild(optC);
+    const o = document.createElement('option');
+    o.value = companyId; o.textContent = company.name;
+    respSel.appendChild(o);
   }
-  // Valeur courante (BBGO par défaut)
   respSel.value = (entry.responsable && [...respSel.options].some(o => o.value === entry.responsable))
     ? entry.responsable
     : 'BBGO';
-  respLabel.appendChild(respSel);
-  meta.appendChild(respLabel);
+  respChip.appendChild(respSel);
+  chips.appendChild(respChip);
 
-  row.appendChild(meta);
+  row.appendChild(chips);
   return row;
 }
 

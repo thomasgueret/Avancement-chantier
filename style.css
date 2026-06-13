@@ -3813,3 +3813,160 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   border-color: var(--accent);
 }
 .cr-entry-echeance.is-pm input { opacity: 0.4; }
+
+/* ============================================================
+   CR v0.99 — Cartes condensées avec chips cliquables
+   ============================================================ */
+
+/* Carte : remplace l'ancienne mise en page .cr-entry */
+.cr-entry {
+  display: flex; flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+/* Ligne 1 : checkbox ronde + textarea + croix */
+.cr-entry-row {
+  display: flex; align-items: flex-start;
+  gap: 10px;
+}
+/* Checkbox ronde « Faite » à gauche */
+.cr-entry-check {
+  flex-shrink: 0;
+  margin-top: 1px;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.cr-entry-check input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none;
+  width: 22px; height: 22px;
+  border: 2px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  cursor: pointer;
+  position: relative;
+  margin: 0;
+  transition: background 0.12s, border-color 0.12s;
+}
+.cr-entry-check input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.cr-entry-check input[type="checkbox"]:checked::after {
+  content: '✓';
+  position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -53%);
+  color: white;
+  font-size: 14px; font-weight: 700; line-height: 1;
+}
+/* Textarea auto-expansif, sans bordure (intégré à la carte) */
+.cr-entry-text {
+  flex: 1; min-width: 0;
+  border: none; background: transparent;
+  font-family: inherit; font-size: 14px;
+  color: var(--text);
+  resize: none;
+  padding: 2px 0;
+  min-height: 22px; max-height: 240px;
+  line-height: 1.35;
+  overflow: hidden;
+}
+.cr-entry-text:focus { outline: none; }
+.cr-entry-text::placeholder { color: var(--text-3); }
+.cr-entry.is-done .cr-entry-text {
+  text-decoration: line-through;
+  color: var(--text-3);
+  opacity: 0.65;
+}
+.cr-entry-delete {
+  flex-shrink: 0;
+  width: 26px; height: 26px;
+  border: none; background: transparent;
+  color: var(--text-3);
+  font-size: 22px; font-weight: 700; line-height: 1;
+  cursor: pointer;
+  border-radius: 50%;
+  -webkit-tap-highlight-color: transparent;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.cr-entry-delete:active { background: rgba(211, 47, 47, 0.12); color: var(--danger); }
+
+/* Ligne 2 : chips */
+.cr-entry-chips {
+  display: flex; flex-wrap: wrap;
+  gap: 6px;
+  padding-left: 32px; /* indent sous la checkbox pour cohérence visuelle */
+}
+.cr-chip {
+  position: relative;
+  display: inline-flex; align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 11px; font-weight: 700;
+  color: var(--text-2);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.cr-chip:active { transform: scale(0.97); }
+.cr-chip-text { pointer-events: none; }
+/* Input/select transparent qui couvre toute la chip pour intercepter le tap */
+.cr-chip-hidden-input {
+  position: absolute; inset: 0;
+  appearance: none; -webkit-appearance: none;
+  background: transparent; color: transparent;
+  border: none; padding: 0; margin: 0;
+  width: 100%; height: 100%;
+  cursor: pointer;
+  font-size: 16px;  /* iOS : évite le zoom à l'ouverture du picker */
+}
+.cr-chip-hidden-input::-webkit-calendar-picker-indicator {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  background: transparent;
+  cursor: pointer;
+}
+.cr-chip-hidden-input::-webkit-date-and-time-value { color: transparent; }
+
+/* Chip CR (badge, non cliquable) */
+.cr-chip-cr {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: transparent;
+  cursor: default;
+}
+.cr-chip-cr:active { transform: none; }
+
+/* Chip Date — couleurs selon proximité */
+.cr-chip-date.is-disabled { opacity: 0.45; }
+.cr-chip-date.is-overdue {
+  background: rgba(211, 47, 47, 0.12);
+  color: #b71c1c;
+  border-color: rgba(211, 47, 47, 0.35);
+}
+.cr-chip-date.is-soon {
+  background: rgba(237, 108, 2, 0.12);
+  color: #b54708;
+  border-color: rgba(237, 108, 2, 0.35);
+}
+
+/* Chip PM — toggle */
+.cr-chip-pm.is-active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+/* Chip Responsable — légèrement neutre */
+.cr-chip-resp {
+  background: var(--surface);
+  border-color: var(--border-strong);
+}
