@@ -3698,3 +3698,17 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   text-decoration: underline;
 }
 .cr-admin-item.is-expired::before { color: var(--danger); }
+
+/* Bouton 📄 « Exporter en PDF » dans l'en-tête de la carte CR */
+.cr-export-btn {
+  flex: 0 0 auto;
+  width: 44px;
+  border: none; background: transparent;
+  font-size: 18px; line-height: 1;
+  color: var(--accent);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-left: 1px solid var(--border);
+}
+.cr-export-btn:active { background: var(--accent-soft); }

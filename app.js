@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '0.91';
+const APP_VERSION = '0.92';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -3715,6 +3715,11 @@ function addCRWeek(companyId) {
 // Supprime une semaine + son contenu (entries, collapses, visibilité).
 // Si on supprime la semaine la plus récente, on « dégèle » la nouvelle
 // dernière (qui redevient live).
+// Export PDF — placeholder en attendant le choix de design.
+function exportCRToPDF(companyId, weekId) {
+  showToast('Export PDF — choisissez d\'abord un design (voir le chat)');
+}
+
 function deleteCRWeek(companyId, weekId) {
   const weeks = getCRWeeks(companyId);
   const idx = weeks.findIndex(w => w.id === weekId);
@@ -3958,6 +3963,16 @@ function buildCRCompanyCard(company, week, isLatest) {
     <span class="cr-company-name">${escapeHtml(company.name)} <span class="cr-company-week">— ${escapeHtml(week.label)}${isLatest ? '' : ' (figé)'}</span></span>
   `;
   headWrap.appendChild(head);
+  const exp = document.createElement('button');
+  exp.type = 'button';
+  exp.className = 'cr-export-btn';
+  exp.dataset.crAction = 'export-pdf';
+  exp.dataset.companyId = company.id;
+  exp.dataset.weekId = week.id;
+  exp.setAttribute('aria-label', 'Exporter en PDF');
+  exp.setAttribute('title', 'Exporter en PDF');
+  exp.innerHTML = '📄';
+  headWrap.appendChild(exp);
   const del = document.createElement('button');
   del.type = 'button';
   del.className = 'cr-week-delete';
@@ -8400,6 +8415,8 @@ function init() {
         renderCR();
       } else if (action === 'add-week') {
         addCRWeek(companyId);
+      } else if (action === 'export-pdf') {
+        exportCRToPDF(companyId, weekId);
       } else if (action === 'delete-week') {
         const weeks = getCRWeeks(companyId);
         const w = weeks.find(x => x.id === weekId);
