@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.01';
+const APP_VERSION = '1.02';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -3917,7 +3917,17 @@ async function exportCRToPDF(companyId, weekId) {
     const nLines = Math.max(taskLines.length, respLines.length, 1);
     const rowH = nLines * lineH + padY * 2;
     ensureSpace(rowH);
-    if (isAlt) {
+    // Échéance dépassée → fond rouge pâle (prime sur l'alternance)
+    let isOverdue = false;
+    if (e.echeance && e.echeance !== 'PM') {
+      const target = new Date(e.echeance + 'T00:00:00');
+      const ref = new Date(); ref.setHours(0,0,0,0);
+      isOverdue = target < ref;
+    }
+    if (isOverdue) {
+      pdf.setFillColor(252, 228, 228);
+      pdf.rect(MARGIN, y, CONTENT_W, rowH, 'F');
+    } else if (isAlt) {
       pdf.setFillColor(...ALT_ROW);
       pdf.rect(MARGIN, y, CONTENT_W, rowH, 'F');
     }
@@ -3995,24 +4005,17 @@ async function exportCRToPDF(companyId, weekId) {
         y += 8;
         for (const lot of lotsAgg) {
           if (!lot.tasks || lot.tasks.length === 0) continue;
-          let lotTotal = 0, lotDone = 0;
-          for (const t of lot.tasks) { lotTotal += t.total; lotDone += t.vols.done; }
-          const lotPct = lotTotal > 0 ? Math.round((lotDone / lotTotal) * 100) : 0;
           ensureSpace(7);
           pdf.setFont('helvetica', 'bold'); pdf.setFontSize(11);
           const lotRgb = hexToRgb(lot.color);
           pdf.setFillColor(...lotRgb);
           pdf.rect(MARGIN + 4, y - 3, 2.2, 4, 'F');
           pdf.text(lot.name.toUpperCase(), MARGIN + 8, y);
-          pdf.text(`${lotPct} %`, PAGE_W - MARGIN, y, { align: 'right' });
           y += 5;
           for (const task of lot.tasks) {
             ensureSpace(11);
             pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10);
             pdf.text(task.title || '(sans intitulé)', MARGIN + 8, y);
-            pdf.setTextColor(120); pdf.setFontSize(9);
-            pdf.text(fmtRecapVolume(task.type, task.total), PAGE_W - MARGIN, y, { align: 'right' });
-            pdf.setTextColor(0); pdf.setFontSize(10);
             y += 2;
             const barX = MARGIN + 8;
             const barW = CONTENT_W - 8;
