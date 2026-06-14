@@ -99,6 +99,16 @@ input, select { font: inherit; }
 .page { display: none; padding: 16px; max-width: 720px; margin: 0 auto; }
 .page.active { display: block; }
 
+/* Responsive : élargit progressivement les pages au-delà du mobile pour
+   éviter les grosses gouttières vides sur iPad / desktop. La dashboard
+   garde son propre élargissement (cf. plus bas dans le fichier). */
+@media (min-width: 768px) {
+  .page { max-width: 880px; padding: 20px 24px; }
+}
+@media (min-width: 1080px) {
+  .page { max-width: 1120px; padding: 24px 32px; }
+}
+
 /* ============ SEGMENTED CONTROL (Saisie / Graphique) ============ */
 .segmented {
   --count: 2;
