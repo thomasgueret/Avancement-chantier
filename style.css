@@ -3478,9 +3478,16 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 /* ----- CR : interrupteur (switch) pour la rubrique Avancements ----- */
 .cr-switch {
   position: relative;
-  display: inline-flex; align-items: center;
+  display: inline-flex; align-items: center; justify-content: center;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  /* Cible tactile élargie : 44x44 (Apple HIG) tout en gardant le track 36x20.
+     touch-action: manipulation supprime l'interprétation iOS « scroll potentiel »
+     qui avalait les taps quand la section Avancement était haute. */
+  min-width: 44px; min-height: 44px;
+  padding: 0 4px;
+  touch-action: manipulation;
+  flex-shrink: 0;
 }
 .cr-switch input { position: absolute; opacity: 0; pointer-events: none; }
 .cr-switch-track {
