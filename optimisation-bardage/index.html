@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#ff671d" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Calepinage" />
+  <title>Optimisation calepinage bardage</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" defer></script>
+  <script src="optimizer.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <h1 class="app-title">Optimisation calepinage</h1>
+    <p class="app-subtitle">Bardage — minimiser le taux de chute</p>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="stock" role="tab">Stock</button>
+    <button class="tab" data-tab="pieces" role="tab">Pièces</button>
+    <button class="tab" data-tab="params" role="tab">Réglages</button>
+    <button class="tab" data-tab="result" role="tab">Calepinage</button>
+  </nav>
+
+  <main class="app-body">
+
+    <!-- ============ STOCK ============ -->
+    <section class="page active" id="page-stock">
+      <div class="card">
+        <h2>Plaques en stock</h2>
+        <p class="hint">Renseignez les formats de plaques disponibles. Laissez la quantité vide pour un stock illimité (∞).</p>
+        <form id="stock-form" class="grid-form">
+          <label>Nom <input type="text" id="stock-name" placeholder="ex : Trespa 3050×1530" /></label>
+          <label>Largeur (mm) <input type="number" id="stock-w" min="1" step="1" placeholder="3050" required /></label>
+          <label>Hauteur (mm) <input type="number" id="stock-h" min="1" step="1" placeholder="1530" required /></label>
+          <label>Quantité <input type="number" id="stock-qty" min="1" step="1" placeholder="∞" /></label>
+          <button type="submit" class="btn btn-primary">Ajouter</button>
+        </form>
+        <div class="table-wrap">
+          <table id="stock-table">
+            <thead><tr><th>Nom</th><th>Largeur</th><th>Hauteur</th><th>Qté</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ PIÈCES ============ -->
+    <section class="page" id="page-pieces">
+      <div class="card">
+        <h2>Pièces à découper</h2>
+        <form id="piece-form" class="grid-form">
+          <label>Nom <input type="text" id="piece-name" placeholder="ex : Allège Est" /></label>
+          <label>Type
+            <select id="piece-type">
+              <option value="rectangle">Rectangle</option>
+              <option value="triangle">Triangle rectangle</option>
+              <option value="trapezoid">Trapèze rectangle</option>
+            </select>
+          </label>
+
+          <div class="fields-rectangle piece-fields">
+            <label>Largeur (mm) <input type="number" id="rect-w" min="1" step="1" /></label>
+            <label>Hauteur (mm) <input type="number" id="rect-h" min="1" step="1" /></label>
+          </div>
+
+          <div class="fields-triangle piece-fields" hidden>
+            <label>Base (mm) <input type="number" id="tri-base" min="1" step="1" /></label>
+            <label>Hauteur (mm) <input type="number" id="tri-height" min="1" step="1" /></label>
+            <label>Angle droit
+              <select id="tri-corner">
+                <option value="bl">Bas-gauche</option>
+                <option value="br">Bas-droite</option>
+                <option value="tr">Haut-droite</option>
+                <option value="tl">Haut-gauche</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="fields-trapezoid piece-fields" hidden>
+            <label>Grande base B (mm) <input type="number" id="trap-B" min="1" step="1" /></label>
+            <label>Petite base b (mm) <input type="number" id="trap-b" min="1" step="1" /></label>
+            <label>Hauteur (mm) <input type="number" id="trap-h" min="1" step="1" /></label>
+          </div>
+
+          <label>Quantité <input type="number" id="piece-qty" min="1" step="1" value="1" /></label>
+          <label>Couleur <input type="color" id="piece-color" value="#ff671d" /></label>
+          <label class="check-inline"><input type="checkbox" id="piece-rot" checked /> Rotation autorisée</label>
+          <button type="submit" class="btn btn-primary">Ajouter</button>
+        </form>
+        <div class="table-wrap">
+          <table id="piece-table">
+            <thead><tr><th></th><th>Nom</th><th>Type</th><th>Dimensions</th><th>Qté</th><th>Rot.</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ RÉGLAGES ============ -->
+    <section class="page" id="page-params">
+      <div class="card">
+        <h2>Réglages de découpe</h2>
+        <form class="grid-form" id="params-form">
+          <label>Trait de scie / kerf (mm)
+            <input type="number" id="param-kerf" min="0" step="0.5" value="3" />
+          </label>
+          <label>Marge de rive (mm)
+            <input type="number" id="param-margin" min="0" step="1" value="0" />
+          </label>
+        </form>
+        <p class="hint">Le trait de scie est l'espace perdu entre deux pièces à chaque coupe. La marge de rive est conservée tout autour de la plaque (bords abîmés, serrage…).</p>
+      </div>
+      <div class="card">
+        <h2>Données</h2>
+        <p class="hint">Tout est enregistré automatiquement dans ce navigateur.</p>
+        <div class="btn-row">
+          <button class="btn" id="btn-export-json">Exporter (sauvegarde)</button>
+          <button class="btn" id="btn-import-json">Importer</button>
+          <input type="file" id="file-import" accept="application/json" hidden />
+          <button class="btn btn-danger" id="btn-reset">Tout effacer</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ RÉSULTAT ============ -->
+    <section class="page" id="page-result">
+      <div class="card">
+        <div class="result-actions">
+          <button class="btn btn-primary btn-lg" id="btn-optimize">Optimiser le calepinage</button>
+          <button class="btn btn-accent" id="btn-pdf" disabled>Exporter en PDF</button>
+        </div>
+        <div id="summary" class="summary"></div>
+      </div>
+      <div id="plates"></div>
+    </section>
+
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+</body>
+</html>

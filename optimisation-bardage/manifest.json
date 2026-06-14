@@ -1,0 +1,12 @@
+{
+  "name": "Optimisation calepinage bardage",
+  "short_name": "Calepinage",
+  "description": "Optimiseur de calepinage pour plaques de bardage : minimise le taux de chute et génère un carnet de découpe PDF.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f5f6f8",
+  "theme_color": "#ff671d",
+  "lang": "fr"
+}
