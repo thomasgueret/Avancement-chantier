@@ -218,22 +218,40 @@
 
   // heuristic : 'bssf' (best short side fit), 'baf' (best area fit),
   //             'bl' (bottom-left), 'blsf' (best long side fit)
-  MaxRects.prototype.findNode = function (w, h, rotatable, heuristic) {
+  //
+  // w, h   : dimensions réelles de la pièce (sans kerf)
+  // kerf   : épaisseur du trait de scie — ajouté uniquement si la pièce ne remplit
+  //          pas entièrement la zone libre dans la dimension concernée, c'est-à-dire
+  //          seulement quand une coupe sera réellement effectuée de ce côté.
+  //
+  // Le nœud retourné contient :
+  //   w, h      : espace consommé (pièce + kerf éventuel), utilisé pour fragmenter
+  //               les zones libres restantes
+  //   pieceW/H  : dimensions réelles de la pièce (pour l'enregistrement du placement)
+  MaxRects.prototype.findNode = function (w, h, rotatable, kerf, heuristic) {
+    kerf = kerf || 0;
     heuristic = heuristic || 'bssf';
     let best = null, bestPrimary = Infinity, bestSecondary = Infinity;
     const self = this;
-    const consider = function (fw, fh, rotated, free) {
-      if (fw > free.w + 1e-6 || fh > free.h + 1e-6) return;
-      const leftoverH = Math.abs(free.w - fw);
-      const leftoverV = Math.abs(free.h - fh);
+    const consider = function (pw, ph, rotated, free) {
+      // Le kerf n'est ajouté dans une direction que si l'espace restant après
+      // la pièce est au moins égal au kerf : cela indique qu'une autre pièce
+      // pourrait s'y placer et qu'une coupe sera réellement effectuée.
+      // Si le reliquat est inférieur au kerf (minuscule bande inutilisable),
+      // la coupe n'est pas nécessaire et le kerf n'est pas consommé.
+      const effW = pw + (free.w >= pw + kerf - 1e-9 ? kerf : 0);
+      const effH = ph + (free.h >= ph + kerf - 1e-9 ? kerf : 0);
+      if (effW > free.w + 1e-6 || effH > free.h + 1e-6) return;
+      const leftoverH = free.w - effW;
+      const leftoverV = free.h - effH;
       const shortSide = Math.min(leftoverH, leftoverV);
       const longSide = Math.max(leftoverH, leftoverV);
       let primary, secondary;
       switch (heuristic) {
         case 'baf':
-          primary = free.w * free.h - fw * fh; secondary = shortSide; break;
+          primary = free.w * free.h - effW * effH; secondary = shortSide; break;
         case 'bl':
-          primary = free.y + fh; secondary = free.x; break;
+          primary = free.y + effH; secondary = free.x; break;
         case 'blsf':
           primary = longSide; secondary = shortSide; break;
         case 'bssf':
@@ -243,7 +261,12 @@
       if (primary < bestPrimary - 1e-9 ||
           (Math.abs(primary - bestPrimary) < 1e-9 && secondary < bestSecondary - 1e-9)) {
         bestPrimary = primary; bestSecondary = secondary;
-        best = { x: free.x, y: free.y, w: fw, h: fh, rotated: rotated, shortSide: shortSide, longSide: longSide };
+        best = {
+          x: free.x, y: free.y,
+          w: effW, h: effH,           // espace consommé (avec kerf si coupe)
+          pieceW: pw, pieceH: ph,      // dimensions réelles de la pièce
+          rotated: rotated, shortSide: shortSide, longSide: longSide,
+        };
       }
     };
     for (let i = 0; i < self.free.length; i++) {
@@ -347,16 +370,18 @@
       bin.placements.push({
         block: block,
         x: node.x + bin.margin, y: node.y + bin.margin,
-        w: block.bbox.w, h: block.bbox.h, rotated: node.rotated,
+        // pieceW/H : dimensions réelles (sans kerf) pour le rendu
+        w: node.pieceW, h: node.pieceH, rotated: node.rotated,
       });
     }
 
     blocks.forEach(function (block) {
-      const fw = block.bbox.w + kerf, fh = block.bbox.h + kerf;
+      const bw = block.bbox.w, bh = block.bbox.h;
+      // findNode gère le kerf conditionnel : kerf est passé directement
       // 1. Meilleur emplacement parmi les plaques déjà ouvertes
       let bestBin = null, bestNode = null, bestScore = Infinity;
       for (let i = 0; i < bins.length; i++) {
-        const node = bins[i].mr.findNode(fw, fh, block.rotatable, heuristic);
+        const node = bins[i].mr.findNode(bw, bh, block.rotatable, kerf, heuristic);
         if (node) {
           const score = node.shortSide + node.longSide;
           if (score < bestScore) { bestScore = score; bestBin = bins[i]; bestNode = node; }
@@ -364,9 +389,9 @@
       }
       if (bestBin) { addPlacement(bestBin, block, bestNode); return; }
       // 2. Nouvelle plaque
-      const bin = openBinFor(block.bbox.w, block.bbox.h, block.rotatable);
+      const bin = openBinFor(bw, bh, block.rotatable);
       if (bin) {
-        const node = bin.mr.findNode(fw, fh, block.rotatable, heuristic);
+        const node = bin.mr.findNode(bw, bh, block.rotatable, kerf, heuristic);
         if (node) { addPlacement(bin, block, node); return; }
       }
       // 3. Non plaçable

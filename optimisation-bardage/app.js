@@ -394,67 +394,125 @@
     if (!lastResult || !lastResult.bins.length) { toast('Lancez d\'abord l\'optimisation'); return; }
     if (!window.jspdf) { toast('Librairie PDF non chargée'); return; }
     var jsPDF = window.jspdf.jsPDF;
+    var res = lastResult;
+    var M = 12;
+
+    // Format paysage A4
     var doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
     var pageW = doc.internal.pageSize.getWidth();
     var pageH = doc.internal.pageSize.getHeight();
-    var M = 12;
-    var res = lastResult;
 
-    // ---- Page de garde / récapitulatif ----
-    doc.setFontSize(20); doc.setTextColor('#1f2430');
-    doc.text('Carnet de découpe — Calepinage bardage', M, M + 6);
-    doc.setFontSize(11); doc.setTextColor('#6b7280');
-    doc.text('Généré le ' + new Date().toLocaleString('fr-FR'), M, M + 13);
+    // ---- Page 1 : récapitulatif ----
+    pdfHeader(doc, 'Carnet de découpe — Calepinage bardage', M);
+    doc.setFontSize(10); doc.setTextColor(107, 114, 128);
+    doc.text('Généré le ' + new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' }), M, M + 11);
 
     var s = res.stats;
-    var y = M + 26;
-    doc.setFontSize(13); doc.setTextColor('#1f2430');
-    doc.text('Synthèse', M, y); y += 7;
-    doc.setFontSize(11); doc.setTextColor('#374151');
-    var lines = [
-      'Plaques utilisées : ' + s.plateCount,
-      'Taux de chute : ' + pct(s.wasteRate),
-      'Taux d\'utilisation : ' + pct(s.usefulRate),
-      'Surface utile : ' + fmtM2(s.totalUsefulArea),
-      'Surface chute : ' + fmtM2(s.wasteArea),
-      'Trait de scie : ' + res.params.kerf + ' mm · Marge de rive : ' + res.params.margin + ' mm',
+    var y = M + 22;
+    pdfSectionTitle(doc, 'Synthèse', M, y); y += 7;
+    doc.setFontSize(10); doc.setTextColor(55, 65, 81);
+    var statLines = [
+      'Plaques utilisées : ' + s.plateCount + '   |   Taux de chute : ' + pct(s.wasteRate) + '   |   Taux d\'utilisation : ' + pct(s.usefulRate),
+      'Surface utile : ' + fmtM2(s.totalUsefulArea) + '   |   Surface chute : ' + fmtM2(s.wasteArea),
+      'Trait de scie : ' + res.params.kerf + ' mm   |   Marge de rive : ' + res.params.margin + ' mm',
     ];
-    lines.forEach(function (l) { doc.text(l, M, y); y += 6; });
+    statLines.forEach(function (l) { doc.text(l, M, y); y += 5.5; });
 
     if (res.unplaced.length) {
-      y += 4;
-      doc.setTextColor('#dc2626');
-      doc.text('⚠ ' + res.unplaced.length + ' pièce(s) non placée(s) — stock insuffisant.', M, y);
+      y += 3;
+      doc.setTextColor(220, 38, 38);
+      doc.setFontSize(10);
+      doc.text('Attention : ' + res.unplaced.length + ' piece(s) non placee(s) — stock insuffisant.', M, y);
+      y += 6;
     }
+
+    y += 4;
+    pdfSectionTitle(doc, 'Contenu des plaques', M, y); y += 7;
+    doc.setFontSize(9); doc.setTextColor(55, 65, 81);
+    res.bins.forEach(function (bin, i) {
+      var waste = (bin.plateArea - bin.usefulArea) / bin.plateArea;
+      doc.text(
+        'Plaque ' + (i + 1) + ' — ' + bin.stockName + '  (' + Math.round(bin.W) + ' × ' + Math.round(bin.H) + ' mm)'
+        + '  ·  ' + bin.placements.length + ' piece(s)'
+        + '  ·  chute ' + pct(waste),
+        M, y
+      );
+      y += 5;
+    });
 
     // ---- Une page par plaque ----
     res.bins.forEach(function (bin, i) {
       doc.addPage();
-      doc.setFontSize(15); doc.setTextColor('#1f2430');
-      doc.text('Plaque ' + (i + 1) + ' — ' + bin.stockName, M, M + 5);
-      doc.setFontSize(10); doc.setTextColor('#6b7280');
       var waste = (bin.plateArea - bin.usefulArea) / bin.plateArea;
-      doc.text(fmtMm(bin.W) + ' × ' + fmtMm(bin.H) + '  ·  ' + bin.placements.length + ' pièce(s)  ·  chute ' + pct(waste), M, M + 11);
 
-      drawPlatePDF(doc, bin, M, M + 16, pageW - 2 * M, pageH - (M + 16) - M - 38);
-      drawCutListPDF(doc, bin, M, pageH - 36, pageW - 2 * M);
+      pdfHeader(doc, 'Plaque ' + (i + 1) + ' / ' + res.bins.length + ' — ' + bin.stockName, M);
+      doc.setFontSize(9); doc.setTextColor(107, 114, 128);
+      doc.text(
+        Math.round(bin.W) + ' × ' + Math.round(bin.H) + ' mm'
+        + '   |   ' + bin.placements.length + ' piece(s)'
+        + '   |   Utilisation : ' + pct(1 - waste)
+        + '   |   Chute : ' + pct(waste),
+        M, M + 11
+      );
+
+      // Zone de dessin : toute la largeur, hauteur disponible moins le carnet en bas
+      var rows = placementSummary(bin);
+      var cutListH = 8 + rows.length * 4.5 + 2;
+      if (cutListH > 50) cutListH = 50; // max 50 mm pour le carnet
+      var drawAreaY = M + 16;
+      var drawAreaH = pageH - drawAreaY - cutListH - M;
+
+      drawPlatePDF(doc, bin, M, drawAreaY, pageW - 2 * M, drawAreaH, pageW);
+
+      // Carnet de découpe sous le schéma
+      var cutY = pageH - cutListH - M + 3;
+      drawCutListPDF(doc, bin, M, cutY, pageW - 2 * M);
     });
 
     doc.save('carnet-decoupe-bardage.pdf');
-    toast('PDF exporté');
+    toast('PDF exporté — ' + res.bins.length + ' plaque(s)');
+  }
+
+  function pdfHeader(doc, title, M) {
+    doc.setFontSize(14); doc.setTextColor(31, 36, 48);
+    doc.setFont(undefined, 'bold');
+    doc.text(title, M, M + 5);
+    doc.setFont(undefined, 'normal');
+  }
+
+  function pdfSectionTitle(doc, title, x, y) {
+    doc.setFontSize(10); doc.setTextColor(31, 36, 48);
+    doc.setFont(undefined, 'bold');
+    doc.text(title, x, y);
+    doc.setFont(undefined, 'normal');
   }
 
   function drawPlatePDF(doc, bin, x, y, maxW, maxH) {
     var W = bin.W, H = bin.H;
     var scale = Math.min(maxW / W, maxH / H);
-    var ox = x + (maxW - W * scale) / 2;
+    var drawnW = W * scale, drawnH = H * scale;
+    var ox = x + (maxW - drawnW) / 2; // centrer horizontalement
     var oy = y;
+
     function mapX(px) { return ox + px * scale; }
     function mapY(py) { return oy + (H - py) * scale; } // Y up -> page Y down
 
-    // Contour plaque
-    doc.setDrawColor('#9ca3af'); doc.setLineWidth(0.4); doc.setFillColor('#ffffff');
-    doc.rect(ox, oy, W * scale, H * scale, 'FD');
+    // Fond et contour de la plaque
+    doc.setFillColor(255, 255, 255);
+    doc.setDrawColor(156, 163, 175);
+    doc.setLineWidth(0.5);
+    doc.rect(ox, oy, drawnW, drawnH, 'FD');
+
+    // Marge de rive (si définie)
+    if (bin.margin > 0) {
+      doc.setDrawColor(229, 231, 235);
+      doc.setLineWidth(0.25);
+      doc.rect(
+        ox + bin.margin * scale, oy + bin.margin * scale,
+        (W - 2 * bin.margin) * scale, (H - 2 * bin.margin) * scale,
+        'S'
+      );
+    }
 
     bin.placements.forEach(function (pl) {
       var polys = window.NestingOptimizer.placementPolygons(pl);
@@ -463,48 +521,66 @@
         var c = hexToRgb(pp.color);
         doc.setFillColor(t.r, t.g, t.b);
         doc.setDrawColor(c.r, c.g, c.b);
-        doc.setLineWidth(0.3);
-        // Polygone -> doc.lines (segments relatifs, fermé)
+        doc.setLineWidth(0.35);
+
+        // Dessin du polygone via les API de chemin de jsPDF
         var pts = pp.poly;
-        var startX = mapX(pts[0][0]), startY = mapY(pts[0][1]);
+        // Construire les deltas pour doc.lines (format attendu : [[dx, dy], ...])
+        var startX = mapX(pts[0][0]);
+        var startY = mapY(pts[0][1]);
         var deltas = [];
         for (var k = 1; k < pts.length; k++) {
-          deltas.push([mapX(pts[k][0]) - mapX(pts[k - 1][0]), mapY(pts[k][1]) - mapY(pts[k - 1][1])]);
+          deltas.push([
+            mapX(pts[k][0]) - mapX(pts[k - 1][0]),
+            mapY(pts[k][1]) - mapY(pts[k - 1][1]),
+          ]);
         }
-        doc.lines(deltas, startX, startY, [1, 1], 'FD', true);
+        // Fermer le polygone
+        deltas.push([startX - mapX(pts[pts.length - 1][0]), startY - mapY(pts[pts.length - 1][1])]);
+        doc.lines(deltas, startX, startY, [1, 1], 'FD');
 
-        // Étiquette
+        // Étiquette centrée sur le centroïde du polygone
         var cx = 0, cy = 0;
         pts.forEach(function (p) { cx += p[0]; cy += p[1]; });
         cx /= pts.length; cy /= pts.length;
-        var fs = Math.max(5, Math.min(9, W * scale / 40));
-        doc.setFontSize(fs); doc.setTextColor('#1f2430');
-        var dimW = Math.round(pp.shape.bbox.w), dimH = Math.round(pp.shape.bbox.h);
-        doc.text(pp.label + ' (' + dimW + '×' + dimH + ')', mapX(cx), mapY(cy), { align: 'center', baseline: 'middle' });
+        var fs = Math.max(5, Math.min(8, drawnW / 50));
+        doc.setFontSize(fs);
+        doc.setTextColor(31, 36, 48);
+        var label = pp.label + ' (' + Math.round(pp.shape.bbox.w) + 'x' + Math.round(pp.shape.bbox.h) + ')';
+        // Centrer le texte manuellement (pas de baseline:'middle' pour compatibilité)
+        doc.text(label, mapX(cx), mapY(cy) + fs * 0.18, { align: 'center' });
       });
     });
+
+    // Cotes de la plaque
+    var coteFontSize = Math.max(6, Math.min(8, drawnW / 55));
+    doc.setFontSize(coteFontSize); doc.setTextColor(107, 114, 128);
+    doc.text(Math.round(W) + ' mm', ox + drawnW / 2, oy + drawnH + coteFontSize * 0.4, { align: 'center' });
+    doc.text(Math.round(H) + ' mm', ox - 2, oy + drawnH / 2, { align: 'right' });
   }
 
   function drawCutListPDF(doc, bin, x, y, maxW) {
     var rows = placementSummary(bin);
-    doc.setFontSize(9); doc.setTextColor('#1f2430');
-    doc.text('Carnet de découpe', x, y);
-    y += 4;
-    doc.setFontSize(8); doc.setTextColor('#374151');
-    var colW = maxW / 4;
+    pdfSectionTitle(doc, 'Carnet de decoupe', x, y);
+    y += 4.5;
+
+    doc.setFontSize(7.5); doc.setTextColor(55, 65, 81);
+    var cols = [0, maxW * 0.32, maxW * 0.58, maxW * 0.82];
+    var headers = ['Pièce', 'Forme / Dimensions', 'Cote (mm)', 'Qté'];
+
     doc.setFont(undefined, 'bold');
-    doc.text('Pièce', x, y); doc.text('Forme', x + colW, y);
-    doc.text('Dimensions (mm)', x + 2 * colW, y); doc.text('Qté', x + 3 * colW, y);
+    headers.forEach(function (h, j) { doc.text(h, x + cols[j], y); });
     doc.setFont(undefined, 'normal');
     y += 4;
-    rows.slice(0, 6).forEach(function (r) {
-      doc.text(String(r.label).substr(0, 28), x, y);
-      doc.text(typeLabel(r.type), x + colW, y);
-      doc.text(shapeDesc(r), x + 2 * colW, y);
-      doc.text(String(r.count), x + 3 * colW, y);
+
+    rows.forEach(function (r) {
+      if (y > doc.internal.pageSize.getHeight() - 8) return; // sécurité bas de page
+      doc.text(String(r.label).substring(0, 30), x + cols[0], y);
+      doc.text(typeLabel(r.type), x + cols[1], y);
+      doc.text(shapeDesc(r), x + cols[2], y);
+      doc.text(String(r.count), x + cols[3], y);
       y += 4;
     });
-    if (rows.length > 6) doc.text('… +' + (rows.length - 6) + ' autre(s)', x, y);
   }
 
   /* ---------- Init ---------- */
