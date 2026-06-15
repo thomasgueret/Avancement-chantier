@@ -4007,45 +4007,64 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 }
 
 /* ============================================================
-   CR v1.07 — Aperçu Effectifs : tableau 10 derniers jours
+   CR v1.08 — Aperçu Effectifs : tableau HORIZONTAL 2 lignes × 10 cols
    ============================================================ */
 .cr-eff-preview { margin-top: 6px; }
-.cr-eff-table {
+.cr-eff-scroll {
+  /* Si jamais l'écran est très étroit, on autorise un scroll horizontal
+     plutôt qu'écraser les cellules. Sur iPhone standard les 10 cellules
+     tiennent juste. */
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0 -2px;
+  scrollbar-width: thin;
+}
+.cr-eff-htable {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  table-layout: fixed;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   overflow: hidden;
   font-variant-numeric: tabular-nums;
 }
-.cr-eff-table thead th {
+.cr-eff-htable th,
+.cr-eff-htable td {
+  text-align: center;
+  padding: 5px 2px;
+  border-right: 1px solid var(--border);
+}
+.cr-eff-htable th:last-child,
+.cr-eff-htable td:last-child { border-right: none; }
+.cr-eff-htable thead th {
   background: var(--surface-2);
   color: var(--text-2);
   font-weight: 700;
-  text-align: left;
-  padding: 5px 8px;
-  border-bottom: 1px solid var(--border);
   font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-.cr-eff-table thead th:nth-child(2),
-.cr-eff-table thead th:nth-child(3) { text-align: center; }
-.cr-eff-table tbody tr:nth-child(even) { background: var(--surface-2); }
-.cr-eff-table tbody tr.is-weather { background: rgba(33, 150, 243, 0.10); }
-.cr-eff-table tbody th,
-.cr-eff-table tbody td {
-  padding: 4px 8px;
   border-bottom: 1px solid var(--border);
-  color: var(--text);
 }
-.cr-eff-table tbody tr:last-child th,
-.cr-eff-table tbody tr:last-child td { border-bottom: none; }
-.cr-eff-table tbody th { font-weight: 500; }
-.cr-eff-count    { text-align: center; font-weight: 700; }
-.cr-eff-weather  { text-align: center; font-size: 14px; }
+.cr-eff-htable thead th.is-weather {
+  background: rgba(33, 150, 243, 0.18);
+  color: #0d47a1;
+}
+.cr-eff-htable tbody td {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  position: relative;
+  line-height: 1.1;
+}
+.cr-eff-htable tbody td.is-weather {
+  background: rgba(33, 150, 243, 0.12);
+}
+.cr-eff-htable .cr-eff-h-num { display: block; }
+.cr-eff-htable .cr-eff-h-wsym {
+  display: block;
+  font-size: 10px;
+  margin-top: 1px;
+  line-height: 1;
+}
 .cr-eff-summary {
   margin: 6px 2px 0;
   font-size: 11px;

@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.07';
+const APP_VERSION = '1.08';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -4101,60 +4101,59 @@ async function exportCRToPDF(companyId, weekId) {
       }
     }
 
-    // Aperçu Effectifs : tableau 10 jours (date | présents | 🌧)
+    // Aperçu Effectifs : tableau HORIZONTAL (2 lignes × 10 colonnes).
     if (showEffPreview) {
       const effData = isLatest
         ? computeEffectifsForCompany(companyId)
         : (Array.isArray(week.effectifsSnapshot) ? week.effectifsSnapshot : computeEffectifsForCompany(companyId));
       if (Array.isArray(effData) && effData.length > 0) {
         y += 6;
-        const tx = MARGIN + 4;
-        const wDate = 28, wCount = 26, wWeather = 14;
-        const rowH = 5.5;
-        ensureSpace(rowH);
-        // En-tête
-        pdf.setFillColor(232, 232, 232);
-        pdf.rect(tx, y, wDate + wCount + wWeather, rowH, 'F');
-        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(50);
-        pdf.text('Date',     tx + 2,             y + 3.8);
-        pdf.text('Présents', tx + wDate + 2,     y + 3.8);
-        pdf.text('Intemp.',  tx + wDate + wCount + 2, y + 3.8);
-        pdf.setTextColor(0);
-        y += rowH;
+        const ordered = effData.slice().reverse(); // gauche = plus ancien
+        const cols = ordered.length;
+        const colW = CONTENT_W / cols;
+        const rowH = 6.5;
+        const tx = MARGIN;
+        ensureSpace(rowH * 2 + 1);
         let total = 0, worked = 0, wDays = 0;
-        for (let i = 0; i < effData.length; i++) {
-          const row = effData[i];
-          ensureSpace(rowH);
+        // Ligne 1 : dates (en-tête gris)
+        for (let i = 0; i < cols; i++) {
+          const row = ordered[i];
+          const cellX = tx + i * colW;
+          if (row.onWeather) pdf.setFillColor(220, 235, 250);
+          else pdf.setFillColor(232, 232, 232);
+          pdf.rect(cellX, y, colW, rowH, 'F');
+          pdf.setDrawColor(180); pdf.setLineWidth(0.15);
+          pdf.rect(cellX, y, colW, rowH, 'S');
+          pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(50);
+          const [, mm, dd] = row.date.split('-');
+          pdf.text(`${dd}/${mm}`, cellX + colW / 2, y + 4.4, { align: 'center' });
+        }
+        y += rowH;
+        // Ligne 2 : effectifs (+ 🌧 si intempéries)
+        for (let i = 0; i < cols; i++) {
+          const row = ordered[i];
+          const cellX = tx + i * colW;
           if (row.onWeather) {
-            pdf.setFillColor(220, 235, 250); // bleu pâle pour intempéries
-            pdf.rect(tx, y, wDate + wCount + wWeather, rowH, 'F');
-          } else if (i % 2 === 1) {
-            pdf.setFillColor(248, 248, 248);
-            pdf.rect(tx, y, wDate + wCount + wWeather, rowH, 'F');
+            pdf.setFillColor(235, 245, 255);
+            pdf.rect(cellX, y, colW, rowH, 'F');
           }
-          pdf.setDrawColor(200); pdf.setLineWidth(0.1);
-          pdf.line(tx, y + rowH, tx + wDate + wCount + wWeather, y + rowH);
-          pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9.5); pdf.setTextColor(40);
-          const [yy, mm, dd] = row.date.split('-');
-          pdf.text(`${dd}/${mm}/${yy.slice(2)}`, tx + 2, y + 3.8);
-          pdf.text(String(row.count), tx + wDate + 2, y + 3.8);
-          if (row.onWeather) {
-            pdf.setTextColor(30, 80, 160);
-            pdf.text('Oui', tx + wDate + wCount + 2, y + 3.8);
-          }
-          pdf.setTextColor(0);
-          y += rowH;
+          pdf.setDrawColor(180); pdf.setLineWidth(0.15);
+          pdf.rect(cellX, y, colW, rowH, 'S');
+          pdf.setFont('helvetica', 'normal'); pdf.setFontSize(11); pdf.setTextColor(20);
+          pdf.text(String(row.count), cellX + colW / 2, y + 4.4, { align: 'center' });
           total += row.count;
           if (row.count > 0) worked++;
           if (row.onWeather) wDays++;
         }
+        pdf.setTextColor(0);
+        y += rowH;
         // Synthèse
         ensureSpace(5);
         y += 1.5;
         const avg = worked > 0 ? (total / worked).toFixed(1).replace('.', ',') : '0';
         pdf.setFont('helvetica', 'italic'); pdf.setFontSize(9); pdf.setTextColor(90);
         const summary = `Total : ${total} présences sur ${worked}/10 jours travaillés (moy. ${avg}/j)`
-          + (wDays > 0 ? ` — ${wDays} j d'intempéries` : '');
+          + (wDays > 0 ? ` — ${wDays} j d'intempéries (cellules bleues)` : '');
         pdf.text(summary, MARGIN + 4, y + 2.5);
         pdf.setTextColor(0);
         y += 4;
@@ -4758,10 +4757,10 @@ function buildCRAvancementBody(body, companyId, week, isLatest) {
   }
 }
 // Aperçu Administratif : liste des ouvriers de l'entreprise dont au
-// Aperçu Effectifs : tableau des 10 derniers jours de présences pour
-// l'entreprise (lecture seule). Live pour la dernière semaine, snapshot
-// pour les précédentes (back-fill auto si snapshot manquant). Marque les
-// jours en intempéries avec une goutte 🌧.
+// Aperçu Effectifs : tableau HORIZONTAL des 10 derniers jours.
+// 2 lignes : (1) dates JJ/MM, (2) nombre de présents. Les jours en
+// intempéries voient leur cellule teintée bleu pâle + 🌧 sous le chiffre.
+// Live pour la dernière semaine, snapshot pour les précédentes.
 function buildCREffectifsBody(body, companyId, week, isLatest) {
   if (!isCREffectifsVisible(companyId, week.id)) {
     const off = document.createElement('p');
@@ -4793,36 +4792,42 @@ function buildCREffectifsBody(body, companyId, week, isLatest) {
     badge.textContent = '🔒 Aperçu figé à la création de la semaine suivante.';
     body.appendChild(badge);
   }
+  // Du plus ancien (gauche) au plus récent (droite) — lecture naturelle.
+  const ordered = data.slice().reverse();
+  const scroll = document.createElement('div');
+  scroll.className = 'cr-eff-scroll';
   const table = document.createElement('table');
-  table.className = 'cr-eff-table';
-  const thead = document.createElement('thead');
-  thead.innerHTML = '<tr><th scope="col">Date</th><th scope="col">Présents</th><th scope="col" aria-label="Intempéries">🌧</th></tr>';
-  table.appendChild(thead);
-  const tbody = document.createElement('tbody');
+  table.className = 'cr-eff-htable';
+  const trDates = document.createElement('tr');
+  const trCounts = document.createElement('tr');
   let totalPresences = 0, daysWithCount = 0, weatherDays = 0;
-  for (const row of data) {
-    const tr = document.createElement('tr');
-    if (row.onWeather) tr.classList.add('is-weather');
-    const tdDate = document.createElement('th');
-    tdDate.scope = 'row';
-    tdDate.textContent = formatDateShortFR(row.date);
-    tr.appendChild(tdDate);
+  for (const row of ordered) {
+    const [, mm, dd] = row.date.split('-');
+    const thDate = document.createElement('th');
+    thDate.scope = 'col';
+    thDate.textContent = dd + '/' + mm;
+    if (row.onWeather) thDate.classList.add('is-weather');
+    trDates.appendChild(thDate);
     const tdCount = document.createElement('td');
-    tdCount.className = 'cr-eff-count';
-    tdCount.textContent = row.count;
-    tr.appendChild(tdCount);
-    const tdW = document.createElement('td');
-    tdW.className = 'cr-eff-weather';
-    tdW.textContent = row.onWeather ? '🌧' : '';
-    tr.appendChild(tdW);
-    tbody.appendChild(tr);
+    if (row.onWeather) {
+      tdCount.classList.add('is-weather');
+      tdCount.innerHTML = `<span class="cr-eff-h-num">${row.count}</span><span class="cr-eff-h-wsym" aria-label="intempéries">🌧</span>`;
+    } else {
+      tdCount.textContent = row.count;
+    }
+    trCounts.appendChild(tdCount);
     totalPresences += row.count;
     if (row.count > 0) daysWithCount++;
     if (row.onWeather) weatherDays++;
   }
+  const thead = document.createElement('thead');
+  thead.appendChild(trDates);
+  const tbody = document.createElement('tbody');
+  tbody.appendChild(trCounts);
+  table.appendChild(thead);
   table.appendChild(tbody);
-  body.appendChild(table);
-  // Synthèse compacte sous le tableau
+  scroll.appendChild(table);
+  body.appendChild(scroll);
   const sum = document.createElement('p');
   sum.className = 'cr-eff-summary';
   const avg = daysWithCount > 0 ? (totalPresences / daysWithCount).toFixed(1).replace('.', ',') : '0';
