@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.05';
+const APP_VERSION = '1.06';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -4033,6 +4033,19 @@ async function exportCRToPDF(companyId, weekId) {
             pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10);
             pdf.text(task.title || '(sans intitulé)', MARGIN + 8, y);
             y += 2;
+            // Liste des plans concernés (sous le titre, gris italique)
+            if (Array.isArray(task.planNames) && task.planNames.length > 0) {
+              pdf.setFont('helvetica', 'italic'); pdf.setFontSize(8.5); pdf.setTextColor(120);
+              const txt = task.planNames.join(' · ');
+              const lines = pdf.splitTextToSize(txt, CONTENT_W - 12);
+              for (const ln of lines) {
+                ensureSpace(3.2);
+                pdf.text(ln, MARGIN + 8, y + 1.8);
+                y += 3.2;
+              }
+              pdf.setTextColor(0); pdf.setFontSize(10);
+              y += 0.5;
+            }
             const barX = MARGIN + 8;
             const barW = CONTENT_W - 8;
             const barH = 2.4;
@@ -4507,7 +4520,8 @@ function computeAvancementForCompany(companyId) {
         if (!tasksByTitle.has(key)) {
           tasksByTitle.set(key, {
             title: t.title, type: t.type,
-            total: 0, vols: { todo: 0, doing: 0, done: 0 }
+            total: 0, vols: { todo: 0, doing: 0, done: 0 },
+            planNames: []
           });
         }
         const acc = tasksByTitle.get(key);
@@ -4515,6 +4529,8 @@ function computeAvancementForCompany(companyId) {
         acc.vols.todo += t.vols.todo;
         acc.vols.doing+= t.vols.doing;
         acc.vols.done += t.vols.done;
+        const pn = (plan.name || '(plan sans nom)').trim();
+        if (!acc.planNames.includes(pn)) acc.planNames.push(pn);
       }
     }
     const tasks = [];
@@ -4689,6 +4705,15 @@ function buildCRAvancTaskRow(task) {
   meta.textContent = fmtRecapVolume(task.type, task.total);
   head.appendChild(meta);
   li.appendChild(head);
+  // Liste des plans qui contribuent à cette tâche (utile quand plusieurs
+  // plans portent une tâche au même titre — sans ça on ne sait pas quelle
+  // zone est concernée).
+  if (Array.isArray(task.planNames) && task.planNames.length > 0) {
+    const plans = document.createElement('div');
+    plans.className = 'cr-avanc-task-plans';
+    plans.textContent = '📐 ' + task.planNames.join(' · ');
+    li.appendChild(plans);
+  }
   const bar = document.createElement('div');
   bar.className = 'cr-avanc-bar';
   for (const k of ['done', 'doing', 'todo']) {

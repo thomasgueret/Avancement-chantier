@@ -3547,6 +3547,12 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
 }
+.cr-avanc-task-plans {
+  font-size: 10.5px;
+  color: var(--text-2);
+  margin: 1px 0 4px;
+  line-height: 1.3;
+}
 .cr-avanc-bar {
   display: flex;
   height: 6px;
