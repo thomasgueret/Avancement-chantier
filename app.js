@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.04';
+const APP_VERSION = '1.05';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -7939,9 +7939,15 @@ function isProtoShape(target) {
 // de l'SVG, ce qui résout le bug du drag tactile sur iOS Safari.
 function protoPointerDown(evt) {
   // Ignore les pointers qui démarrent sur les contrôles flottants
-  // (zoom, hint polygone) — ils ont leur propre handler de click.
+  // (zoom, export PDF, hint polygone) — ils ont leur propre handler
+  // de click. Sans cette exclusion, startProtoPan() appelle
+  // preventDefault() sur pointerdown, ce qui annule le click et empêche
+  // le bouton de s'activer (régression : la barre .proto-export-bar
+  // a été ajoutée séparément et n'était pas dans la liste).
   if (evt.target && evt.target.closest &&
-      (evt.target.closest('.proto-zoom-bar') || evt.target.closest('.proto-poly-hint'))) {
+      (evt.target.closest('.proto-zoom-bar')   ||
+       evt.target.closest('.proto-export-bar') ||
+       evt.target.closest('.proto-poly-hint'))) {
     return;
   }
   // Tap sur une forme en mode Sélection : on ouvre directement le
