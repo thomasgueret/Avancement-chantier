@@ -284,7 +284,7 @@
         el('div', { class: 'meta' }, [fmtMm(bin.W) + ' × ' + fmtMm(bin.H) + ' · ' + bin.placements.length + ' pièce(s) · chute ' + pct(waste)]),
       ]));
       var wrap = el('div', { class: 'plate-svg-wrap' });
-      wrap.appendChild(buildPlateSVG(bin));
+      wrap.appendChild(buildPlateSVG(bin, res.params.kerf));
       card.appendChild(wrap);
       card.appendChild(buildCutList(bin));
       plates.appendChild(card);
@@ -296,63 +296,144 @@
     return poly.map(function (p) { return p[0] + ',' + (plateH - p[1]); }).join(' ');
   }
 
-  function buildPlateSVG(bin) {
+  // Crée un élément SVG de type <tag> avec des attributs
+  function svgEl(svgNS, tag, attrs) {
+    var el = document.createElementNS(svgNS, tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) { el.setAttribute(k, attrs[k]); });
+    return el;
+  }
+
+  // Dessine une ligne de cotation dans le SVG.
+  // (x1,y1)-(x2,y2) : extrémités en coordonnées SVG (Y bas).
+  // dir : 'h' (horizontale) ou 'v' (verticale) pour orienter le texte.
+  function svgDimLine(svg, svgNS, x1, y1, x2, y2, label, dir, fs) {
+    var color = '#374151';
+    var lw = Math.max(fs * 0.04, 0.8);
+    var tick = fs * 0.38;
+    var g = svgEl(svgNS, 'g', {});
+
+    // Ligne principale
+    g.appendChild(svgEl(svgNS, 'line', { x1: x1, y1: y1, x2: x2, y2: y2, stroke: color, 'stroke-width': lw }));
+    // Tirets perpendiculaires aux extrémités
+    if (dir === 'h') {
+      g.appendChild(svgEl(svgNS, 'line', { x1: x1, y1: y1 - tick, x2: x1, y2: y1 + tick, stroke: color, 'stroke-width': lw }));
+      g.appendChild(svgEl(svgNS, 'line', { x1: x2, y1: y2 - tick, x2: x2, y2: y2 + tick, stroke: color, 'stroke-width': lw }));
+      // Texte centré sous la ligne
+      var tx = (x1 + x2) / 2, ty = y1 + fs * 0.72;
+      g.appendChild(Object.assign(svgEl(svgNS, 'text', {
+        x: tx, y: ty, 'font-size': fs, 'text-anchor': 'middle', fill: color, 'dominant-baseline': 'middle',
+      }), { textContent: label }));
+    } else {
+      g.appendChild(svgEl(svgNS, 'line', { x1: x1 - tick, y1: y1, x2: x1 + tick, y2: y1, stroke: color, 'stroke-width': lw }));
+      g.appendChild(svgEl(svgNS, 'line', { x1: x2 - tick, y1: y2, x2: x2 + tick, y2: y2, stroke: color, 'stroke-width': lw }));
+      // Texte vertical (rotation -90° autour du milieu)
+      var midX = x1 + fs * 0.72, midY = (y1 + y2) / 2;
+      var txtEl = svgEl(svgNS, 'text', {
+        x: midX, y: midY, 'font-size': fs, 'text-anchor': 'middle', fill: color, 'dominant-baseline': 'middle',
+        transform: 'rotate(-90,' + midX + ',' + midY + ')',
+      });
+      txtEl.textContent = label;
+      g.appendChild(txtEl);
+    }
+    svg.appendChild(g);
+  }
+
+  // Ajoute les cotations d'un placement (largeur et hauteur de la boîte englobante)
+  function svgDimAnnotations(svg, svgNS, pl, plateH, fs) {
+    var px = pl.x, py = pl.y, pw = pl.w, ph = pl.h;
+    var gap = Math.max(fs * 0.45, 4); // espace entre arête de la pièce et ligne de cote
+    // Largeur : ligne horizontale sous la pièce (en SVG Y vers le bas)
+    var yDim = plateH - py + gap; // bas de la pièce en SVG = plateH - py ; on descend de gap
+    svgDimLine(svg, svgNS, px, yDim, px + pw, yDim, Math.round(pw) + ' mm', 'h', fs);
+    // Hauteur : ligne verticale à droite de la pièce
+    var xDim = px + pw + gap;
+    var sy1 = plateH - py; // bas en SVG
+    var sy2 = plateH - py - ph; // haut en SVG
+    svgDimLine(svg, svgNS, xDim, sy1, xDim, sy2, Math.round(ph) + ' mm', 'v', fs);
+  }
+
+  function buildPlateSVG(bin, kerf) {
     var W = bin.W, H = bin.H;
     var svgNS = 'http://www.w3.org/2000/svg';
     var svg = document.createElementNS(svgNS, 'svg');
     svg.setAttribute('class', 'plate');
-    svg.setAttribute('viewBox', '-10 -10 ' + (W + 20) + ' ' + (H + 20));
+    // ViewBox élargi pour accueillir les cotations externes
+    var pad = Math.max(W, H) / 12;
+    svg.setAttribute('viewBox', (-pad) + ' ' + (-pad) + ' ' + (W + pad * 2) + ' ' + (H + pad * 2));
     svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
 
     // Contour plaque
-    var border = document.createElementNS(svgNS, 'rect');
-    border.setAttribute('x', 0); border.setAttribute('y', 0);
-    border.setAttribute('width', W); border.setAttribute('height', H);
-    border.setAttribute('fill', '#ffffff');
-    border.setAttribute('stroke', '#9ca3af');
-    border.setAttribute('stroke-width', Math.max(2, W / 600));
-    svg.appendChild(border);
+    svg.appendChild(svgEl(svgNS, 'rect', {
+      x: 0, y: 0, width: W, height: H,
+      fill: '#ffffff', stroke: '#9ca3af', 'stroke-width': Math.max(2, W / 600),
+    }));
 
     var fontSize = Math.max(W, H) / 45;
+    var annoFont = Math.max(fontSize * 0.58, 14); // taille des cotations
     var strokeW = Math.max(1.5, W / 900);
 
     bin.placements.forEach(function (pl) {
-      var polys = window.NestingOptimizer.placementPolygons(pl);
-      polys.forEach(function (pp) {
-        var poly = document.createElementNS(svgNS, 'polygon');
-        poly.setAttribute('points', polyPoints(pp.poly, H));
-        poly.setAttribute('fill', rgbCss(tint(pp.color, 0.55)));
-        poly.setAttribute('stroke', pp.color);
-        poly.setAttribute('stroke-width', strokeW);
-        poly.setAttribute('stroke-linejoin', 'round');
-        svg.appendChild(poly);
+      var result = window.NestingOptimizer.placementPolygons(pl);
 
-        // Étiquette au centroïde
+      // 1. Polygones des pièces
+      result.parts.forEach(function (pp) {
+        svg.appendChild(Object.assign(svgEl(svgNS, 'polygon', {
+          points: polyPoints(pp.poly, H),
+          fill: rgbCss(tint(pp.color, 0.55)),
+          stroke: pp.color, 'stroke-width': strokeW, 'stroke-linejoin': 'round',
+        })));
+
+        // Nom au centroïde (sans les dimensions — elles sont portées par les cotations)
         var cx = 0, cy = 0;
         pp.poly.forEach(function (p) { cx += p[0]; cy += p[1]; });
         cx /= pp.poly.length; cy /= pp.poly.length;
-        var txt = document.createElementNS(svgNS, 'text');
-        txt.setAttribute('x', cx);
-        txt.setAttribute('y', H - cy);
-        txt.setAttribute('font-size', fontSize);
-        txt.setAttribute('text-anchor', 'middle');
-        txt.setAttribute('dominant-baseline', 'middle');
-        txt.setAttribute('fill', '#1f2430');
-        txt.setAttribute('font-weight', '600');
-        var dimW = Math.round(pp.shape.bbox.w), dimH = Math.round(pp.shape.bbox.h);
-        txt.textContent = pp.label + ' (' + dimW + '×' + dimH + ')';
+        var txt = svgEl(svgNS, 'text', {
+          x: cx, y: H - cy, 'font-size': fontSize, 'text-anchor': 'middle',
+          'dominant-baseline': 'middle', fill: '#1f2430', 'font-weight': '600',
+        });
+        txt.textContent = pp.label;
         svg.appendChild(txt);
       });
+
+      // 2. Trait de scie diagonal entre deux triangles appairés
+      result.cuts.forEach(function (cut) {
+        svg.appendChild(svgEl(svgNS, 'line', {
+          x1: cut[0][0], y1: H - cut[0][1],
+          x2: cut[1][0], y2: H - cut[1][1],
+          stroke: '#ffffff',
+          'stroke-width': Math.max(kerf || 1, 1),
+          'stroke-linecap': 'butt',
+        }));
+        // Renforcer le contour du trait pour le rendre visible sur fond clair
+        svg.appendChild(svgEl(svgNS, 'line', {
+          x1: cut[0][0], y1: H - cut[0][1],
+          x2: cut[1][0], y2: H - cut[1][1],
+          stroke: 'rgba(100,100,100,0.4)',
+          'stroke-width': Math.max(kerf || 1, 1) + 1,
+          'stroke-dasharray': '0',
+          'stroke-linecap': 'butt',
+        }));
+        // Ligne blanche par-dessus pour créer le gap
+        svg.appendChild(svgEl(svgNS, 'line', {
+          x1: cut[0][0], y1: H - cut[0][1],
+          x2: cut[1][0], y2: H - cut[1][1],
+          stroke: '#f5f6f8',
+          'stroke-width': Math.max(kerf || 1, 1),
+          'stroke-linecap': 'butt',
+        }));
+      });
+
+      // 3. Cotations (largeur + hauteur du bounding box du placement)
+      svgDimAnnotations(svg, svgNS, pl, H, annoFont);
     });
     return svg;
   }
 
   function placementSummary(bin) {
-    // Regroupe les pièces identiques de la plaque pour le carnet
     var map = {};
     bin.placements.forEach(function (pl) {
-      var polys = window.NestingOptimizer.placementPolygons(pl);
-      polys.forEach(function (pp) {
+      var result = window.NestingOptimizer.placementPolygons(pl);
+      result.parts.forEach(function (pp) {
         var key = pp.label + '|' + pp.shape.type + '|' + Math.round(pp.shape.bbox.w) + '|' + Math.round(pp.shape.bbox.h);
         if (!map[key]) {
           map[key] = { label: pp.label, type: pp.shape.type, w: pp.shape.bbox.w, h: pp.shape.bbox.h, count: 0, shape: pp.shape };
@@ -462,7 +543,7 @@
       var drawAreaY = M + 16;
       var drawAreaH = pageH - drawAreaY - cutListH - M;
 
-      drawPlatePDF(doc, bin, M, drawAreaY, pageW - 2 * M, drawAreaH, pageW);
+      drawPlatePDF(doc, bin, M, drawAreaY, pageW - 2 * M, drawAreaH, res.params.kerf);
 
       // Carnet de découpe sous le schéma
       var cutY = pageH - cutListH - M + 3;
@@ -487,15 +568,28 @@
     doc.setFont(undefined, 'normal');
   }
 
-  function drawPlatePDF(doc, bin, x, y, maxW, maxH) {
+  // Dessine un polygone dans le PDF via doc.lines (segments relatifs, chemin fermé).
+  function pdfPolygon(doc, mapX, mapY, pts, style) {
+    var startX = mapX(pts[0][0]), startY = mapY(pts[0][1]);
+    var deltas = [];
+    for (var k = 1; k < pts.length; k++) {
+      deltas.push([mapX(pts[k][0]) - mapX(pts[k - 1][0]), mapY(pts[k][1]) - mapY(pts[k - 1][1])]);
+    }
+    deltas.push([startX - mapX(pts[pts.length - 1][0]), startY - mapY(pts[pts.length - 1][1])]);
+    doc.lines(deltas, startX, startY, [1, 1], style);
+  }
+
+  function drawPlatePDF(doc, bin, x, y, maxW, maxH, kerf) {
     var W = bin.W, H = bin.H;
-    var scale = Math.min(maxW / W, maxH / H);
+    // Réserver de la place pour les cotations extérieures (environ 8mm)
+    var annoPad = 8;
+    var scale = Math.min((maxW - annoPad) / W, (maxH - annoPad) / H);
     var drawnW = W * scale, drawnH = H * scale;
-    var ox = x + (maxW - drawnW) / 2; // centrer horizontalement
+    var ox = x + annoPad / 2 + (maxW - annoPad - drawnW) / 2;
     var oy = y;
 
     function mapX(px) { return ox + px * scale; }
-    function mapY(py) { return oy + (H - py) * scale; } // Y up -> page Y down
+    function mapY(py) { return oy + (H - py) * scale; } // Y up -> PDF Y down
 
     // Fond et contour de la plaque
     doc.setFillColor(255, 255, 255);
@@ -503,60 +597,75 @@
     doc.setLineWidth(0.5);
     doc.rect(ox, oy, drawnW, drawnH, 'FD');
 
-    // Marge de rive (si définie)
+    // Marge de rive
     if (bin.margin > 0) {
       doc.setDrawColor(229, 231, 235);
-      doc.setLineWidth(0.25);
-      doc.rect(
-        ox + bin.margin * scale, oy + bin.margin * scale,
-        (W - 2 * bin.margin) * scale, (H - 2 * bin.margin) * scale,
-        'S'
-      );
+      doc.setLineWidth(0.2);
+      doc.rect(ox + bin.margin * scale, oy + bin.margin * scale,
+               (W - 2 * bin.margin) * scale, (H - 2 * bin.margin) * scale, 'S');
     }
 
+    var pieceFs = Math.max(4.5, Math.min(7.5, drawnW / 48));
+    var dimFs = Math.max(4, Math.min(6, drawnW / 60));
+
     bin.placements.forEach(function (pl) {
-      var polys = window.NestingOptimizer.placementPolygons(pl);
-      polys.forEach(function (pp) {
-        var t = tint(pp.color, 0.55);
-        var c = hexToRgb(pp.color);
+      var result = window.NestingOptimizer.placementPolygons(pl);
+
+      // 1. Polygones des pièces
+      result.parts.forEach(function (pp) {
+        var t = tint(pp.color, 0.55), c = hexToRgb(pp.color);
         doc.setFillColor(t.r, t.g, t.b);
         doc.setDrawColor(c.r, c.g, c.b);
-        doc.setLineWidth(0.35);
+        doc.setLineWidth(0.3);
+        pdfPolygon(doc, mapX, mapY, pp.poly, 'FD');
 
-        // Dessin du polygone via les API de chemin de jsPDF
-        var pts = pp.poly;
-        // Construire les deltas pour doc.lines (format attendu : [[dx, dy], ...])
-        var startX = mapX(pts[0][0]);
-        var startY = mapY(pts[0][1]);
-        var deltas = [];
-        for (var k = 1; k < pts.length; k++) {
-          deltas.push([
-            mapX(pts[k][0]) - mapX(pts[k - 1][0]),
-            mapY(pts[k][1]) - mapY(pts[k - 1][1]),
-          ]);
-        }
-        // Fermer le polygone
-        deltas.push([startX - mapX(pts[pts.length - 1][0]), startY - mapY(pts[pts.length - 1][1])]);
-        doc.lines(deltas, startX, startY, [1, 1], 'FD');
-
-        // Étiquette centrée sur le centroïde du polygone
+        // Nom au centroïde (sans les dimensions)
         var cx = 0, cy = 0;
-        pts.forEach(function (p) { cx += p[0]; cy += p[1]; });
-        cx /= pts.length; cy /= pts.length;
-        var fs = Math.max(5, Math.min(8, drawnW / 50));
-        doc.setFontSize(fs);
+        pp.poly.forEach(function (p) { cx += p[0]; cy += p[1]; });
+        cx /= pp.poly.length; cy /= pp.poly.length;
+        doc.setFontSize(pieceFs);
         doc.setTextColor(31, 36, 48);
-        var label = pp.label + ' (' + Math.round(pp.shape.bbox.w) + 'x' + Math.round(pp.shape.bbox.h) + ')';
-        // Centrer le texte manuellement (pas de baseline:'middle' pour compatibilité)
-        doc.text(label, mapX(cx), mapY(cy) + fs * 0.18, { align: 'center' });
+        doc.text(pp.label, mapX(cx), mapY(cy) + pieceFs * 0.18, { align: 'center' });
       });
-    });
 
-    // Cotes de la plaque
-    var coteFontSize = Math.max(6, Math.min(8, drawnW / 55));
-    doc.setFontSize(coteFontSize); doc.setTextColor(107, 114, 128);
-    doc.text(Math.round(W) + ' mm', ox + drawnW / 2, oy + drawnH + coteFontSize * 0.4, { align: 'center' });
-    doc.text(Math.round(H) + ' mm', ox - 2, oy + drawnH / 2, { align: 'right' });
+      // 2. Trait de scie diagonal entre deux triangles appairés
+      result.cuts.forEach(function (cut) {
+        var kw = Math.max((kerf || 0) * scale, 0.6);
+        // Trait gris clair (rebord visible)
+        doc.setDrawColor(180, 180, 180);
+        doc.setLineWidth(kw + 0.4);
+        doc.line(mapX(cut[0][0]), mapY(cut[0][1]), mapX(cut[1][0]), mapY(cut[1][1]));
+        // Trait blanc par-dessus (le kerf lui-même)
+        doc.setDrawColor(245, 246, 248);
+        doc.setLineWidth(kw);
+        doc.line(mapX(cut[0][0]), mapY(cut[0][1]), mapX(cut[1][0]), mapY(cut[1][1]));
+      });
+
+      // 3. Cotations par pièce (bounding box du placement)
+      var gap = 1.8; // mm sur le PDF
+      var tick = dimFs * 0.28;
+      var px = pl.x, py = pl.y, pw = pl.w, ph = pl.h;
+
+      // Largeur : ligne horizontale sous le bas de la pièce
+      var yDim = mapY(py) + gap;
+      doc.setDrawColor(55, 65, 81); doc.setLineWidth(0.25);
+      doc.line(mapX(px), yDim, mapX(px + pw), yDim);
+      doc.line(mapX(px), yDim - tick, mapX(px), yDim + tick);
+      doc.line(mapX(px + pw), yDim - tick, mapX(px + pw), yDim + tick);
+      doc.setFontSize(dimFs); doc.setTextColor(55, 65, 81);
+      doc.text(Math.round(pw) + ' mm', (mapX(px) + mapX(px + pw)) / 2, yDim + dimFs * 0.55, { align: 'center' });
+
+      // Hauteur : ligne verticale à droite de la pièce
+      var xDim = mapX(px + pw) + gap;
+      var yTop = mapY(py + ph), yBot = mapY(py);
+      doc.setDrawColor(55, 65, 81); doc.setLineWidth(0.25);
+      doc.line(xDim, yTop, xDim, yBot);
+      doc.line(xDim - tick, yTop, xDim + tick, yTop);
+      doc.line(xDim - tick, yBot, xDim + tick, yBot);
+      doc.setFontSize(dimFs); doc.setTextColor(55, 65, 81);
+      doc.text(Math.round(ph) + ' mm', xDim + dimFs * 0.55, (yTop + yBot) / 2,
+               { align: 'center', angle: 90 });
+    });
   }
 
   function drawCutListPDF(doc, bin, x, y, maxW) {

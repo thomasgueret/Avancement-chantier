@@ -471,30 +471,30 @@
 
   /* ------------------------------------------------------------------ *
    * Calcul des polygones absolus d'un placement (pour le rendu)
-   * Retourne une liste de { poly:[[x,y]...], color, label, offcut }
-   * en coordonnées plaque (mm), origine en bas-gauche, Y vers le haut.
+   *
+   * Retourne { parts, cuts } :
+   *   parts : [{ poly, color, label, shape }, ...]
+   *     Polygones des pièces utiles en coordonnées plaque (mm),
+   *     origine en bas-gauche, Y vers le haut.
+   *   cuts : [[[x1,y1],[x2,y2]], ...]
+   *     Segments de coupe internes (trait de scie diagonal entre deux
+   *     triangles appairés). Mêmes coordonnées plaque que les polygones.
    * ------------------------------------------------------------------ */
 
   function placementPolygons(placement) {
     const block = placement.block;
-    const out = [];
-    const bw = placement.rotated ? placement.h : placement.w;
-    const bh = placement.rotated ? placement.w : placement.h;
+    const parts = [];
+    const cuts = [];
+    // Dimensions du bloc dans son repère local (avant rotation)
+    const bw = block.bbox.w, bh = block.bbox.h;
 
     function emit(item) {
       let poly = item.shape.poly.map(function (p) { return p.slice(); });
-      let offcut = item.shape.offcut ? item.shape.offcut.map(function (p) { return p.slice(); }) : null;
       let lw = item.shape.bbox.w, lh = item.shape.bbox.h;
-      if (placement.rotated) {
-        poly = rotatePolyCW90(poly, lw, lh);
-        if (offcut) offcut = rotatePolyCW90(offcut, lw, lh);
-      }
-      // Translation vers la position absolue
+      if (placement.rotated) poly = rotatePolyCW90(poly, lw, lh);
       const tx = placement.x, ty = placement.y;
-      const trans = function (pl) { return pl.map(function (p) { return [p[0] + tx, p[1] + ty]; }); };
-      out.push({
-        poly: trans(poly),
-        offcut: offcut ? trans(offcut) : null,
+      parts.push({
+        poly: poly.map(function (p) { return [p[0] + tx, p[1] + ty]; }),
         color: item.color,
         label: item.name,
         shape: item.shape,
@@ -504,29 +504,39 @@
     if (block.kind === 'single') {
       emit(block.item);
     } else if (block.kind === 'composite') {
-      // Deux triangles : bl + tr, dans la boîte (w,h) avant rotation éventuelle
-      const w = block.bbox.w, h = block.bbox.h;
+      // Deux triangles : bl + tr
       block.parts.forEach(function (part) {
         const it = part.item;
-        // Reconstruire le triangle dans la bonne orientation
         let poly;
         if (part.place === 'tri-bl') {
-          poly = [[0, 0], [w, 0], [0, h]];
+          poly = [[0, 0], [bw, 0], [0, bh]];
         } else {
-          poly = [[w, 0], [w, h], [0, h]];
+          poly = [[bw, 0], [bw, bh], [0, bh]];
         }
-        if (placement.rotated) poly = rotatePolyCW90(poly, w, h);
+        if (placement.rotated) poly = rotatePolyCW90(poly, bw, bh);
         const tx = placement.x, ty = placement.y;
-        out.push({
+        parts.push({
           poly: poly.map(function (p) { return [p[0] + tx, p[1] + ty]; }),
-          offcut: null,
           color: it.color,
           label: it.name,
           shape: it.shape,
         });
       });
+
+      // Ligne de coupe diagonale entre les deux triangles appairés.
+      // En repère local (Y haut) : de (bw, 0) à (0, bh).
+      let diagA = [bw, 0], diagB = [0, bh];
+      if (placement.rotated) {
+        diagA = rotatePolyCW90([diagA], bw, bh)[0];
+        diagB = rotatePolyCW90([diagB], bw, bh)[0];
+      }
+      const tx = placement.x, ty = placement.y;
+      cuts.push([
+        [diagA[0] + tx, diagA[1] + ty],
+        [diagB[0] + tx, diagB[1] + ty],
+      ]);
     }
-    return out;
+    return { parts: parts, cuts: cuts };
   }
 
   global.NestingOptimizer = {
