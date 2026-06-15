@@ -3729,6 +3729,18 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   border-left: 1px solid var(--border);
 }
 .cr-export-btn:active { background: var(--accent-soft); }
+.cr-rename-btn {
+  flex: 0 0 auto;
+  width: 44px;
+  border: none; background: transparent;
+  font-size: 15px; line-height: 1;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-left: 1px solid var(--border);
+  touch-action: manipulation;
+}
+.cr-rename-btn:active { background: var(--surface-2); }
 
 /* ----- CR : entrée avec métadonnées (origine CR / échéance / responsable) ----- */
 .cr-entry {

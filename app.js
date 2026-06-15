@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.03';
+const APP_VERSION = '1.04';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -3751,6 +3751,22 @@ function addCRWeek(companyId) {
   renderCR();
 }
 
+// Renomme une semaine de CR. Validation : non vide, trim, max 50 chars.
+// Le label peut être quelconque (« CR 17 », « Compte-rendu spécial »), ce
+// qui permet de reprendre une numérotation existante établie hors appli.
+// Le numéro auto-incrémenté (getNextCRWeekLabel) reste robuste : il scanne
+// les labels au format /^CR\s+(\d+)$/ et continue à partir du max trouvé.
+function renameCRWeek(companyId, weekId, newLabel) {
+  const weeks = getCRWeeks(companyId);
+  const w = weeks.find(x => x.id === weekId);
+  if (!w) return;
+  const trimmed = (newLabel || '').trim().slice(0, 50);
+  if (!trimmed || trimmed === w.label) return;
+  w.label = trimmed;
+  save();
+  renderCR();
+}
+
 // Supprime une semaine + son contenu (entries, collapses, visibilité).
 // Si on supprime la semaine la plus récente, on « dégèle » la nouvelle
 // dernière (qui redevient live).
@@ -4360,6 +4376,16 @@ function buildCRCompanyCard(company, week, isLatest) {
     <span class="cr-company-name">${escapeHtml(company.name)} <span class="cr-company-week">— ${escapeHtml(week.label)}${isLatest ? '' : ' (figé)'}</span></span>
   `;
   headWrap.appendChild(head);
+  const ren = document.createElement('button');
+  ren.type = 'button';
+  ren.className = 'cr-rename-btn';
+  ren.dataset.crAction = 'rename-week';
+  ren.dataset.companyId = company.id;
+  ren.dataset.weekId = week.id;
+  ren.setAttribute('aria-label', 'Renommer ce compte-rendu');
+  ren.setAttribute('title', 'Renommer ce compte-rendu');
+  ren.innerHTML = '✏️';
+  headWrap.appendChild(ren);
   const exp = document.createElement('button');
   exp.type = 'button';
   exp.className = 'cr-export-btn';
@@ -8936,6 +8962,11 @@ function init() {
         addCRWeek(companyId);
       } else if (action === 'export-pdf') {
         exportCRToPDF(companyId, weekId);
+      } else if (action === 'rename-week') {
+        const w = getCRWeeks(companyId).find(x => x.id === weekId);
+        if (!w) return;
+        const proposed = prompt('Renommer ce compte-rendu (ex. « CR 17 ») :', w.label || '');
+        if (proposed !== null) renameCRWeek(companyId, weekId, proposed);
       } else if (action === 'delete-week') {
         const weeks = getCRWeeks(companyId);
         const w = weeks.find(x => x.id === weekId);
