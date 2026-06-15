@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.06';
+const APP_VERSION = '1.07';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -93,6 +93,7 @@ const state = {
   crSelectedCompanyId: null, // entreprise affichée dans le slider CR (UI per-device)
   crAvancementVisible: {},
   crAdminVisible: {},        // { [companyId]: { [weekId]: bool } } — aperçu Administratif
+  crEffectifsVisible: {},    // { [companyId]: { [weekId]: bool } } — aperçu Effectifs (10 derniers jours)
   crWeeks: {},               // { [companyId]: [{ id, label, createdAt }] }
   crSelectedWeekId: {},      // { [companyId]: weekId } — semaine active (UI per-device)
   // Synchronisation (modèle simplifié : un seul jeu partagé via Supabase)
@@ -166,6 +167,7 @@ function load() {
     if (data.crCollapsed && typeof data.crCollapsed === 'object') state.crCollapsed = data.crCollapsed;
     if (data.crAvancementVisible && typeof data.crAvancementVisible === 'object') state.crAvancementVisible = data.crAvancementVisible;
     if (data.crAdminVisible      && typeof data.crAdminVisible      === 'object') state.crAdminVisible      = data.crAdminVisible;
+    if (data.crEffectifsVisible  && typeof data.crEffectifsVisible  === 'object') state.crEffectifsVisible  = data.crEffectifsVisible;
     if (data.crWeeks && typeof data.crWeeks === 'object') state.crWeeks = data.crWeeks;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
@@ -223,6 +225,7 @@ function save() {
     crCollapsed: state.crCollapsed,
     crAvancementVisible: state.crAvancementVisible,
     crAdminVisible: state.crAdminVisible,
+    crEffectifsVisible: state.crEffectifsVisible,
     crWeeks: state.crWeeks,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange,
@@ -3400,6 +3403,7 @@ function deleteCompany(id) {
   delete state.crCollapsed[id];
   delete state.crAvancementVisible[id];
   delete state.crAdminVisible[id];
+  delete state.crEffectifsVisible[id];
   delete state.crWeeks[id];
   delete state.crSelectedWeekId[id];
   if (state.crSelectedCompanyId === id) state.crSelectedCompanyId = null;
@@ -3572,6 +3576,7 @@ function fmtStockQty(n) {
 const CR_SECTIONS = [
   { key: 'header',       label: 'En-tête' },
   { key: 'avancement',   label: 'Avancements' },
+  { key: 'effectifs',    label: 'Effectifs' },
   { key: 'admin',        label: 'Administratif' },
   { key: 'etudes',       label: 'Études' },
   { key: 'planning',     label: 'Planning' },
@@ -3591,6 +3596,7 @@ function migrateCRState() {
   if (!state.crCollapsed)         state.crCollapsed         = {};
   if (!state.crAvancementVisible) state.crAvancementVisible = {};
   if (!state.crAdminVisible)      state.crAdminVisible      = {};
+  if (!state.crEffectifsVisible)  state.crEffectifsVisible  = {};
   if (!state.crWeeks)             state.crWeeks             = {};
   if (!state.crSelectedWeekId)    state.crSelectedWeekId    = {};
   // Pour chaque entreprise qui a une donnée CR : s'assure qu'au moins une
@@ -3706,6 +3712,9 @@ function addCRWeek(companyId) {
   if (prev && !Array.isArray(prev.adminSnapshot)) {
     prev.adminSnapshot = computeAdminAlertsForCompany(companyId);
   }
+  if (prev && !Array.isArray(prev.effectifsSnapshot)) {
+    prev.effectifsSnapshot = computeEffectifsForCompany(companyId);
+  }
   const newWeek = { id: 'wk_' + uid(), label: getNextCRWeekLabel(weeks), createdAt: Date.now() };
   weeks.push(newWeek);
   // Recopie intégrale du contenu de la semaine précédente vers la nouvelle.
@@ -3745,6 +3754,11 @@ function addCRWeek(companyId) {
   if (state.crAdminVisible[companyId] && state.crAdminVisible[companyId][prev.id] === false) {
     if (!state.crAdminVisible[companyId]) state.crAdminVisible[companyId] = {};
     state.crAdminVisible[companyId][newWeek.id] = false;
+  }
+  // Idem pour l'aperçu Effectifs
+  if (state.crEffectifsVisible[companyId] && state.crEffectifsVisible[companyId][prev.id] === false) {
+    if (!state.crEffectifsVisible[companyId]) state.crEffectifsVisible[companyId] = {};
+    state.crEffectifsVisible[companyId][newWeek.id] = false;
   }
   state.crSelectedWeekId[companyId] = newWeek.id;
   save();
@@ -4001,6 +4015,7 @@ async function exportCRToPDF(companyId, weekId) {
     const entries = getCREntries(companyId, weekId, sec.key);
     const showAvancPreview = sec.key === 'avancement' && isCRAvancementVisible(companyId, weekId);
     const showAdminPreview = sec.key === 'admin'      && isCRAdminVisible(companyId, weekId);
+    const showEffPreview   = sec.key === 'effectifs'  && isCREffectifsVisible(companyId, weekId);
 
     // Bandeau orange + tableau de tâches
     drawSectionBanner(secNum, sec.label);
@@ -4086,6 +4101,66 @@ async function exportCRToPDF(companyId, weekId) {
       }
     }
 
+    // Aperçu Effectifs : tableau 10 jours (date | présents | 🌧)
+    if (showEffPreview) {
+      const effData = isLatest
+        ? computeEffectifsForCompany(companyId)
+        : (Array.isArray(week.effectifsSnapshot) ? week.effectifsSnapshot : computeEffectifsForCompany(companyId));
+      if (Array.isArray(effData) && effData.length > 0) {
+        y += 6;
+        const tx = MARGIN + 4;
+        const wDate = 28, wCount = 26, wWeather = 14;
+        const rowH = 5.5;
+        ensureSpace(rowH);
+        // En-tête
+        pdf.setFillColor(232, 232, 232);
+        pdf.rect(tx, y, wDate + wCount + wWeather, rowH, 'F');
+        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(50);
+        pdf.text('Date',     tx + 2,             y + 3.8);
+        pdf.text('Présents', tx + wDate + 2,     y + 3.8);
+        pdf.text('Intemp.',  tx + wDate + wCount + 2, y + 3.8);
+        pdf.setTextColor(0);
+        y += rowH;
+        let total = 0, worked = 0, wDays = 0;
+        for (let i = 0; i < effData.length; i++) {
+          const row = effData[i];
+          ensureSpace(rowH);
+          if (row.onWeather) {
+            pdf.setFillColor(220, 235, 250); // bleu pâle pour intempéries
+            pdf.rect(tx, y, wDate + wCount + wWeather, rowH, 'F');
+          } else if (i % 2 === 1) {
+            pdf.setFillColor(248, 248, 248);
+            pdf.rect(tx, y, wDate + wCount + wWeather, rowH, 'F');
+          }
+          pdf.setDrawColor(200); pdf.setLineWidth(0.1);
+          pdf.line(tx, y + rowH, tx + wDate + wCount + wWeather, y + rowH);
+          pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9.5); pdf.setTextColor(40);
+          const [yy, mm, dd] = row.date.split('-');
+          pdf.text(`${dd}/${mm}/${yy.slice(2)}`, tx + 2, y + 3.8);
+          pdf.text(String(row.count), tx + wDate + 2, y + 3.8);
+          if (row.onWeather) {
+            pdf.setTextColor(30, 80, 160);
+            pdf.text('Oui', tx + wDate + wCount + 2, y + 3.8);
+          }
+          pdf.setTextColor(0);
+          y += rowH;
+          total += row.count;
+          if (row.count > 0) worked++;
+          if (row.onWeather) wDays++;
+        }
+        // Synthèse
+        ensureSpace(5);
+        y += 1.5;
+        const avg = worked > 0 ? (total / worked).toFixed(1).replace('.', ',') : '0';
+        pdf.setFont('helvetica', 'italic'); pdf.setFontSize(9); pdf.setTextColor(90);
+        const summary = `Total : ${total} présences sur ${worked}/10 jours travaillés (moy. ${avg}/j)`
+          + (wDays > 0 ? ` — ${wDays} j d'intempéries` : '');
+        pdf.text(summary, MARGIN + 4, y + 2.5);
+        pdf.setTextColor(0);
+        y += 4;
+      }
+    }
+
     // Aperçu Administratif (conditionné à l'interrupteur app)
     if (showAdminPreview) {
       const data = isLatest
@@ -4141,11 +4216,13 @@ function deleteCRWeek(companyId, weekId) {
   if (state.crCollapsed[companyId])         delete state.crCollapsed[companyId][weekId];
   if (state.crAvancementVisible[companyId]) delete state.crAvancementVisible[companyId][weekId];
   if (state.crAdminVisible[companyId])      delete state.crAdminVisible[companyId][weekId];
+  if (state.crEffectifsVisible[companyId])  delete state.crEffectifsVisible[companyId][weekId];
   if (state.crSelectedWeekId[companyId] === weekId) delete state.crSelectedWeekId[companyId];
   if (wasLatest && weeks.length > 0) {
     const newLast = weeks[weeks.length - 1];
     delete newLast.avancementSnapshot;
     delete newLast.adminSnapshot;
+    delete newLast.effectifsSnapshot;
   }
   save();
   renderCR();
@@ -4259,6 +4336,39 @@ function setCRAdminVisible(companyId, weekId, visible) {
   if (visible) delete state.crAdminVisible[companyId][weekId];
   else state.crAdminVisible[companyId][weekId] = false;
   save();
+}
+function isCREffectifsVisible(companyId, weekId) {
+  const bag = state.crEffectifsVisible[companyId];
+  if (!bag) return true;
+  return bag[weekId] !== false;
+}
+function setCREffectifsVisible(companyId, weekId, visible) {
+  if (!state.crEffectifsVisible[companyId]) state.crEffectifsVisible[companyId] = {};
+  if (visible) delete state.crEffectifsVisible[companyId][weekId];
+  else state.crEffectifsVisible[companyId][weekId] = false;
+  save();
+}
+
+// Snapshot des 10 derniers jours de présences + intempéries pour une
+// entreprise. Inclut TOUS les jours de la fenêtre (count=0 si pas de
+// saisie), du plus récent au plus ancien. refDate par défaut = aujourd'hui.
+//   → [{ date: 'YYYY-MM-DD', count: number, onWeather: boolean }]
+function computeEffectifsForCompany(companyId, refDate) {
+  const ref = refDate ? fromISO(refDate) : new Date();
+  ref.setHours(0,0,0,0);
+  const out = [];
+  for (let i = 0; i < 10; i++) {
+    const d = new Date(ref); d.setDate(d.getDate() - i);
+    const iso = toISO(d);
+    const entries = (state.presences && state.presences[iso]) || [];
+    const entry = entries.find(e => e.companyId === companyId);
+    out.push({
+      date: iso,
+      count: entry ? entry.count : 0,
+      onWeather: isCompanyOnWeather(iso, companyId)
+    });
+  }
+  return out;
 }
 
 // Calcule la liste des alertes documentaires (statut expired/danger/
@@ -4466,6 +4576,17 @@ function buildCRSection(companyId, week, isLatest, sec) {
       </label>
       ${addBtn}
     `;
+  } else if (sec.key === 'effectifs') {
+    const visible = isCREffectifsVisible(companyId, weekId);
+    head.innerHTML = `
+      ${toggleBtn}
+      <span class="cr-section-name">${sec.label}</span>
+      <label class="cr-switch" title="Inclure l'aperçu dans le compte-rendu">
+        <input type="checkbox" data-cr-action="toggle-effectifs-visible" data-company-id="${companyId}" data-week-id="${weekId}" ${visible ? 'checked' : ''}>
+        <span class="cr-switch-track"><span class="cr-switch-thumb"></span></span>
+      </label>
+      ${addBtn}
+    `;
   } else {
     head.innerHTML = `
       ${toggleBtn}
@@ -4477,8 +4598,8 @@ function buildCRSection(companyId, week, isLatest, sec) {
 
   const body = document.createElement('div');
   body.className = 'cr-section-body';
-  // Notes libres en haut, aperçu en bas pour Avancements / Administratif.
-  const hasPreview = sec.key === 'avancement' || sec.key === 'admin';
+  // Notes libres en haut, aperçu en bas pour Avancements / Effectifs / Administratif.
+  const hasPreview = sec.key === 'avancement' || sec.key === 'admin' || sec.key === 'effectifs';
   const entries = getCREntries(companyId, weekId, sec.key);
   if (entries.length > 0) {
     for (const entry of entries) body.appendChild(buildCREntry(companyId, weekId, sec.key, entry));
@@ -4492,6 +4613,11 @@ function buildCRSection(companyId, week, isLatest, sec) {
     const previewWrap = document.createElement('div');
     previewWrap.className = 'cr-avanc-preview';
     buildCRAvancementBody(previewWrap, companyId, week, isLatest);
+    body.appendChild(previewWrap);
+  } else if (sec.key === 'effectifs') {
+    const previewWrap = document.createElement('div');
+    previewWrap.className = 'cr-eff-preview';
+    buildCREffectifsBody(previewWrap, companyId, week, isLatest);
     body.appendChild(previewWrap);
   } else if (sec.key === 'admin') {
     const previewWrap = document.createElement('div');
@@ -4632,6 +4758,79 @@ function buildCRAvancementBody(body, companyId, week, isLatest) {
   }
 }
 // Aperçu Administratif : liste des ouvriers de l'entreprise dont au
+// Aperçu Effectifs : tableau des 10 derniers jours de présences pour
+// l'entreprise (lecture seule). Live pour la dernière semaine, snapshot
+// pour les précédentes (back-fill auto si snapshot manquant). Marque les
+// jours en intempéries avec une goutte 🌧.
+function buildCREffectifsBody(body, companyId, week, isLatest) {
+  if (!isCREffectifsVisible(companyId, week.id)) {
+    const off = document.createElement('p');
+    off.className = 'cr-section-empty';
+    off.textContent = 'Aperçu masqué (ne sera pas inclus dans l\'export PDF).';
+    body.appendChild(off);
+    return;
+  }
+  let data;
+  if (isLatest) {
+    data = computeEffectifsForCompany(companyId);
+  } else {
+    if (!Array.isArray(week.effectifsSnapshot)) {
+      week.effectifsSnapshot = computeEffectifsForCompany(companyId);
+      save();
+    }
+    data = week.effectifsSnapshot;
+  }
+  if (!Array.isArray(data) || data.length === 0) {
+    const none = document.createElement('p');
+    none.className = 'cr-section-empty';
+    none.textContent = 'Aucune donnée de présence disponible.';
+    body.appendChild(none);
+    return;
+  }
+  if (!isLatest) {
+    const badge = document.createElement('p');
+    badge.className = 'cr-avanc-frozen-note';
+    badge.textContent = '🔒 Aperçu figé à la création de la semaine suivante.';
+    body.appendChild(badge);
+  }
+  const table = document.createElement('table');
+  table.className = 'cr-eff-table';
+  const thead = document.createElement('thead');
+  thead.innerHTML = '<tr><th scope="col">Date</th><th scope="col">Présents</th><th scope="col" aria-label="Intempéries">🌧</th></tr>';
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  let totalPresences = 0, daysWithCount = 0, weatherDays = 0;
+  for (const row of data) {
+    const tr = document.createElement('tr');
+    if (row.onWeather) tr.classList.add('is-weather');
+    const tdDate = document.createElement('th');
+    tdDate.scope = 'row';
+    tdDate.textContent = formatDateShortFR(row.date);
+    tr.appendChild(tdDate);
+    const tdCount = document.createElement('td');
+    tdCount.className = 'cr-eff-count';
+    tdCount.textContent = row.count;
+    tr.appendChild(tdCount);
+    const tdW = document.createElement('td');
+    tdW.className = 'cr-eff-weather';
+    tdW.textContent = row.onWeather ? '🌧' : '';
+    tr.appendChild(tdW);
+    tbody.appendChild(tr);
+    totalPresences += row.count;
+    if (row.count > 0) daysWithCount++;
+    if (row.onWeather) weatherDays++;
+  }
+  table.appendChild(tbody);
+  body.appendChild(table);
+  // Synthèse compacte sous le tableau
+  const sum = document.createElement('p');
+  sum.className = 'cr-eff-summary';
+  const avg = daysWithCount > 0 ? (totalPresences / daysWithCount).toFixed(1).replace('.', ',') : '0';
+  sum.textContent = `Total : ${totalPresences} présences sur ${daysWithCount}/10 jours travaillés (moy. ${avg}/j)`
+    + (weatherDays > 0 ? ` — 🌧 ${weatherDays} j d'intempéries` : '');
+  body.appendChild(sum);
+}
+
 // moins un document a un statut expired/danger/warning. Live pour la
 // dernière semaine, snapshot pour les précédentes (back-fill auto).
 function buildCRAdminBody(body, companyId, week, isLatest) {
@@ -9027,6 +9226,12 @@ function init() {
       const ad = e.target.closest('input[data-cr-action="toggle-admin-visible"]');
       if (ad) {
         setCRAdminVisible(ad.dataset.companyId, ad.dataset.weekId, ad.checked);
+        renderCR();
+        return;
+      }
+      const ef = e.target.closest('input[data-cr-action="toggle-effectifs-visible"]');
+      if (ef) {
+        setCREffectifsVisible(ef.dataset.companyId, ef.dataset.weekId, ef.checked);
         renderCR();
         return;
       }

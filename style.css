@@ -4005,3 +4005,50 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   background: var(--surface);
   border-color: var(--border-strong);
 }
+
+/* ============================================================
+   CR v1.07 — Aperçu Effectifs : tableau 10 derniers jours
+   ============================================================ */
+.cr-eff-preview { margin-top: 6px; }
+.cr-eff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+}
+.cr-eff-table thead th {
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-weight: 700;
+  text-align: left;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.cr-eff-table thead th:nth-child(2),
+.cr-eff-table thead th:nth-child(3) { text-align: center; }
+.cr-eff-table tbody tr:nth-child(even) { background: var(--surface-2); }
+.cr-eff-table tbody tr.is-weather { background: rgba(33, 150, 243, 0.10); }
+.cr-eff-table tbody th,
+.cr-eff-table tbody td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+.cr-eff-table tbody tr:last-child th,
+.cr-eff-table tbody tr:last-child td { border-bottom: none; }
+.cr-eff-table tbody th { font-weight: 500; }
+.cr-eff-count    { text-align: center; font-weight: 700; }
+.cr-eff-weather  { text-align: center; font-size: 14px; }
+.cr-eff-summary {
+  margin: 6px 2px 0;
+  font-size: 11px;
+  color: var(--text-2);
+  font-style: italic;
+}
