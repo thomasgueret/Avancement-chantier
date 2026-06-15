@@ -397,8 +397,8 @@
     var res = lastResult;
     var M = 12;
 
-    // Format paysage A4
-    var doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    // Format portrait A4
+    var doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     var pageW = doc.internal.pageSize.getWidth();
     var pageH = doc.internal.pageSize.getHeight();
 
