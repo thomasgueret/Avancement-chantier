@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.08';
+const APP_VERSION = '1.09';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -94,6 +94,8 @@ const state = {
   crAvancementVisible: {},
   crAdminVisible: {},        // { [companyId]: { [weekId]: bool } } — aperçu Administratif
   crEffectifsVisible: {},    // { [companyId]: { [weekId]: bool } } — aperçu Effectifs (10 derniers jours)
+  crSectionLabels: {},       // { [sectionKey]: 'label surchargé' } — renommage des rubriques built-in
+  crCustomSections: [],      // [{ key: 'custom_<uid>', label }] — rubriques ajoutées par l'utilisateur
   crWeeks: {},               // { [companyId]: [{ id, label, createdAt }] }
   crSelectedWeekId: {},      // { [companyId]: weekId } — semaine active (UI per-device)
   // Synchronisation (modèle simplifié : un seul jeu partagé via Supabase)
@@ -168,6 +170,8 @@ function load() {
     if (data.crAvancementVisible && typeof data.crAvancementVisible === 'object') state.crAvancementVisible = data.crAvancementVisible;
     if (data.crAdminVisible      && typeof data.crAdminVisible      === 'object') state.crAdminVisible      = data.crAdminVisible;
     if (data.crEffectifsVisible  && typeof data.crEffectifsVisible  === 'object') state.crEffectifsVisible  = data.crEffectifsVisible;
+    if (data.crSectionLabels     && typeof data.crSectionLabels     === 'object') state.crSectionLabels     = data.crSectionLabels;
+    if (Array.isArray(data.crCustomSections))                                     state.crCustomSections    = data.crCustomSections;
     if (data.crWeeks && typeof data.crWeeks === 'object') state.crWeeks = data.crWeeks;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
@@ -226,6 +230,8 @@ function save() {
     crAvancementVisible: state.crAvancementVisible,
     crAdminVisible: state.crAdminVisible,
     crEffectifsVisible: state.crEffectifsVisible,
+    crSectionLabels: state.crSectionLabels,
+    crCustomSections: state.crCustomSections,
     crWeeks: state.crWeeks,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange,
@@ -3573,7 +3579,10 @@ function fmtStockQty(n) {
 //   CR (comptes-rendus) — un CR par semaine et par entreprise.
 //   Structure : crEntries[companyId][weekId][sectionKey] = [{ id, text }]
 // ====================================================================
-const CR_SECTIONS = [
+// Rubriques fournies par défaut (les clés sont stables — elles servent
+// d'identifiant pour entries, collapses, snapshots, et débloquent les
+// aperçus spéciaux : avancement / effectifs / admin).
+const CR_DEFAULT_SECTIONS = [
   { key: 'header',       label: 'En-tête' },
   { key: 'avancement',   label: 'Avancements' },
   { key: 'effectifs',    label: 'Effectifs' },
@@ -3583,7 +3592,83 @@ const CR_SECTIONS = [
   { key: 'execution',    label: 'Exécution' },
   { key: 'reclamations', label: 'Réclamations' }
 ];
-const CR_SECTION_KEYS = new Set(CR_SECTIONS.map(s => s.key));
+const CR_BUILTIN_SECTION_KEYS = new Set(CR_DEFAULT_SECTIONS.map(s => s.key));
+
+// Renvoie la liste effective des rubriques d'un CR :
+//   - Built-in (avec label possiblement surchargé par state.crSectionLabels)
+//   - Suivies des rubriques personnalisées de state.crCustomSections
+// Utilisé partout où on itérait sur CR_SECTIONS.
+function getCRSections() {
+  const overrides = state.crSectionLabels || {};
+  const builtIn = CR_DEFAULT_SECTIONS.map(s => ({
+    key: s.key,
+    label: overrides[s.key] || s.label,
+    builtIn: true
+  }));
+  const custom = Array.isArray(state.crCustomSections)
+    ? state.crCustomSections.map(s => ({ key: s.key, label: s.label, builtIn: false }))
+    : [];
+  return [...builtIn, ...custom];
+}
+function getCRSectionLabel(key) {
+  const all = getCRSections();
+  const s = all.find(x => x.key === key);
+  return s ? s.label : key;
+}
+function isValidCRSectionKey(key) {
+  if (CR_BUILTIN_SECTION_KEYS.has(key)) return true;
+  return Array.isArray(state.crCustomSections) && state.crCustomSections.some(s => s.key === key);
+}
+// Renomme une rubrique (built-in OU custom). Validation : non vide,
+// trim, max 60 chars. Pour les built-in : on stocke un override dans
+// state.crSectionLabels (label par défaut récupérable en cas de reset).
+function renameCRSection(key, newLabel) {
+  const trimmed = (newLabel || '').trim().slice(0, 60);
+  if (!trimmed) return false;
+  if (CR_BUILTIN_SECTION_KEYS.has(key)) {
+    if (!state.crSectionLabels) state.crSectionLabels = {};
+    state.crSectionLabels[key] = trimmed;
+  } else {
+    const arr = state.crCustomSections || [];
+    const s = arr.find(x => x.key === key);
+    if (!s) return false;
+    s.label = trimmed;
+  }
+  save();
+  return true;
+}
+// Ajoute une rubrique personnalisée (label imposé). Génère une clé
+// stable basée sur uid().
+function addCRSection(label) {
+  const trimmed = (label || '').trim().slice(0, 60);
+  if (!trimmed) return null;
+  if (!Array.isArray(state.crCustomSections)) state.crCustomSections = [];
+  const key = 'custom_' + uid();
+  state.crCustomSections.push({ key, label: trimmed });
+  save();
+  return key;
+}
+// Supprime une rubrique personnalisée + son contenu (entries, collapses)
+// dans toutes les entreprises × semaines. Les built-in ne sont pas
+// supprimables — elles débloquent des aperçus structurants.
+function deleteCRSection(key) {
+  if (CR_BUILTIN_SECTION_KEYS.has(key)) return false;
+  state.crCustomSections = (state.crCustomSections || []).filter(s => s.key !== key);
+  // Nettoyage des entries et collapses portant cette clé
+  for (const cid of Object.keys(state.crEntries || {})) {
+    for (const wid of Object.keys(state.crEntries[cid] || {})) {
+      if (state.crEntries[cid][wid]) delete state.crEntries[cid][wid][key];
+    }
+  }
+  for (const cid of Object.keys(state.crCollapsed || {})) {
+    for (const wid of Object.keys(state.crCollapsed[cid] || {})) {
+      if (state.crCollapsed[cid][wid]) delete state.crCollapsed[cid][wid][key];
+    }
+  }
+  save();
+  return true;
+}
+const CR_SECTION_KEYS = new Set(CR_DEFAULT_SECTIONS.map(s => s.key));
 // Libellé de l'entreprise « interne » (gestionnaire de chantier) toujours
 // proposé dans le menu Responsable, en plus de l'entreprise du CR courant.
 const CR_INTERNAL_LABEL = 'BBGO';
@@ -3597,6 +3682,8 @@ function migrateCRState() {
   if (!state.crAvancementVisible) state.crAvancementVisible = {};
   if (!state.crAdminVisible)      state.crAdminVisible      = {};
   if (!state.crEffectifsVisible)  state.crEffectifsVisible  = {};
+  if (!state.crSectionLabels)     state.crSectionLabels     = {};
+  if (!Array.isArray(state.crCustomSections)) state.crCustomSections = [];
   if (!state.crWeeks)             state.crWeeks             = {};
   if (!state.crSelectedWeekId)    state.crSelectedWeekId    = {};
   // Pour chaque entreprise qui a une donnée CR : s'assure qu'au moins une
@@ -4010,7 +4097,7 @@ async function exportCRToPDF(companyId, weekId) {
   };
 
   let secNum = 0;
-  for (const sec of CR_SECTIONS) {
+  for (const sec of getCRSections()) {
     secNum++;
     const entries = getCREntries(companyId, weekId, sec.key);
     const showAvancPreview = sec.key === 'avancement' && isCRAvancementVisible(companyId, weekId);
@@ -4532,9 +4619,20 @@ function buildCRCompanyCard(company, week, isLatest) {
 
   const body = document.createElement('div');
   body.className = 'cr-company-body';
-  for (const sec of CR_SECTIONS) {
+  for (const sec of getCRSections()) {
     body.appendChild(buildCRSection(company.id, week, isLatest, sec));
   }
+  // Bouton « + Rubrique » : ajoute une rubrique personnalisée à la fin.
+  // S'applique à toutes les entreprises × semaines (les rubriques sont
+  // partagées globalement — cohérent avec les built-in).
+  const addSecBtn = document.createElement('button');
+  addSecBtn.type = 'button';
+  addSecBtn.className = 'cr-add-section';
+  addSecBtn.dataset.crAction = 'add-section';
+  addSecBtn.dataset.companyId = company.id;
+  addSecBtn.dataset.weekId = week.id;
+  addSecBtn.textContent = '+ Rubrique';
+  body.appendChild(addSecBtn);
   card.appendChild(body);
   return card;
 }
@@ -4557,7 +4655,7 @@ function buildCRSection(companyId, week, isLatest, sec) {
     const visible = isCRAvancementVisible(companyId, weekId);
     head.innerHTML = `
       ${toggleBtn}
-      <span class="cr-section-name">${sec.label}</span>
+      <button type="button" class="cr-section-name" data-cr-action="rename-section" data-company-id="${companyId}" data-week-id="${weekId}" data-section-key="${sec.key}" title="${sec.builtIn ? 'Tapotez pour renommer cette rubrique' : 'Tapotez pour renommer (laisser vide = supprimer)'}">${escapeHtml(sec.label)}</button>
       <label class="cr-switch" title="Inclure l'aperçu dans le compte-rendu">
         <input type="checkbox" data-cr-action="toggle-avancement-visible" data-company-id="${companyId}" data-week-id="${weekId}" ${visible ? 'checked' : ''}>
         <span class="cr-switch-track"><span class="cr-switch-thumb"></span></span>
@@ -4568,7 +4666,7 @@ function buildCRSection(companyId, week, isLatest, sec) {
     const visible = isCRAdminVisible(companyId, weekId);
     head.innerHTML = `
       ${toggleBtn}
-      <span class="cr-section-name">${sec.label}</span>
+      <button type="button" class="cr-section-name" data-cr-action="rename-section" data-company-id="${companyId}" data-week-id="${weekId}" data-section-key="${sec.key}" title="${sec.builtIn ? 'Tapotez pour renommer cette rubrique' : 'Tapotez pour renommer (laisser vide = supprimer)'}">${escapeHtml(sec.label)}</button>
       <label class="cr-switch" title="Inclure l'aperçu dans le compte-rendu">
         <input type="checkbox" data-cr-action="toggle-admin-visible" data-company-id="${companyId}" data-week-id="${weekId}" ${visible ? 'checked' : ''}>
         <span class="cr-switch-track"><span class="cr-switch-thumb"></span></span>
@@ -4579,7 +4677,7 @@ function buildCRSection(companyId, week, isLatest, sec) {
     const visible = isCREffectifsVisible(companyId, weekId);
     head.innerHTML = `
       ${toggleBtn}
-      <span class="cr-section-name">${sec.label}</span>
+      <button type="button" class="cr-section-name" data-cr-action="rename-section" data-company-id="${companyId}" data-week-id="${weekId}" data-section-key="${sec.key}" title="${sec.builtIn ? 'Tapotez pour renommer cette rubrique' : 'Tapotez pour renommer (laisser vide = supprimer)'}">${escapeHtml(sec.label)}</button>
       <label class="cr-switch" title="Inclure l'aperçu dans le compte-rendu">
         <input type="checkbox" data-cr-action="toggle-effectifs-visible" data-company-id="${companyId}" data-week-id="${weekId}" ${visible ? 'checked' : ''}>
         <span class="cr-switch-track"><span class="cr-switch-thumb"></span></span>
@@ -4589,7 +4687,7 @@ function buildCRSection(companyId, week, isLatest, sec) {
   } else {
     head.innerHTML = `
       ${toggleBtn}
-      <span class="cr-section-name">${sec.label}</span>
+      <button type="button" class="cr-section-name" data-cr-action="rename-section" data-company-id="${companyId}" data-week-id="${weekId}" data-section-key="${sec.key}" title="${sec.builtIn ? 'Tapotez pour renommer cette rubrique' : 'Tapotez pour renommer (laisser vide = supprimer)'}">${escapeHtml(sec.label)}</button>
       ${addBtn}
     `;
   }
@@ -9215,6 +9313,28 @@ function init() {
       } else if (action === 'toggle-section') {
         toggleCRCollapsed(companyId, weekId, sectionKey);
         renderCR();
+      } else if (action === 'rename-section') {
+        const current = getCRSectionLabel(sectionKey);
+        const isBuiltIn = CR_BUILTIN_SECTION_KEYS.has(sectionKey);
+        const hint = isBuiltIn
+          ? 'Nouveau nom de la rubrique :'
+          : 'Nouveau nom (laisser vide et OK pour supprimer la rubrique) :';
+        const proposed = prompt(hint, current);
+        if (proposed === null) return; // annulé
+        const trimmed = proposed.trim();
+        if (!trimmed) {
+          if (isBuiltIn) return; // pas de suppression possible
+          if (confirm(`Supprimer la rubrique « ${current} » et toutes ses notes ?`)) {
+            deleteCRSection(sectionKey);
+            renderCR();
+          }
+          return;
+        }
+        if (renameCRSection(sectionKey, trimmed)) renderCR();
+      } else if (action === 'add-section') {
+        const proposed = prompt('Nom de la nouvelle rubrique :', '');
+        if (proposed === null) return;
+        if (addCRSection(proposed)) renderCR();
       } else if (action === 'add-entry') {
         addCREntry(companyId, weekId, sectionKey);
       } else if (action === 'delete-entry') {
