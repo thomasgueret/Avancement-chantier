@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.09';
+const APP_VERSION = '1.10';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -4733,40 +4733,40 @@ function computeAvancementForCompany(companyId) {
   const companyLots = getWorkBatches().filter(l => l.companyId === companyId);
   const out = [];
   for (const lot of companyLots) {
-    const tasksByTitle = new Map();
+    // Une entrée par couple (plan, titre, type) : on NE fusionne PLUS les
+    // tâches de même nom à travers les plans, sinon on ne voit pas si
+    // l'avancement « Désamiantage » concerne le RDC ou l'étage. Le nom
+    // du plan reste affiché sous chaque barre via planNames.
+    const tasks = [];
     for (const plan of getProtoPlans()) {
       const planLots = getProtoRecapData(plan.id);
       const lotRecap = planLots.find(l => l.lotId === lot.id);
       if (!lotRecap) continue;
+      const planName = (plan.name || '(plan sans nom)').trim();
       for (const t of lotRecap.tasks) {
-        const key = t.title + '|' + t.type;
-        if (!tasksByTitle.has(key)) {
-          tasksByTitle.set(key, {
-            title: t.title, type: t.type,
-            total: 0, vols: { todo: 0, doing: 0, done: 0 },
-            planNames: []
-          });
-        }
-        const acc = tasksByTitle.get(key);
-        acc.total     += t.total;
-        acc.vols.todo += t.vols.todo;
-        acc.vols.doing+= t.vols.doing;
-        acc.vols.done += t.vols.done;
-        const pn = (plan.name || '(plan sans nom)').trim();
-        if (!acc.planNames.includes(pn)) acc.planNames.push(pn);
+        if (!(t.total > 0)) continue;
+        const total = t.total;
+        tasks.push({
+          title: t.title,
+          type: t.type,
+          total,
+          vols: { todo: t.vols.todo, doing: t.vols.doing, done: t.vols.done },
+          pct: {
+            todo:  (t.vols.todo  / total) * 100,
+            doing: (t.vols.doing / total) * 100,
+            done:  (t.vols.done  / total) * 100
+          },
+          planNames: [planName]
+        });
       }
     }
-    const tasks = [];
-    for (const t of tasksByTitle.values()) {
-      if (t.total <= 0) continue;
-      t.pct = {
-        todo:  (t.vols.todo  / t.total) * 100,
-        doing: (t.vols.doing / t.total) * 100,
-        done:  (t.vols.done  / t.total) * 100
-      };
-      tasks.push(t);
-    }
-    tasks.sort((a, b) => (a.title || 'ZZZ').localeCompare(b.title || 'ZZZ', 'fr'));
+    // Tri : alphabétique par titre, puis par nom de plan (pour grouper
+    // visuellement les « Désamiantage » de tous les plans entre eux).
+    tasks.sort((a, b) => {
+      const byTitle = (a.title || 'ZZZ').localeCompare(b.title || 'ZZZ', 'fr');
+      if (byTitle !== 0) return byTitle;
+      return (a.planNames[0] || '').localeCompare(b.planNames[0] || '', 'fr');
+    });
     out.push({
       lotId: lot.id,
       name: lot.name || '(lot sans nom)',
