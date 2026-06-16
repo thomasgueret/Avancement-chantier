@@ -594,8 +594,8 @@
     }
 
     // Tailles de police et dimensions des cotations proportionnelles au dessin
-    var pieceFs = Math.max(7, Math.min(11, drawnW / 14));
-    var dimFs   = Math.max(6, Math.min(9,  drawnW / 22));
+    var pieceFs = Math.max(10, Math.min(14, drawnW / 10));
+    var dimFs   = Math.max(8,  Math.min(11, drawnW / 14));
     var gap     = Math.max(2, drawnW / 55);   // écart entre pièce et ligne de cote (mm PDF)
     var tick    = Math.max(1, drawnW / 80);   // longueur des tirets perpendiculaires (mm PDF)
     var annoLW  = Math.max(0.25, drawnW / 650);
