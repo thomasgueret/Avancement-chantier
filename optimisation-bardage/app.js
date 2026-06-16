@@ -291,10 +291,13 @@
     });
   }
 
-  function polyPoints(poly, plateH) {
-    // SVG Y vers le bas : on inverse
-    return poly.map(function (p) { return p[0] + ',' + (plateH - p[1]); }).join(' ');
+  function svgEl(ns, tag, attrs) {
+    var n = document.createElementNS(ns, tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) { n.setAttribute(k, attrs[k]); });
+    return n;
   }
+
+  function polyPoints(poly, plateH) {
 
   // Dessine une ligne de cotation dans le SVG.
   // (x1,y1)-(x2,y2) : extrémités en coordonnées SVG (Y bas).
