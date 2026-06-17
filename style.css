@@ -4110,57 +4110,55 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 }
 
 /* ============================================================
-   Avancement → Récap v1.12 — stats physiques (m² réalisés / restants / totaux)
+   Avancement → Récap v1.14 — Avancement physique intégré au header existant
    ============================================================ */
-.recap-section-stats {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr auto;
-  gap: 6px 8px;
-  padding: 6px 10px 10px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+/* Chip % à droite du nom d'ouvrage, dans la barre colorée du header.
+   Reprend exactement le style des chips existantes du langage visuel. */
+.recap-section-header {
+  display: flex; align-items: center; gap: 10px;
 }
-.recap-stat {
-  display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-  padding: 4px 4px;
-  border-radius: 6px;
-}
-.recap-stat-val {
-  font-size: 14px; font-weight: 700;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-  line-height: 1.1;
-}
-.recap-stat-lbl {
-  font-size: 10px;
-  color: var(--text-3);
-  margin-top: 2px;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-.recap-stat-done .recap-stat-val { color: #2e7d32; }
-.recap-stat-todo .recap-stat-val { color: #b54708; }
-.recap-stat-total .recap-stat-val { color: var(--text-2); }
-.recap-stat-pct {
-  align-self: center;
-  padding: 4px 10px;
-  background: var(--accent-soft);
+.recap-section-name { flex: 1; min-width: 0; }
+.recap-section-pct {
+  flex-shrink: 0;
+  padding: 3px 10px;
   border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
-.recap-stat-pct .recap-stat-val { color: var(--accent); font-size: 13px; }
-@media (max-width: 480px) {
-  .recap-section-stats { grid-template-columns: 1fr 1fr; }
-  .recap-stat-pct { grid-column: 1 / -1; justify-self: center; }
+/* Ligne texte sous le header : la stat physique en plein texte, comme
+   les .section-help du reste de l'app. Pas de carton décoratif. */
+.recap-section-summary {
+  font-size: 12px;
+  color: var(--text-2);
+  padding: 8px 12px 6px;
+  font-variant-numeric: tabular-nums;
+}
+.recap-section-summary strong {
+  color: var(--text);
+  font-weight: 700;
+}
+.recap-section-sep {
+  color: var(--text-3);
+  margin: 0 4px;
 }
 
-/* v1.13 — Contribution physique par tâche dans le récap */
-.recap-task-qty {
-  font-size: 11px;
-  color: var(--text-2);
-  font-variant-numeric: tabular-nums;
-  margin-left: auto;
-  margin-right: 8px;
-  white-space: nowrap;
+/* Tâches : layout 2 lignes (nom + sous-ligne discrète) pour la
+   contribution physique, sans changer le rythme du reste du récap. */
+.recap-task-main {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column;
+  gap: 1px;
 }
-.recap-row.is-done .recap-task-qty { color: #2e7d32; }
+.recap-task-sub {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.recap-row.is-done .recap-task-sub { color: #2e7d32; }
+.recap-task-sub-excluded { font-style: italic; }

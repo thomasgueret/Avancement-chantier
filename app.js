@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.13';
+const APP_VERSION = '1.14';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -2212,35 +2212,27 @@ function renderRecap() {
     name.className = 'recap-section-name';
     name.textContent = group.setup.name || '(ouvrage sans nom)';
     header.appendChild(name);
-    section.appendChild(header);
-
-    // Stats physiques (réalisés / restants / totaux) sous le nom de l'ouvrage.
-    // Pondération : chaque tâche compte selon son ratio de production par
-    // rapport à la somme des ratios des tâches actives. Une tâche traçage
-    // à 0,17 h/m² avec un ratio total de 2 h/m² pèse 8,5 % de l'ouvrage.
+    // Stats physiques (réalisés / restants / totaux) — intégrées au header
+    // sous forme de chip % à droite + une ligne texte juste en dessous.
+    // Pondération : chaque tâche compte selon son ratio relatif (traçage
+    // à 0,17 sur 2 h/m² = 8,5 % du voile).
     const phys = computeSetupPhysicalAggregate(group);
     if (phys.total > 0) {
-      const stats = document.createElement('div');
-      stats.className = 'recap-section-stats';
       const pctPhys = Math.round((phys.realized / phys.total) * 1000) / 10;
-      stats.innerHTML = `
-        <span class="recap-stat recap-stat-done">
-          <span class="recap-stat-val">${formatQty(phys.realized)}</span>
-          <span class="recap-stat-lbl">${escapeHtml(phys.unit)} réalisés</span>
-        </span>
-        <span class="recap-stat recap-stat-todo">
-          <span class="recap-stat-val">${formatQty(phys.remaining)}</span>
-          <span class="recap-stat-lbl">${escapeHtml(phys.unit)} restants</span>
-        </span>
-        <span class="recap-stat recap-stat-total">
-          <span class="recap-stat-val">${formatQty(phys.total)}</span>
-          <span class="recap-stat-lbl">${escapeHtml(phys.unit)} totaux</span>
-        </span>
-        <span class="recap-stat recap-stat-pct">
-          <span class="recap-stat-val">${formatPct(pctPhys)} %</span>
-        </span>
-      `;
-      section.appendChild(stats);
+      const chip = document.createElement('span');
+      chip.className = 'recap-section-pct';
+      chip.textContent = `${formatPct(pctPhys)} %`;
+      header.appendChild(chip);
+    }
+    section.appendChild(header);
+    if (phys.total > 0) {
+      const summary = document.createElement('div');
+      summary.className = 'recap-section-summary';
+      summary.innerHTML =
+        `<strong>${formatQty(phys.realized)}</strong> / ${formatQty(phys.total)} ${escapeHtml(phys.unit)} réalisés` +
+        ` <span class="recap-section-sep">•</span> ` +
+        `<strong>${formatQty(phys.remaining)}</strong> ${escapeHtml(phys.unit)} restants`;
+      section.appendChild(summary);
     }
 
     const rows = document.createElement('ul');
@@ -2272,24 +2264,28 @@ function renderRecap() {
       const physMax = w * (phys.total || 0);
       const li = document.createElement('li');
       li.className = 'recap-row' + (isDone ? ' is-done' : '') + (task.excluded ? ' is-excluded' : '');
+      const main = document.createElement('div');
+      main.className = 'recap-task-main';
       const nm = document.createElement('span');
       nm.className = 'recap-task-name';
       nm.textContent = task.name || '(tâche sans nom)';
-      li.append(nm);
+      main.appendChild(nm);
+      // Sous-ligne : contribution physique de la tâche au total réalisé
+      // de l'ouvrage. Σ_tâche contribution = total réalisé du bandeau du
+      // haut (cohérence vérifiable à l'œil).
       if (task.excluded) {
         const tag = document.createElement('span');
-        tag.className = 'recap-tag';
-        tag.textContent = 'hors ratio';
-        li.append(tag);
+        tag.className = 'recap-task-sub recap-task-sub-excluded';
+        tag.textContent = 'hors ratio — ne compte pas dans l\'avancement physique';
+        main.appendChild(tag);
       } else if (phys.total > 0 && w > 0) {
-        // Affiche la contribution en m² (ou ml, u…) sur la part maximale
-        // de la tâche, pour montrer combien chaque tâche apporte au total.
-        const qty = document.createElement('span');
-        qty.className = 'recap-task-qty';
-        qty.title = `${formatQty(physContribution)} / ${formatQty(physMax)} ${physUnit} — poids ${formatPct(Math.round(w * 1000) / 10)} %`;
-        qty.textContent = `${formatQty(physContribution)} / ${formatQty(physMax)} ${physUnit}`;
-        li.append(qty);
+        const sub = document.createElement('span');
+        sub.className = 'recap-task-sub';
+        sub.title = `Poids : ${formatPct(Math.round(w * 1000) / 10)} % de l'ouvrage — max ${formatQty(physMax)} ${phys.unit}`;
+        sub.textContent = `${formatQty(physContribution)} ${phys.unit} réalisés`;
+        main.appendChild(sub);
       }
+      li.append(main);
       const pc = document.createElement('span');
       pc.className = 'recap-task-pct';
       pc.textContent = `${formatPct(rounded)} %`;
