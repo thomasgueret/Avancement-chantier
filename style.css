@@ -4153,3 +4153,14 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   .recap-section-stats { grid-template-columns: 1fr 1fr; }
   .recap-stat-pct { grid-column: 1 / -1; justify-self: center; }
 }
+
+/* v1.13 — Contribution physique par tâche dans le récap */
+.recap-task-qty {
+  font-size: 11px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+  margin-right: 8px;
+  white-space: nowrap;
+}
+.recap-row.is-done .recap-task-qty { color: #2e7d32; }

@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.12';
+const APP_VERSION = '1.13';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -2116,12 +2116,14 @@ function computeSetupPhysicalAggregate(group) {
 }
 
 // Formate une quantité physique (m², ml, u…) avec séparation FR et
-// 1 décimale si < 100, sinon entier. Évite « 7.500000000001 ».
+// précision décroissante par paliers. 2 décimales sous 100 garantit que
+// la somme des contributions par tâche tombe précisément sur le total
+// affiché en haut du récap (sinon 13,695 → « 13,7 » crée un écart visible).
 function formatQty(n) {
   if (n == null || !isFinite(n)) return '—';
   const abs = Math.abs(n);
   if (abs === 0) return '0';
-  const decimals = abs >= 100 ? 0 : (abs >= 10 ? 1 : 2);
+  const decimals = abs >= 1000 ? 0 : (abs >= 100 ? 1 : 2);
   return n.toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: decimals });
 }
 
@@ -2243,6 +2245,18 @@ function renderRecap() {
 
     const rows = document.createElement('ul');
     rows.className = 'recap-rows';
+    // Précalcul des poids par tâche (mêmes règles que computeSetupPhysicalAggregate
+    // pour rester cohérent avec le total affiché en haut). On expose ensuite
+    // la contribution de chaque tâche en unité physique à côté de son %.
+    const physUnit = phys.unit;
+    const activeTasks = (group.setup.tasks || []).filter(t => !t.excluded);
+    const totalRatio = activeTasks.reduce((s, t) => s + (t.ratio || 0), 0);
+    const weightFor = (task) => {
+      if (task.excluded) return 0;
+      if (totalRatio > 0) return (task.ratio || 0) / totalRatio;
+      if (activeTasks.length > 0) return 1 / activeTasks.length;
+      return 0;
+    };
     for (const task of group.setup.tasks) {
       const t = group.tasks[task.id];
       if (!t) continue;
@@ -2250,21 +2264,35 @@ function renderRecap() {
       const pct = t.den > 0 ? t.num / t.den : (t.count > 0 ? t.sum / t.count : 0);
       const rounded = Math.round(pct * 10) / 10;
       const isDone = rounded >= 100;
+      // Contribution physique = weight × (Σ q × progress) / 100. Égale à
+      // weight × pct × den / 100 quand den > 0. Permet de cross-vérifier
+      // que Σ_tâche contribution = total réalisé en haut.
+      const w = weightFor(task);
+      const physContribution = (w * t.num) / 100;
+      const physMax = w * (phys.total || 0);
       const li = document.createElement('li');
       li.className = 'recap-row' + (isDone ? ' is-done' : '') + (task.excluded ? ' is-excluded' : '');
       const nm = document.createElement('span');
       nm.className = 'recap-task-name';
       nm.textContent = task.name || '(tâche sans nom)';
-      const pc = document.createElement('span');
-      pc.className = 'recap-task-pct';
-      pc.textContent = `${formatPct(rounded)} %`;
       li.append(nm);
       if (task.excluded) {
         const tag = document.createElement('span');
         tag.className = 'recap-tag';
         tag.textContent = 'hors ratio';
         li.append(tag);
+      } else if (phys.total > 0 && w > 0) {
+        // Affiche la contribution en m² (ou ml, u…) sur la part maximale
+        // de la tâche, pour montrer combien chaque tâche apporte au total.
+        const qty = document.createElement('span');
+        qty.className = 'recap-task-qty';
+        qty.title = `${formatQty(physContribution)} / ${formatQty(physMax)} ${physUnit} — poids ${formatPct(Math.round(w * 1000) / 10)} %`;
+        qty.textContent = `${formatQty(physContribution)} / ${formatQty(physMax)} ${physUnit}`;
+        li.append(qty);
       }
+      const pc = document.createElement('span');
+      pc.className = 'recap-task-pct';
+      pc.textContent = `${formatPct(rounded)} %`;
       li.append(pc);
       rows.appendChild(li);
     }
