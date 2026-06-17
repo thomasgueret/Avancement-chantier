@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.10';
+const APP_VERSION = '1.11';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -7318,6 +7318,16 @@ function shapeRawValue(s) {
   if (s.type === 'rect')    return { surface: (s.coords.w || 0) * (s.coords.h || 0) };
   if (s.type === 'polygon') return { surface: polygonAreaProto(s.coords.points) };
   if (s.type === 'line')    return { length: Math.hypot(s.coords.x2 - s.coords.x1, s.coords.y2 - s.coords.y1) };
+  if (s.type === 'polyline') {
+    // Longueur = somme des segments. Une polyligne avec < 2 sommets
+    // n'existe pas (filtré dans finishPolyline) mais on est défensif.
+    const pts = (s.coords && s.coords.points) || [];
+    let len = 0;
+    for (let i = 1; i < pts.length; i++) {
+      len += Math.hypot(pts[i].x - pts[i-1].x, pts[i].y - pts[i-1].y);
+    }
+    return { length: len };
+  }
   if (s.type === 'point')   return { count: 1 };
   return {};
 }
@@ -7326,7 +7336,7 @@ function dominantTaskType(shapes) {
   const c = { surface: 0, length: 0, count: 0 };
   for (const s of shapes) {
     if (s.type === 'rect' || s.type === 'polygon') c.surface++;
-    else if (s.type === 'line') c.length++;
+    else if (s.type === 'line' || s.type === 'polyline') c.length++;
     else if (s.type === 'point') c.count++;
   }
   if (c.surface >= c.length && c.surface >= c.count && c.surface > 0) return 'surface';
