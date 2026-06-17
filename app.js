@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.14';
+const APP_VERSION = '1.15';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -59,12 +59,13 @@ const state = {
   echeckinCollapsed: {},  // { [companyId]: true } — entreprises repliées dans eCheckIn
   presences: {},          // { 'YYYY-MM-DD': [{ id, companyId, count }] }
   weather:   {},          // { 'YYYY-MM-DD': { [companyId]: true } } — entreprises en intempéries ce jour-là
-  stockEntries: [],       // [{ id, type: 'reception' | 'inventaire', article, qty, unit, date, notes }]
+  stockEntries: [],       // [{ id, type: 'reception' | 'inventaire', article, qty, unit, unitPrice, eOTP, date, notes }]
   consommableEntries: [], // [{ id, orderId, date, notes, product, reference, qty, unit, unitPrice, eOTP }]
   consoProducts: [],      // registre canonique : [{ name, reference, unitPrice }]
   eotps: [],              // lignes de budget eOTP : [{ id, code, label, budget }]
   eotpRegistryInitialized: false, // flag de migration douce (une fois)
   consoRecapMode: 'product', // 'product' | 'eotp' : axe de regroupement du récap Consommable
+  stockCBMode: 'product',    // 'product' | 'eotp' : axe de regroupement du récap CB Stock
   projectStart: '',          // date ISO YYYY-MM-DD : début prévu du chantier
   projectEnd: '',            // date ISO YYYY-MM-DD : fin prévue du chantier
   workBatches: [],           // Proto : lots de travaux [{ id, name, color }]
@@ -153,6 +154,7 @@ function load() {
     if (data.eotps) state.eotps = data.eotps;
     if (typeof data.eotpRegistryInitialized === 'boolean') state.eotpRegistryInitialized = data.eotpRegistryInitialized;
     if (data.consoRecapMode === 'product' || data.consoRecapMode === 'eotp') state.consoRecapMode = data.consoRecapMode;
+    if (data.stockCBMode === 'product' || data.stockCBMode === 'eotp') state.stockCBMode = data.stockCBMode;
     if (typeof data.projectStart === 'string') state.projectStart = data.projectStart;
     if (typeof data.projectEnd === 'string') state.projectEnd = data.projectEnd;
     if (Array.isArray(data.workBatches)) state.workBatches = data.workBatches;
@@ -216,6 +218,7 @@ function save() {
     eotps: state.eotps,
     eotpRegistryInitialized: state.eotpRegistryInitialized,
     consoRecapMode: state.consoRecapMode,
+    stockCBMode: state.stockCBMode,
     projectStart: state.projectStart,
     projectEnd: state.projectEnd,
     workBatches: state.workBatches,
@@ -3459,6 +3462,7 @@ function switchSubPage(group, name) {
   // Garantit un récap toujours frais à l'ouverture du sous-onglet
   if (group === 'avancement' && name === 'recap') renderRecap();
   if (group === 'proto' && name === 'recap') renderProtoRecap();
+  if (group === 'stock' && name === 'cb') renderStockCB();
 }
 
 function renderCompanies() {
@@ -5386,6 +5390,7 @@ function buildStockSummaryCard(item) {
 function renderStock() {
   renderStockEntries();
   renderStockSummary();
+  renderStockCB();
   refreshArticleControl();
 }
 // Peuple le dropdown des articles à partir de ceux déjà saisis. Si la
@@ -5446,17 +5451,27 @@ function fmtDateShortFR(iso) {
 }
 
 // ----- CRUD -----
-function addStockEntry({ type, article, qty, unit, date, notes }) {
+function addStockEntry({ type, article, qty, unit, unitPrice, eOTP, date, notes }) {
   if (!article || !article.trim()) { showToast('Article requis', 'error'); return false; }
   const q = parseFloat(String(qty).replace(',', '.'));
   if (!Number.isFinite(q) || q < 0) { showToast('Quantité invalide', 'error'); return false; }
   if (!date) { showToast('Date requise', 'error'); return false; }
+  // Prix unitaire (optionnel) — utilisé pour la vision budget CB. Pas
+  // appliqué aux inventaires (recalage de stock physique, pas un achat).
+  let priceVal = 0;
+  if (unitPrice != null && unitPrice !== '') {
+    priceVal = parseFloat(String(unitPrice).replace(',', '.'));
+    if (!Number.isFinite(priceVal) || priceVal < 0) priceVal = 0;
+  }
+  const isReception = type !== 'inventaire';
   state.stockEntries.push({
     id: uid(),
-    type: type === 'inventaire' ? 'inventaire' : 'reception',
+    type: isReception ? 'reception' : 'inventaire',
     article: article.trim(),
     qty: q,
     unit: unit || 'u',
+    unitPrice: isReception ? priceVal : 0,
+    eOTP: isReception ? (eOTP || '').trim() : '',
     date,
     notes: (notes || '').trim()
   });
@@ -5499,6 +5514,9 @@ function openStockEntrySheet() {
   unitSel.value = 'm³';
   document.getElementById('stockdate').value = todayISO();
   document.getElementById('stocknotes').value = '';
+  // Champs CB : prix vide, eOTP repeuplé depuis Données → eOTP
+  document.getElementById('stockprice').value = '';
+  refreshStockEOTPSelect();
   sheet.hidden = false;
   document.body.style.overflow = 'hidden';
   // Focus : champ texte si pas de référence connue, sinon le select
@@ -5531,14 +5549,39 @@ function setStockEntryType(type) {
       ? 'Ajoute la quantité reçue au stock courant.'
       : 'Remplace le stock courant par la quantité comptée (recalage).';
   }
+  // Cache les champs CB (prix + eOTP) pour l'inventaire — c'est un
+  // recalage physique, pas un achat avec coût budgétaire.
+  const cb = document.getElementById('stockcbfields');
+  if (cb) cb.hidden = currentStockEntryType !== 'reception';
+}
+// Peuple le dropdown eOTP du sheet de saisie Stock depuis Données → eOTP.
+// Une option vide « — » permet de ne pas affecter l'achat à une ligne.
+function refreshStockEOTPSelect() {
+  const sel = document.getElementById('stockeotp');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = '';
+  const optEmpty = document.createElement('option');
+  optEmpty.value = ''; optEmpty.textContent = '— Aucun —';
+  sel.appendChild(optEmpty);
+  for (const e of getEOTPs()) {
+    if (!e.code || !e.code.trim()) continue;
+    const opt = document.createElement('option');
+    opt.value = e.code;
+    opt.textContent = e.label ? `${e.code} — ${e.label}` : e.code;
+    sel.appendChild(opt);
+  }
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
 }
 function submitStockEntry() {
-  const article = getStockArticleFromForm();
-  const qty     = document.getElementById('stockqty').value;
-  const unit    = document.getElementById('stockunit').value;
-  const date    = document.getElementById('stockdate').value;
-  const notes   = document.getElementById('stocknotes').value;
-  const ok = addStockEntry({ type: currentStockEntryType, article, qty, unit, date, notes });
+  const article   = getStockArticleFromForm();
+  const qty       = document.getElementById('stockqty').value;
+  const unit      = document.getElementById('stockunit').value;
+  const unitPrice = document.getElementById('stockprice').value;
+  const eOTP      = document.getElementById('stockeotp').value;
+  const date      = document.getElementById('stockdate').value;
+  const notes     = document.getElementById('stocknotes').value;
+  const ok = addStockEntry({ type: currentStockEntryType, article, qty, unit, unitPrice, eOTP, date, notes });
   if (ok) {
     showToast(currentStockEntryType === 'inventaire' ? 'Inventaire enregistré' : 'Réception enregistrée');
     closeStockEntrySheet();
@@ -6212,6 +6255,236 @@ function renderConsommableRecapByEOTP(wrap, empty, entries) {
   buildRecapTable(wrap, months, rows, headerLabel, rowBuilder, cellAccess, extraCols, trailingCols);
 }
 
+// ====================================================================
+//   STOCK → CB : récap budget par produit / par eOTP
+// ====================================================================
+// Vision budget des entrées Stock (réceptions uniquement — l'inventaire
+// est un recalage physique). Réutilise buildRecapTable + les helpers
+// FDC / RAD / Écart du récap Consommable.
+//   - Mode produit : lignes = articles, colonnes = mois × quantités
+//   - Mode eOTP    : lignes = eOTP, colonnes = mois × dépenses €,
+//                    avec Budget / RAD / FDC / Écart FDC
+function getStockReceptions() {
+  return (state.stockEntries || []).filter(e => e.type !== 'inventaire');
+}
+function renderStockCB() {
+  const wrap  = document.getElementById('stockcbwrap');
+  const empty = document.getElementById('stockcbempty');
+  if (!wrap || !empty) return;
+  const mode = state.stockCBMode === 'eotp' ? 'eotp' : 'product';
+  document.querySelectorAll('.recap-mode-btn[data-stock-cb-mode]').forEach(b => {
+    const on = b.dataset.stockCbMode === mode;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  wrap.innerHTML = '';
+  empty.classList.remove('show');
+  const entries = getStockReceptions();
+  if (entries.length === 0) {
+    empty.innerHTML = '<p>Aucune réception à afficher.</p><p class="hint">Enregistre une réception (avec un prix unitaire) pour faire apparaître la vision budget.</p>';
+    empty.classList.add('show');
+    return;
+  }
+  if (mode === 'eotp') renderStockCBByEOTP(wrap, empty, entries);
+  else                 renderStockCBByProduct(wrap, empty, entries);
+}
+
+function renderStockCBByProduct(wrap, empty, entries) {
+  const monthSet = new Set();
+  const productMap = new Map();
+  const cells = new Map();
+  for (const e of entries) {
+    const monthKey = (e.date || '').slice(0, 7);
+    if (!monthKey) continue;
+    const pKey = (e.article || '').trim().toLowerCase();
+    if (!pKey) continue;
+    monthSet.add(monthKey);
+    if (!productMap.has(pKey)) productMap.set(pKey, { display: e.article, unit: e.unit, totalQty: 0 });
+    const cur = productMap.get(pKey);
+    cur.display = e.article;
+    cur.unit = e.unit;
+    const cellKey = pKey + '|' + monthKey;
+    if (!cells.has(cellKey)) cells.set(cellKey, { qty: 0, total: 0, unit: e.unit });
+    const cell = cells.get(cellKey);
+    const q = Number(e.qty) || 0;
+    const p = Number(e.unitPrice) || 0;
+    cell.qty += q;
+    cell.total += q * p;
+    cell.unit = e.unit;
+    cur.totalQty += q;
+  }
+  if (productMap.size === 0) {
+    empty.innerHTML = '<p>Aucune donnée à afficher.</p>';
+    empty.classList.add('show');
+    return;
+  }
+  const months = Array.from(monthSet).sort();
+  const products = Array.from(productMap.entries())
+    .sort((a, b) => a[1].display.localeCompare(b[1].display, 'fr'));
+  const rowBuilder = ([, p]) => {
+    const cellTh = document.createElement('th');
+    cellTh.className = 'recap-date-col';
+    cellTh.scope = 'row';
+    const nameDiv = document.createElement('div');
+    nameDiv.className = 'conso-product-name';
+    nameDiv.textContent = p.display;
+    cellTh.appendChild(nameDiv);
+    if (p.unit) {
+      const refDiv = document.createElement('div');
+      refDiv.className = 'conso-product-ref';
+      refDiv.textContent = 'unité : ' + p.unit;
+      cellTh.appendChild(refDiv);
+    }
+    return cellTh;
+  };
+  const cellAccess = ([pKey], monthKey) => cells.get(pKey + '|' + monthKey);
+  const elapsed = getProjectMonthsElapsed();
+  const fallbackMonths = months.length;
+  const trailingCols = [{
+    header: 'Moy. / mois',
+    headerTitle: elapsed > 0
+      ? `Moyenne mensuelle calculée sur ${elapsed} mois écoulés depuis le début du chantier`
+      : `Moyenne calculée sur ${fallbackMonths} mois (durée des données — renseignez les dates dans Données → Admin. pour un calcul basé sur la durée projet).`,
+    className: 'recap-avg-col',
+    cell: ([, p], rowTotal) => {
+      const divisor = elapsed > 0 ? elapsed : fallbackMonths;
+      if (divisor <= 0) return { text: '—', className: 'recap-empty-cell' };
+      const avgQty = p.totalQty / divisor;
+      const avgEur = rowTotal / divisor;
+      return { html: `<span class="conso-cell-qty">${escapeHtml(fmtStockQty(avgQty))} ${escapeHtml(p.unit || '')}</span><br><span class="conso-cell-eur">${escapeHtml(fmtEur(avgEur))}</span>` };
+    },
+    footer: (grandTotal) => {
+      const divisor = elapsed > 0 ? elapsed : fallbackMonths;
+      if (divisor <= 0) return { text: '—' };
+      const avgEur = grandTotal / divisor;
+      return { html: `<span class="conso-cell-eur">${escapeHtml(fmtEur(avgEur))}</span>` };
+    }
+  }];
+  buildRecapTable(wrap, months, products, 'Article', rowBuilder, cellAccess, [], trailingCols);
+}
+
+function renderStockCBByEOTP(wrap, empty, entries) {
+  const monthSet = new Set();
+  const eotpRows = new Map();
+  const cells = new Map();
+  for (const e of entries) {
+    const monthKey = (e.date || '').slice(0, 7);
+    if (!monthKey) continue;
+    const code = (e.eOTP || '').trim();
+    monthSet.add(monthKey);
+    if (!eotpRows.has(code)) {
+      const reg = code ? getEOTP(code) : null;
+      eotpRows.set(code, {
+        code,
+        label: reg?.label || '',
+        budget: reg && Number.isFinite(reg.budget) ? reg.budget : 0
+      });
+    }
+    const cellKey = code + '|' + monthKey;
+    if (!cells.has(cellKey)) cells.set(cellKey, { total: 0 });
+    cells.get(cellKey).total += (Number(e.qty) || 0) * (Number(e.unitPrice) || 0);
+  }
+  if (eotpRows.size === 0) {
+    empty.innerHTML = '<p>Aucune dépense affectée à un eOTP.</p><p class="hint">Renseigne un eOTP lors de la saisie d\'une réception pour suivre la consommation par ligne de budget.</p>';
+    empty.classList.add('show');
+    return;
+  }
+  const months = Array.from(monthSet).sort();
+  const rows = Array.from(eotpRows.entries()).sort((a, b) => {
+    if (!a[0] && !b[0]) return 0;
+    if (!a[0]) return 1;
+    if (!b[0]) return -1;
+    return a[0].localeCompare(b[0], 'fr');
+  });
+  const rowBuilder = ([code, row]) => {
+    const cellTh = document.createElement('th');
+    cellTh.className = 'recap-date-col';
+    cellTh.scope = 'row';
+    if (code) {
+      const codeDiv = document.createElement('div');
+      codeDiv.className = 'conso-eotp-code';
+      codeDiv.textContent = code;
+      cellTh.appendChild(codeDiv);
+      if (row.label) {
+        const labelDiv = document.createElement('div');
+        labelDiv.className = 'conso-eotp-label';
+        labelDiv.textContent = row.label;
+        cellTh.appendChild(labelDiv);
+      }
+    } else {
+      const noneDiv = document.createElement('div');
+      noneDiv.className = 'conso-eotp-none';
+      noneDiv.textContent = 'Sans eOTP';
+      cellTh.appendChild(noneDiv);
+    }
+    return cellTh;
+  };
+  const cellAccess = ([code], monthKey) => cells.get(code + '|' + monthKey);
+  const extraCols = [
+    {
+      header: 'Budget', className: 'recap-budget-col',
+      cell: ([code, row]) => code ? { text: fmtEur(row.budget) } : { text: '—', className: 'recap-empty-cell' },
+      footer: (_, __, rows) => ({ text: fmtEur(rows.reduce((s, [c, r]) => s + (c ? r.budget : 0), 0)) })
+    },
+    {
+      header: 'RAD', headerTitle: 'Reste à dépenser (Budget − Total)',
+      className: 'recap-reste-col',
+      cell: ([code, row], rowTotal) => {
+        if (!code) return { text: '—', className: 'recap-empty-cell' };
+        const reste = row.budget - rowTotal;
+        return { text: fmtEur(reste), className: reste < 0 ? 'recap-reste-negative' : '' };
+      },
+      footer: (_, rowTotals, allRows) => {
+        const sumBudget   = allRows.reduce((s, [c, r]) => s + (c ? r.budget : 0), 0);
+        const sumDepenses = allRows.reduce((s, [c, _r], i) => s + (c ? rowTotals[i] : 0), 0);
+        const reste = sumBudget - sumDepenses;
+        return { text: fmtEur(reste), className: reste < 0 ? 'recap-reste-negative' : '' };
+      }
+    }
+  ];
+  const elapsed   = getProjectMonthsElapsed();
+  const totalProj = getProjectMonthsTotal();
+  const canProject = elapsed > 0 && totalProj > 0;
+  const fdcTooltip = canProject
+    ? `Projection à la fin du chantier : moyenne mensuelle (sur ${elapsed} mois écoulés) × durée totale du chantier (${totalProj} mois).`
+    : 'Renseignez les dates de début et fin du chantier dans Données → Admin. pour activer la projection.';
+  const trailingCols = [
+    {
+      header: 'FDC', headerTitle: fdcTooltip, className: 'recap-fdc-col',
+      cell: (_, rowTotal) => {
+        if (!canProject) return { text: '—', className: 'recap-empty-cell' };
+        return { text: fmtEur((rowTotal / elapsed) * totalProj) };
+      },
+      footer: (grandTotal) => {
+        if (!canProject) return { text: '—', className: 'recap-empty-cell' };
+        return { text: fmtEur((grandTotal / elapsed) * totalProj) };
+      }
+    },
+    {
+      header: 'Écart FDC',
+      headerTitle: canProject ? 'Budget − FDC : marge prévisionnelle en fin de chantier (rouge si dépassement)' : fdcTooltip,
+      className: 'recap-ecart-col',
+      cell: ([code, row], rowTotal) => {
+        if (!canProject || !code) return { text: '—', className: 'recap-empty-cell' };
+        const fdc = (rowTotal / elapsed) * totalProj;
+        const ecart = row.budget - fdc;
+        return { text: fmtEur(ecart), className: ecart < 0 ? 'recap-reste-negative' : '' };
+      },
+      footer: (_, rowTotals, allRows) => {
+        if (!canProject) return { text: '—', className: 'recap-empty-cell' };
+        const sumBudget = allRows.reduce((s, [c, r]) => s + (c ? r.budget : 0), 0);
+        const sumFDC = allRows.reduce((s, [c, _r], i) => {
+          if (!c) return s;
+          return s + (rowTotals[i] / elapsed) * totalProj;
+        }, 0);
+        const ecart = sumBudget - sumFDC;
+        return { text: fmtEur(ecart), className: ecart < 0 ? 'recap-reste-negative' : '' };
+      }
+    }
+  ];
+  buildRecapTable(wrap, months, rows, 'eOTP', rowBuilder, cellAccess, extraCols, trailingCols);
+}
+
 // Squelette commun produit×mois / eOTP×mois : un th de ligne, N colonnes
 // extra (entre row label et mois), N mois, un total, puis N colonnes
 // trailing (après le total — utilisé pour la moyenne mensuelle en mode
@@ -6368,6 +6641,13 @@ function setConsoRecapMode(mode) {
   state.consoRecapMode = next;
   save();
   renderConsommableRecap();
+}
+function setStockCBMode(mode) {
+  const next = (mode === 'eotp') ? 'eotp' : 'product';
+  if (state.stockCBMode === next) return;
+  state.stockCBMode = next;
+  save();
+  renderStockCB();
 }
 
 function renderConsommable() {
@@ -8947,6 +9227,7 @@ const SYNC_EXCLUDED_KEYS = new Set([
   'currentDate',                     // curseur "aujourd'hui" local
   'chartHidden', 'chartRange',       // filtres graphique perso
   'consoRecapMode',                  // mode récap conso perso
+  'stockCBMode',                     // mode récap CB stock perso
   'protoActivePlanId',               // plan en cours d'édition
   'protoFilterLotId', 'protoFilterStatuses', // filtres Proto
   'echeckinCollapsed',               // sections eCheckIn pliées/dépliées
@@ -9277,8 +9558,12 @@ function init() {
   if (projEnd)   projEnd.addEventListener('change',   () => setProjectEnd(projEnd.value));
 
   // ----- Consommable → Récap : bascule produit / eOTP -----
-  document.querySelectorAll('.recap-mode-btn').forEach(btn => {
+  document.querySelectorAll('.recap-mode-btn[data-recap-mode]').forEach(btn => {
     btn.addEventListener('click', () => setConsoRecapMode(btn.dataset.recapMode));
+  });
+  // ----- Stock → CB : bascule produit / eOTP -----
+  document.querySelectorAll('.recap-mode-btn[data-stock-cb-mode]').forEach(btn => {
+    btn.addEventListener('click', () => setStockCBMode(btn.dataset.stockCbMode));
   });
 
   // ----- Données → Lots : bouton + ajouter -----

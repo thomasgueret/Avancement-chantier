@@ -265,10 +265,11 @@
 
     <!-- ============== ONGLET : STOCK ============== -->
     <section class="page" id="page-stock">
-      <div class="segmented" role="tablist" data-group="stock" data-position="0" style="--count:2;">
+      <div class="segmented" role="tablist" data-group="stock" data-position="0" style="--count:3;">
         <div class="segmented-thumb"></div>
         <button class="seg-btn active" data-group="stock" data-sub="enregistrement" role="tab">Enregistrement</button>
         <button class="seg-btn" data-group="stock" data-sub="stockview" role="tab">Stock</button>
+        <button class="seg-btn" data-group="stock" data-sub="cb" role="tab" title="Vision budget par produit / par eOTP">CB</button>
       </div>
 
       <!-- Sous-onglet : Enregistrement (saisie + liste compacte + FAB) -->
@@ -282,6 +283,16 @@
       <div class="sub-page" id="sub-stockview" data-group="stock">
         <div class="stock-summary-list" id="stocksummarylist"></div>
         <div class="empty-state" id="stocksummaryempty"></div>
+      </div>
+
+      <!-- Sous-onglet : CB (vision budget : par produit ou par eOTP) -->
+      <div class="sub-page" id="sub-cb" data-group="stock">
+        <div class="recap-mode-bar" role="tablist" aria-label="Regroupement du récapitulatif CB">
+          <button class="recap-mode-btn active" data-stock-cb-mode="product" type="button" role="tab" aria-selected="true">Par produit</button>
+          <button class="recap-mode-btn" data-stock-cb-mode="eotp" type="button" role="tab" aria-selected="false">Par eOTP</button>
+        </div>
+        <div class="recap-table-wrap" id="stockcbwrap"></div>
+        <div class="empty-state" id="stockcbempty"></div>
       </div>
     </section>
 
@@ -492,6 +503,21 @@
           <div>
             <label class="stock-form-label" for="stockunit">Unité</label>
             <select id="stockunit" class="stock-form-input"></select>
+          </div>
+        </div>
+
+        <!-- Champs CB (prix + eOTP) — visibles uniquement pour la réception
+             car l'inventaire est un recalage de stock physique, pas un achat. -->
+        <div class="stock-cb-fields" id="stockcbfields">
+          <div class="stock-qty-row">
+            <div>
+              <label class="stock-form-label" for="stockprice">Prix unitaire (€)</label>
+              <input id="stockprice" class="stock-form-input" type="text" inputmode="decimal" placeholder="0,00">
+            </div>
+            <div>
+              <label class="stock-form-label" for="stockeotp">eOTP</label>
+              <select id="stockeotp" class="stock-form-input"></select>
+            </div>
           </div>
         </div>
 
