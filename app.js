@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.11';
+const APP_VERSION = '1.12';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -2072,6 +2072,59 @@ function getDescendantZones(rootId) {
   return out;
 }
 
+// Calcule l'avancement « physique » (m², ml, u…) d'un ouvrage agrégé sur
+// l'ensemble des zones d'un bâtiment. Chaque tâche pondère selon son
+// ratio de production rapporté à la somme des ratios actifs.
+//   total     = somme des quantités de l'ouvrage sur le bâtiment (1 zone = 1 quantité)
+//   realized  = Σ_tâche (ratio_t / Σ_ratios) × (somme des quantité × progress%)
+//   remaining = total − realized
+// Si aucun ratio n'est renseigné (R = 0), repli sur des poids égaux pour
+// éviter d'afficher 0 réalisés sur des tâches déjà avancées. Les tâches
+// excluded (« hors ratio ») ne comptent pas dans l'avancement physique.
+function computeSetupPhysicalAggregate(group) {
+  const tasks = group.setup.tasks || [];
+  const activeTasks = tasks.filter(t => !t.excluded);
+  const totalRatio = activeTasks.reduce((s, t) => s + (t.ratio || 0), 0);
+  let total = 0;
+  for (const tid of Object.keys(group.tasks)) {
+    total = group.tasks[tid].den;
+    break;
+  }
+  let realized = 0;
+  if (totalRatio > 0) {
+    for (const t of activeTasks) {
+      const tAgg = group.tasks[t.id];
+      if (!tAgg) continue;
+      const weight = (t.ratio || 0) / totalRatio;
+      realized += weight * tAgg.num / 100;
+    }
+  } else if (activeTasks.length > 0) {
+    const weight = 1 / activeTasks.length;
+    for (const t of activeTasks) {
+      const tAgg = group.tasks[t.id];
+      if (!tAgg) continue;
+      realized += weight * tAgg.num / 100;
+    }
+  }
+  if (realized > total) realized = total;
+  return {
+    total,
+    realized,
+    remaining: Math.max(0, total - realized),
+    unit: group.setup.unit || 'm²'
+  };
+}
+
+// Formate une quantité physique (m², ml, u…) avec séparation FR et
+// 1 décimale si < 100, sinon entier. Évite « 7.500000000001 ».
+function formatQty(n) {
+  if (n == null || !isFinite(n)) return '—';
+  const abs = Math.abs(n);
+  if (abs === 0) return '0';
+  const decimals = abs >= 100 ? 0 : (abs >= 10 ? 1 : 2);
+  return n.toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: decimals });
+}
+
 function renderRecap() {
   const pickerEl = document.getElementById('recappicker');
   const contentEl = document.getElementById('recapcontent');
@@ -2158,6 +2211,35 @@ function renderRecap() {
     name.textContent = group.setup.name || '(ouvrage sans nom)';
     header.appendChild(name);
     section.appendChild(header);
+
+    // Stats physiques (réalisés / restants / totaux) sous le nom de l'ouvrage.
+    // Pondération : chaque tâche compte selon son ratio de production par
+    // rapport à la somme des ratios des tâches actives. Une tâche traçage
+    // à 0,17 h/m² avec un ratio total de 2 h/m² pèse 8,5 % de l'ouvrage.
+    const phys = computeSetupPhysicalAggregate(group);
+    if (phys.total > 0) {
+      const stats = document.createElement('div');
+      stats.className = 'recap-section-stats';
+      const pctPhys = Math.round((phys.realized / phys.total) * 1000) / 10;
+      stats.innerHTML = `
+        <span class="recap-stat recap-stat-done">
+          <span class="recap-stat-val">${formatQty(phys.realized)}</span>
+          <span class="recap-stat-lbl">${escapeHtml(phys.unit)} réalisés</span>
+        </span>
+        <span class="recap-stat recap-stat-todo">
+          <span class="recap-stat-val">${formatQty(phys.remaining)}</span>
+          <span class="recap-stat-lbl">${escapeHtml(phys.unit)} restants</span>
+        </span>
+        <span class="recap-stat recap-stat-total">
+          <span class="recap-stat-val">${formatQty(phys.total)}</span>
+          <span class="recap-stat-lbl">${escapeHtml(phys.unit)} totaux</span>
+        </span>
+        <span class="recap-stat recap-stat-pct">
+          <span class="recap-stat-val">${formatPct(pctPhys)} %</span>
+        </span>
+      `;
+      section.appendChild(stats);
+    }
 
     const rows = document.createElement('ul');
     rows.className = 'recap-rows';

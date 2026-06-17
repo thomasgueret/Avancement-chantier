@@ -4108,3 +4108,48 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   background: var(--surface-2);
   color: var(--accent);
 }
+
+/* ============================================================
+   Avancement → Récap v1.12 — stats physiques (m² réalisés / restants / totaux)
+   ============================================================ */
+.recap-section-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr auto;
+  gap: 6px 8px;
+  padding: 6px 10px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.recap-stat {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 4px 4px;
+  border-radius: 6px;
+}
+.recap-stat-val {
+  font-size: 14px; font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.recap-stat-lbl {
+  font-size: 10px;
+  color: var(--text-3);
+  margin-top: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.recap-stat-done .recap-stat-val { color: #2e7d32; }
+.recap-stat-todo .recap-stat-val { color: #b54708; }
+.recap-stat-total .recap-stat-val { color: var(--text-2); }
+.recap-stat-pct {
+  align-self: center;
+  padding: 4px 10px;
+  background: var(--accent-soft);
+  border-radius: 999px;
+}
+.recap-stat-pct .recap-stat-val { color: var(--accent); font-size: 13px; }
+@media (max-width: 480px) {
+  .recap-section-stats { grid-template-columns: 1fr 1fr; }
+  .recap-stat-pct { grid-column: 1 / -1; justify-self: center; }
+}
