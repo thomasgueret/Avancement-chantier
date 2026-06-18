@@ -331,8 +331,6 @@
 
       <!-- Sous-onglet : Plans (éditeur de plan + dessin) -->
       <div class="sub-page active" id="sub-plans" data-group="proto">
-        <p class="section-help" id="protohelp">Téléversez un plan (JPG/JPEG) puis ajoutez points, lignes ou rectangles pour localiser les tâches. Tapez sur une forme pour la documenter (lot, intitulé, date, statut). <em>Prototype expérimental — vos retours sont les bienvenus.</em></p>
-
         <!-- Input de fichier partagé (caché). Le ciblage du dossier se
              fait via la variable JS protoUploadTargetFolderId, mise à
              jour par le bouton qui déclenche le picker. -->
@@ -352,11 +350,15 @@
             <button class="proto-tool-btn proto-tool-secondary" id="protoopenmanager" type="button">📁<span> Gérer</span></button>
           </div>
 
-          <!-- Filtres lot + statut -->
+          <!-- Filtres lot + tâche + statut -->
           <div class="proto-filter-bar">
             <div class="proto-filter-group">
               <label for="protofilterlot" class="proto-filter-label">Lot</label>
               <select id="protofilterlot" class="stock-form-input proto-filter-select"></select>
+            </div>
+            <div class="proto-filter-group">
+              <label for="protofiltertitle" class="proto-filter-label">Tâche</label>
+              <select id="protofiltertitle" class="stock-form-input proto-filter-select"></select>
             </div>
             <div class="proto-filter-group proto-filter-group-status">
               <span class="proto-filter-label">Statut</span>

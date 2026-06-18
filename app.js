@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.15';
+const APP_VERSION = '1.16';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -75,6 +75,7 @@ const state = {
   protoPlans: [],            // [{ id, folderId, name, dataUrl, w, h }]
   protoActivePlanId: '',     // id du plan affiché (vide = aucun plan actif)
   protoFilterLotId: '',      // filtre par lot ('' = tous)
+  protoFilterTitle: '',      // filtre par titre de tâche ('' = toutes)
   protoFilterStatuses: ['todo', 'doing', 'done'], // statuts affichés
   // Champs hérités (v0.63) — gardés pour migration douce, ignorés ensuite
   protoPlan: '',
@@ -162,6 +163,7 @@ function load() {
     if (Array.isArray(data.protoPlans))   state.protoPlans   = data.protoPlans;
     if (typeof data.protoActivePlanId === 'string') state.protoActivePlanId = data.protoActivePlanId;
     if (typeof data.protoFilterLotId   === 'string') state.protoFilterLotId  = data.protoFilterLotId;
+    if (typeof data.protoFilterTitle   === 'string') state.protoFilterTitle  = data.protoFilterTitle;
     if (Array.isArray(data.protoFilterStatuses)) state.protoFilterStatuses = data.protoFilterStatuses;
     if (typeof data.protoPlan === 'string') state.protoPlan = data.protoPlan;
     if (Number.isFinite(data.protoPlanW)) state.protoPlanW = data.protoPlanW;
@@ -226,6 +228,7 @@ function save() {
     protoPlans: state.protoPlans,
     protoActivePlanId: state.protoActivePlanId,
     protoFilterLotId: state.protoFilterLotId,
+    protoFilterTitle: state.protoFilterTitle,
     protoFilterStatuses: state.protoFilterStatuses,
     protoShapes: state.protoShapes,
     crEntries: state.crEntries,
@@ -7186,6 +7189,7 @@ function importData(file) {
       state.protoPlans   = Array.isArray(data.protoPlans) ? data.protoPlans : [];
       state.protoActivePlanId   = typeof data.protoActivePlanId === 'string' ? data.protoActivePlanId : '';
       state.protoFilterLotId    = typeof data.protoFilterLotId  === 'string' ? data.protoFilterLotId  : '';
+      state.protoFilterTitle    = typeof data.protoFilterTitle  === 'string' ? data.protoFilterTitle  : '';
       state.protoFilterStatuses = Array.isArray(data.protoFilterStatuses) ? data.protoFilterStatuses : ['todo','doing','done'];
       state.protoPlan    = typeof data.protoPlan === 'string' ? data.protoPlan : '';
       state.protoPlanW   = Number.isFinite(data.protoPlanW) ? data.protoPlanW : 0;
@@ -7247,6 +7251,7 @@ function resetAll() {
   state.protoPlans = [];
   state.protoActivePlanId = '';
   state.protoFilterLotId = '';
+  state.protoFilterTitle = '';
   state.protoFilterStatuses = ['todo', 'doing', 'done'];
   state.protoPlan = '';
   state.protoPlanW = 0;
@@ -7525,11 +7530,32 @@ function migrateProtoPlansFromLegacy() {
 // ---------- Filtres ----------
 function shapeMatchesFilters(sh) {
   if (state.protoFilterLotId && sh.lotId !== state.protoFilterLotId) return false;
+  if (state.protoFilterTitle && (sh.title || '').trim() !== state.protoFilterTitle) return false;
   if (Array.isArray(state.protoFilterStatuses) && !state.protoFilterStatuses.includes(sh.status || 'todo')) return false;
   return true;
 }
 function setProtoFilterLot(id) {
   state.protoFilterLotId = id || '';
+  // Si le filtre titre courant n'existe pas dans le nouveau lot filtré,
+  // on le réinitialise pour éviter un SVG vide silencieux. Sinon on le
+  // garde — pratique pour passer d'un lot à l'autre avec la même tâche.
+  if (state.protoFilterTitle) {
+    const plan = getActiveProtoPlan();
+    if (plan) {
+      const stillThere = (state.protoShapes || []).some(s =>
+        s.planId === plan.id &&
+        (s.title || '').trim() === state.protoFilterTitle &&
+        (!id || s.lotId === id));
+      if (!stillThere) state.protoFilterTitle = '';
+    }
+  }
+  save();
+  renderProtoFilterBar();
+  renderProtoSVG();
+  renderProtoLegend();
+}
+function setProtoFilterTitle(title) {
+  state.protoFilterTitle = (title || '').trim();
   save();
   renderProtoSVG();
   renderProtoLegend();
@@ -8018,6 +8044,30 @@ function renderProtoFilterBar() {
     }
     lotSel.value = state.protoFilterLotId || '';
   }
+  // Filtre tâche : titres uniques des formes du plan actif, filtrés par
+  // lot courant si présent (pour ne pas proposer des tâches qui seraient
+  // de toute façon masquées par l'autre filtre).
+  const titleSel = document.getElementById('protofiltertitle');
+  if (titleSel) {
+    const plan = getActiveProtoPlan();
+    const titles = new Set();
+    if (plan) {
+      for (const s of (state.protoShapes || [])) {
+        if (s.planId !== plan.id) continue;
+        if (state.protoFilterLotId && s.lotId !== state.protoFilterLotId) continue;
+        const t = (s.title || '').trim();
+        if (t) titles.add(t);
+      }
+    }
+    const sorted = Array.from(titles).sort((a, b) => a.localeCompare(b, 'fr'));
+    titleSel.innerHTML = '';
+    titleSel.appendChild(new Option('Toutes les tâches', ''));
+    for (const t of sorted) titleSel.appendChild(new Option(t, t));
+    titleSel.value = (state.protoFilterTitle && sorted.includes(state.protoFilterTitle))
+      ? state.protoFilterTitle
+      : '';
+    titleSel.disabled = sorted.length === 0;
+  }
   refreshProtoFilterStatusBar();
 }
 function refreshProtoFilterStatusBar() {
@@ -8366,6 +8416,9 @@ function getProtoFiltersSummary() {
     parts.push('Lot : ' + (lot && lot.name ? lot.name : '(sans nom)'));
   } else {
     parts.push('Tous les lots');
+  }
+  if (state.protoFilterTitle) {
+    parts.push('Tâche : ' + state.protoFilterTitle);
   }
   const statuses = state.protoFilterStatuses || [];
   if (statuses.length < 3) {
@@ -9138,6 +9191,7 @@ function saveProtoShapeSheet() {
     showToast('Tâche enregistrée');
   }
   save();
+  renderProtoFilterBar();
   renderProtoSVG();
   renderProtoLegend();
   closeProtoShapeSheet();
@@ -9148,6 +9202,7 @@ function deleteProtoShape() {
   if (!confirm('Supprimer cette forme ?')) return;
   state.protoShapes = state.protoShapes.filter(s => s.id !== protoEditingShapeId);
   save();
+  renderProtoFilterBar();
   renderProtoSVG();
   renderProtoLegend();
   closeProtoShapeSheet();
@@ -9229,7 +9284,7 @@ const SYNC_EXCLUDED_KEYS = new Set([
   'consoRecapMode',                  // mode récap conso perso
   'stockCBMode',                     // mode récap CB stock perso
   'protoActivePlanId',               // plan en cours d'édition
-  'protoFilterLotId', 'protoFilterStatuses', // filtres Proto
+  'protoFilterLotId', 'protoFilterTitle', 'protoFilterStatuses', // filtres Proto
   'echeckinCollapsed',               // sections eCheckIn pliées/dépliées
   'crSelectedCompanyId',             // entreprise sélectionnée dans le slider CR (UI)
   'crSelectedWeekId',                // semaine CR sélectionnée par entreprise (UI)
@@ -9591,6 +9646,8 @@ function init() {
   if (protoPlanSel) protoPlanSel.addEventListener('change', (e) => setActiveProtoPlan(e.target.value));
   const protoFilterLot = document.getElementById('protofilterlot');
   if (protoFilterLot) protoFilterLot.addEventListener('change', (e) => setProtoFilterLot(e.target.value));
+  const protoFilterTitle = document.getElementById('protofiltertitle');
+  if (protoFilterTitle) protoFilterTitle.addEventListener('change', (e) => setProtoFilterTitle(e.target.value));
   document.querySelectorAll('.proto-filter-status[data-proto-filter-status]').forEach(btn => {
     btn.addEventListener('click', () => toggleProtoFilterStatus(btn.dataset.protoFilterStatus));
   });
