@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.16';
+const APP_VERSION = '1.17';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -659,15 +659,15 @@ function renderDashboard() {
 
 function dashboardCardHeader(title, gotoPage) {
   const h = document.createElement('div');
-  h.className = 'dashboard-card-header';
-  const t = document.createElement('h3');
-  t.className = 'dashboard-card-title';
-  t.textContent = title;
+  h.className = 'dash-card-head';
+  const t = document.createElement('span');
+  t.className = 'dash-card-eyebrow';
+  t.textContent = (title || '').toUpperCase();
   h.appendChild(t);
   if (gotoPage) {
     const link = document.createElement('button');
     link.type = 'button';
-    link.className = 'dashboard-card-link';
+    link.className = 'dash-card-link';
     link.textContent = 'Ouvrir →';
     link.addEventListener('click', () => switchPage(gotoPage));
     h.appendChild(link);
@@ -676,6 +676,9 @@ function dashboardCardHeader(title, gotoPage) {
 }
 
 // --- Widget « Aujourd'hui » (hero) ---
+// Bandeau présentation : eyebrow AUJOURD'HUI + date + 3 stats côte à côte
+// (présents | entreprises présentes en donut | intempéries) séparées par
+// des barres verticales. Source : state.presences + state.weather.
 function renderDashboardToday() {
   const el = document.getElementById('dashtoday');
   if (!el) return;
@@ -687,33 +690,52 @@ function renderDashboardToday() {
   const weatherCount = Object.keys(state.weather?.[date] || {}).length;
   const totalCompanies = state.companies.length;
   const { full } = formatDateFR(date);
+  // Capacité indicative : on plafonne à max(total, 60) pour montrer un
+  // remplissage proportionnel sans laisser le designer figer un seuil.
+  const capacity = Math.max(60, total);
+  const presencePct = capacity > 0 ? Math.min(100, (total / capacity) * 100) : 0;
+  const compPct = totalCompanies > 0 ? (presentCount / totalCompanies) * 100 : 0;
 
-  el.appendChild(dashboardCardHeader('Aujourd\'hui', 'effectifs'));
-  const body = document.createElement('div');
-  body.className = 'dashboard-today-body';
-  body.innerHTML = `
-    <div class="dashboard-today-date"></div>
-    <div class="dashboard-today-stats">
-      <div class="dashboard-today-stat">
-        <div class="dashboard-today-value" id="dt-total"></div>
-        <div class="dashboard-today-label" id="dt-totallabel"></div>
+  el.classList.add('dash-hero-card');
+  el.innerHTML = `
+    <div class="dash-hero-head">
+      <div>
+        <div class="dash-hero-eyebrow">AUJOURD'HUI SUR LE CHANTIER</div>
+        <div class="dash-hero-date">${escapeHtml(full)}</div>
       </div>
-      <div class="dashboard-today-stat">
-        <div class="dashboard-today-value" id="dt-present"></div>
-        <div class="dashboard-today-label">entreprises présentes</div>
+    </div>
+    <div class="dash-hero-strip">
+      <div class="dash-hero-presence">
+        <div class="dash-presence-row">
+          <div class="dash-hero-num">${total}</div>
+          <div class="dash-hero-meta">
+            <div class="dash-hero-meta-line">${total > 1 ? 'personnes présentes' : 'personne présente'}</div>
+            <div class="dash-hero-meta-sub">capacité indicative · ${Math.round(presencePct)} %</div>
+          </div>
+        </div>
+        <div class="dash-presence-bar"><div class="dash-presence-bar-fill" style="width:${presencePct}%"></div></div>
       </div>
-      <div class="dashboard-today-stat ${weatherCount > 0 ? 'is-weather-on' : ''}" id="dt-weather-wrap">
-        <div class="dashboard-today-value" id="dt-weather"></div>
-        <div class="dashboard-today-label">en intempéries</div>
+      <div class="dash-hero-sep"></div>
+      <div class="dash-hero-donut-wrap">
+        <div class="dash-donut" style="--pct:${compPct}%">
+          <div class="dash-donut-inner">
+            <div class="dash-donut-num">${presentCount}<span class="dash-donut-den">/${totalCompanies}</span></div>
+            <div class="dash-donut-cap">entreprises</div>
+          </div>
+        </div>
+      </div>
+      <div class="dash-hero-sep"></div>
+      <div class="dash-hero-weather">
+        <div class="dash-hero-num">${weatherCount}</div>
+        <div class="dash-hero-weather-pill ${weatherCount === 0 ? 'is-ok' : 'is-warn'}">
+          <span class="dash-pill-glyph">${weatherCount === 0 ? '✓' : '🌧'}</span>
+          <span>${weatherCount === 0 ? 'aucune intempérie' : (weatherCount > 1 ? `${weatherCount} en intempéries` : '1 en intempéries')}</span>
+        </div>
       </div>
     </div>
   `;
-  body.querySelector('.dashboard-today-date').textContent = full;
-  body.querySelector('#dt-total').textContent = total;
-  body.querySelector('#dt-totallabel').textContent = total > 1 ? 'personnes sur chantier' : 'personne sur chantier';
-  body.querySelector('#dt-present').textContent = `${presentCount}/${totalCompanies}`;
-  body.querySelector('#dt-weather').textContent = weatherCount;
-  el.appendChild(body);
+  el.style.cursor = 'pointer';
+  el.onclick = () => switchPage('effectifs');
 }
 
 // --- Widget « Alertes documents » (eCheckIn) ---
@@ -742,36 +764,28 @@ function renderDashboardDocAlerts() {
   }
 
   const body = document.createElement('div');
-  body.className = 'dashboard-alerts-body';
+  body.className = 'dash-alerts';
   if (nExpired === 0 && nDanger === 0 && nWarning === 0) {
-    body.innerHTML = '<p class="dashboard-empty">Aucun document à signaler.</p>';
-  } else {
     body.innerHTML = `
-      <div class="dashboard-alert-row status-expired" hidden>
-        <span class="dashboard-alert-count" id="da-expired"></span>
-        <span class="dashboard-alert-label">ouvriers avec doc périmé</span>
-      </div>
-      <div class="dashboard-alert-row status-danger" hidden>
-        <span class="dashboard-alert-count" id="da-danger"></span>
-        <span class="dashboard-alert-label">ouvriers en danger (≤ 3 j)</span>
-      </div>
-      <div class="dashboard-alert-row status-warning" hidden>
-        <span class="dashboard-alert-count" id="da-warning"></span>
-        <span class="dashboard-alert-label">ouvriers en alerte (≤ 7 j)</span>
-      </div>
-    `;
-    if (nExpired > 0) {
-      body.querySelector('.status-expired').hidden = false;
-      body.querySelector('#da-expired').textContent = nExpired;
-    }
-    if (nDanger > 0) {
-      body.querySelector('.status-danger').hidden = false;
-      body.querySelector('#da-danger').textContent = nDanger;
-    }
-    if (nWarning > 0) {
-      body.querySelector('.status-warning').hidden = false;
-      body.querySelector('#da-warning').textContent = nWarning;
-    }
+      <div class="dash-empty-ok">
+        <div class="dash-empty-icon">✓</div>
+        <div class="dash-empty-text">Aucun document à signaler</div>
+      </div>`;
+  } else {
+    const rows = [];
+    if (nExpired > 0) rows.push(`<div class="dash-alert-row is-expired">
+        <div class="dash-alert-num">${nExpired}</div>
+        <div class="dash-alert-label">${nExpired > 1 ? 'ouvriers' : 'ouvrier'} avec document périmé</div>
+      </div>`);
+    if (nDanger > 0)  rows.push(`<div class="dash-alert-row is-danger">
+        <div class="dash-alert-num">${nDanger}</div>
+        <div class="dash-alert-label">${nDanger > 1 ? 'ouvriers en danger' : 'ouvrier en danger'} <span class="dash-alert-hint">(≤ 3 j)</span></div>
+      </div>`);
+    if (nWarning > 0) rows.push(`<div class="dash-alert-row is-warning">
+        <div class="dash-alert-num">${nWarning}</div>
+        <div class="dash-alert-label">${nWarning > 1 ? 'ouvriers en alerte' : 'ouvrier en alerte'} <span class="dash-alert-hint">(≤ 7 j)</span></div>
+      </div>`);
+    body.innerHTML = rows.join('');
   }
   el.appendChild(body);
 }
@@ -794,25 +808,31 @@ function renderDashboardStockAlerts() {
   critical.sort((a, b) => a.depletion.days - b.depletion.days);
 
   const body = document.createElement('div');
-  body.className = 'dashboard-stock-body';
+  body.className = 'dash-stock';
   if (critical.length === 0) {
-    body.innerHTML = '<p class="dashboard-empty">Aucun article en alerte.</p>';
+    body.innerHTML = `
+      <div class="dash-empty-ok">
+        <div class="dash-empty-icon">✓</div>
+        <div class="dash-empty-text">Aucun article en alerte</div>
+        <div class="dash-empty-sub">${summary.length} référence${summary.length > 1 ? 's' : ''} suivie${summary.length > 1 ? 's' : ''}</div>
+      </div>`;
   } else {
     const ul = document.createElement('ul');
-    ul.className = 'dashboard-stock-list';
+    ul.className = 'dash-stock-list';
     for (const it of critical) {
       const days = it.depletion.days;
       const li = document.createElement('li');
-      li.className = 'dashboard-stock-row' + (days <= 0 ? ' is-empty' : (days <= 3 ? ' is-danger' : ' is-warning'));
+      const klass = days <= 0 ? 'is-empty' : (days <= 3 ? 'is-danger' : 'is-warning');
+      li.className = 'dash-stock-row ' + klass;
       const label = days <= 0 ? 'épuisé' : (days === 1 ? '1 j ouvré' : `${days} j ouvrés`);
       li.innerHTML = `
-        <span class="dashboard-stock-name"></span>
-        <span class="dashboard-stock-stock"></span>
-        <span class="dashboard-stock-days"></span>
+        <span class="dash-stock-name"></span>
+        <span class="dash-stock-stock"></span>
+        <span class="dash-stock-days"></span>
       `;
-      li.querySelector('.dashboard-stock-name').textContent = it.article;
-      li.querySelector('.dashboard-stock-stock').textContent = `${fmtStockQty(it.stock)} ${it.unit}`;
-      li.querySelector('.dashboard-stock-days').textContent = label;
+      li.querySelector('.dash-stock-name').textContent = it.article;
+      li.querySelector('.dash-stock-stock').textContent = `${fmtStockQty(it.stock)} ${it.unit}`;
+      li.querySelector('.dash-stock-days').textContent = label;
       li.addEventListener('click', () => { switchPage('stock'); switchSubPage('stock', 'stockview'); openStockDetail(it.article); });
       ul.appendChild(li);
     }
@@ -842,35 +862,51 @@ function renderDashboardConsommable() {
   const monthKey = (state.currentDate || todayISO()).slice(0, 7);
   let monthTotal = 0, cumulTotal = 0;
   const monthOrders = new Set();
+  // Mini-tendance : 6 derniers mois (mois courant inclus, plus ancien à gauche).
+  const monthlyTotals = new Map();
   for (const e of entries) {
     const eur = (Number(e.qty) || 0) * (Number(e.unitPrice) || 0);
     cumulTotal += eur;
-    if ((e.date || '').slice(0, 7) === monthKey) {
+    const mk = (e.date || '').slice(0, 7);
+    if (mk) monthlyTotals.set(mk, (monthlyTotals.get(mk) || 0) + eur);
+    if (mk === monthKey) {
       monthTotal += eur;
       monthOrders.add(getEntryOrderId(e));
     }
   }
   const nbOrders = monthOrders.size;
+  // Construit la fenêtre des 6 mois en finissant par le mois courant
+  const window6 = [];
+  const ref = state.currentDate ? fromISO(state.currentDate) : new Date();
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(ref.getFullYear(), ref.getMonth() - i, 1);
+    const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    window6.push({ key: k, val: monthlyTotals.get(k) || 0 });
+  }
+  const maxVal = Math.max(1, ...window6.map(m => m.val));
+  const bars = window6.map((m, i) => {
+    const h = Math.max(8, (m.val / maxVal) * 100);
+    const isLast = i === window6.length - 1;
+    return `<div class="dash-bar ${isLast ? 'is-current' : ''}" style="height:${h}%" title="${m.key} : ${fmtEur(m.val)}"></div>`;
+  }).join('');
+  body.className = 'dash-conso';
   body.innerHTML = `
-    <div class="dashboard-conso-stats">
-      <div class="dashboard-conso-stat is-primary">
-        <div class="dashboard-conso-value" id="dc-month"></div>
-        <div class="dashboard-conso-label">ce mois HT</div>
+    <div class="dash-conso-headline">
+      <span class="dash-conso-amount">${escapeHtml(fmtEur(monthTotal))}</span>
+      <span class="dash-conso-sub">HT engagé ce mois</span>
+    </div>
+    <div class="dash-bars">${bars}</div>
+    <div class="dash-conso-foot">
+      <div>
+        <div class="dash-conso-stat-val">${nbOrders}</div>
+        <div class="dash-conso-stat-lbl">${nbOrders > 1 ? 'commandes' : 'commande'}</div>
       </div>
-      <div class="dashboard-conso-stat">
-        <div class="dashboard-conso-value" id="dc-orders"></div>
-        <div class="dashboard-conso-label" id="dc-orders-label"></div>
-      </div>
-      <div class="dashboard-conso-stat">
-        <div class="dashboard-conso-value" id="dc-cumul"></div>
-        <div class="dashboard-conso-label">cumul HT</div>
+      <div class="dash-conso-foot-right">
+        <div class="dash-conso-stat-val">${escapeHtml(fmtEur(cumulTotal))}</div>
+        <div class="dash-conso-stat-lbl">cumul HT</div>
       </div>
     </div>
   `;
-  body.querySelector('#dc-month').textContent  = fmtEur(monthTotal);
-  body.querySelector('#dc-orders').textContent = nbOrders;
-  body.querySelector('#dc-orders-label').textContent = nbOrders > 1 ? 'commandes ce mois' : 'commande ce mois';
-  body.querySelector('#dc-cumul').textContent  = fmtEur(cumulTotal);
   el.appendChild(body);
 }
 
@@ -924,26 +960,36 @@ function renderDashboardEOTPAlerts() {
     return (b.fdc / b.budget) - (a.fdc / a.budget);
   });
   if (alerts.length === 0) {
-    body.innerHTML = '<p class="dashboard-empty">Aucun dépassement projeté. ✓</p>';
+    body.className = 'dash-eotp';
+    body.innerHTML = `
+      <div class="dash-eotp-ok">
+        <div class="dash-donut dash-donut-success" style="--pct:100%">
+          <div class="dash-donut-inner">
+            <div class="dash-donut-num dash-donut-num-success">0</div>
+            <div class="dash-donut-cap">dépassement</div>
+          </div>
+        </div>
+        <div class="dash-eotp-ok-text">Aucun<br>dépassement<br>projeté</div>
+      </div>`;
     el.appendChild(body);
     return;
   }
   const ul = document.createElement('ul');
-  ul.className = 'dashboard-eotp-list';
+  ul.className = 'dash-eotp-list';
   for (const a of alerts) {
     const li = document.createElement('li');
-    li.className = 'dashboard-eotp-row is-' + a.level;
+    li.className = 'dash-eotp-row is-' + a.level;
     li.innerHTML = `
-      <span class="dashboard-eotp-code-wrap">
-        <span class="dashboard-eotp-code"></span>
-        <span class="dashboard-eotp-label"></span>
+      <span class="dash-eotp-code-wrap">
+        <span class="dash-eotp-code"></span>
+        <span class="dash-eotp-label"></span>
       </span>
-      <span class="dashboard-eotp-ecart"></span>
+      <span class="dash-eotp-ecart"></span>
     `;
-    li.querySelector('.dashboard-eotp-code').textContent = a.code;
-    const lbl = li.querySelector('.dashboard-eotp-label');
+    li.querySelector('.dash-eotp-code').textContent = a.code;
+    const lbl = li.querySelector('.dash-eotp-label');
     if (a.label) lbl.textContent = a.label; else lbl.remove();
-    li.querySelector('.dashboard-eotp-ecart').textContent = a.level === 'danger'
+    li.querySelector('.dash-eotp-ecart').textContent = a.level === 'danger'
       ? `${fmtEur(a.ecart)} FDC`
       : `${Math.round((a.fdc / a.budget) * 100)} % FDC`;
     li.addEventListener('click', () => {
@@ -972,35 +1018,39 @@ function renderDashboardCompaniesPresence() {
   }).sort((a, b) => (b.count - a.count) || a.name.localeCompare(b.name, 'fr'));
 
   const body = document.createElement('div');
-  body.className = 'dashboard-companies-body';
+  body.className = 'dash-companies';
   if (state.companies.length === 0) {
-    body.innerHTML = '<p class="dashboard-empty">Aucune entreprise enregistrée.</p>';
+    body.innerHTML = '<p class="dash-empty-text">Aucune entreprise enregistrée.</p>';
   } else {
-    const table = document.createElement('table');
-    table.className = 'dashboard-table';
-    table.innerHTML = '<thead><tr><th>Entreprise</th><th>Effectif</th></tr></thead>';
-    const tbody = document.createElement('tbody');
-    for (const r of rows) {
-      const tr = document.createElement('tr');
-      tr.className = r.onWeather ? 'is-weather' : '';
-      tr.innerHTML = `
-        <td>
-          <span class="dashboard-company-name"></span>
-          ${r.onWeather ? '<span class="dashboard-weather-pill">🌧</span>' : ''}
-        </td>
-        <td class="dashboard-table-num"></td>
-      `;
-      tr.querySelector('.dashboard-company-name').textContent = r.name;
-      tr.querySelector('.dashboard-table-num').textContent = r.count;
-      tbody.appendChild(tr);
-    }
+    const maxCount = Math.max(1, ...rows.map(r => r.count));
     const total = rows.reduce((s, r) => s + r.count, 0);
-    const tfoot = document.createElement('tfoot');
-    tfoot.innerHTML = '<tr><th>Total</th><th class="dashboard-table-num"></th></tr>';
-    tfoot.querySelector('.dashboard-table-num').textContent = total;
-    table.appendChild(tbody);
-    table.appendChild(tfoot);
-    body.appendChild(table);
+    const rowsHtml = rows.map(r => {
+      const pct = (r.count / maxCount) * 100;
+      const isLead = r.count > 0 && r.count === maxCount;
+      const weatherPill = r.onWeather ? '<span class="dash-company-weather" title="Intempéries">🌧</span>' : '';
+      return `<div class="dash-company-row">
+        <div class="dash-company-line">
+          <span class="dash-company-name"></span>
+          ${weatherPill}
+          <span class="dash-company-num"></span>
+        </div>
+        <div class="dash-company-bar">
+          <div class="dash-company-bar-fill ${isLead ? 'is-lead' : ''}" style="width:${pct}%"></div>
+        </div>
+      </div>`;
+    }).join('');
+    body.innerHTML = `
+      ${rowsHtml}
+      <div class="dash-companies-total">
+        <span>Total présents</span>
+        <span class="dash-companies-total-num">${total}</span>
+      </div>`;
+    // Remplit les noms et les nombres en safe (escape)
+    const rowEls = body.querySelectorAll('.dash-company-row');
+    rows.forEach((r, i) => {
+      rowEls[i].querySelector('.dash-company-name').textContent = r.name;
+      rowEls[i].querySelector('.dash-company-num').textContent = r.count;
+    });
   }
   el.appendChild(body);
 }
@@ -1021,27 +1071,39 @@ function renderDashboardBuildings() {
 
   const buildings = getBuildings();
   const body = document.createElement('div');
-  body.className = 'dashboard-buildings-body';
+  body.className = 'dash-buildings';
   if (buildings.length === 0) {
-    body.innerHTML = '<p class="dashboard-empty">Aucun bâtiment (zone racine) défini.</p>';
+    body.innerHTML = '<p class="dash-empty-text">Aucun bâtiment (zone racine) défini.</p>';
   } else {
+    const validPcts = [];
     for (const b of buildings) {
       const pct = getBuildingOverallProgress(b.id);
       const row = document.createElement('div');
-      row.className = 'dashboard-building-row';
+      row.className = 'dash-building-row';
       const pctText = pct === null ? '—' : `${formatPct(Math.round(pct * 10) / 10)} %`;
       const barPct = pct === null ? 0 : Math.max(0, Math.min(100, pct));
+      const hasProgress = pct !== null && pct > 0;
       row.innerHTML = `
-        <div class="dashboard-building-line">
-          <span class="dashboard-building-name"></span>
-          <span class="dashboard-building-pct"></span>
+        <div class="dash-building-line">
+          <span class="dash-building-name"></span>
+          <span class="dash-building-pct ${hasProgress ? '' : 'is-dim'}"></span>
         </div>
-        <div class="dashboard-building-bar"><div class="dashboard-building-bar-fill" style="width:${barPct}%"></div></div>
+        <div class="dash-building-bar"><div class="dash-building-bar-fill ${hasProgress ? '' : 'is-empty'}" style="width:${Math.max(barPct, 1.5)}%"></div></div>
       `;
-      row.querySelector('.dashboard-building-name').textContent = b.name || '(zone sans nom)';
-      row.querySelector('.dashboard-building-pct').textContent = pctText;
+      row.querySelector('.dash-building-name').textContent = b.name || '(zone sans nom)';
+      row.querySelector('.dash-building-pct').textContent = pctText;
       if (pct !== null && pct >= 100) row.classList.add('is-done');
+      if (pct !== null) validPcts.push(pct);
       body.appendChild(row);
+    }
+    if (validPcts.length > 0) {
+      const avg = validPcts.reduce((s, p) => s + p, 0) / validPcts.length;
+      const totalRow = document.createElement('div');
+      totalRow.className = 'dash-buildings-total';
+      totalRow.innerHTML = `
+        <span class="dash-buildings-total-lbl">Avancement global</span>
+        <span class="dash-buildings-total-val">${formatPct(Math.round(avg * 10) / 10)} %</span>`;
+      body.appendChild(totalRow);
     }
   }
   el.appendChild(body);

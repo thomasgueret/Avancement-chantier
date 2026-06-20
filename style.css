@@ -2003,284 +2003,6 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   font-style: italic;
 }
 
-/* ============ TABLEAU DE BORD ============ */
-/* La page dashboard s'élargit en desktop pour profiter de l'écran. */
-#page-dashboard { max-width: 1280px; }
-.dashboard-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 16px;
-}
-@media (min-width: 720px) {
-  .dashboard-grid { grid-template-columns: repeat(2, 1fr); }
-  .dashboard-hero { grid-column: 1 / -1; }
-}
-@media (min-width: 1080px) {
-  .dashboard-grid { grid-template-columns: repeat(3, 1fr); }
-}
-.dashboard-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
-  padding: 14px 16px 16px;
-  display: flex; flex-direction: column;
-}
-.dashboard-card-header {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-.dashboard-card-title {
-  margin: 0;
-  font-size: 13px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.06em;
-  color: var(--text-2);
-}
-.dashboard-card-link {
-  border: none; background: transparent;
-  font-size: 12px; font-weight: 600;
-  color: var(--accent);
-  cursor: pointer;
-  padding: 4px 6px;
-  border-radius: 4px;
-}
-.dashboard-card-link:active { background: var(--accent-soft); }
-.dashboard-empty {
-  font-size: 13px; color: var(--text-3); font-style: italic;
-  text-align: center; padding: 16px 8px;
-  margin: 0;
-}
-
-/* Hero « Aujourd'hui » */
-.dashboard-hero {
-  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%);
-  color: white;
-  border: none;
-}
-.dashboard-hero .dashboard-card-title { color: rgba(255, 255, 255, 0.85); }
-.dashboard-hero .dashboard-card-link { color: white; background: rgba(255, 255, 255, 0.15); }
-.dashboard-today-body { display: flex; flex-direction: column; gap: 12px; }
-.dashboard-today-date {
-  font-size: 14px; font-weight: 600;
-  opacity: 0.9;
-}
-.dashboard-today-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 12px;
-}
-.dashboard-today-stat {
-  background: rgba(255, 255, 255, 0.13);
-  border-radius: var(--radius-sm);
-  padding: 14px 12px;
-  text-align: center;
-}
-.dashboard-today-value {
-  font-size: 36px; font-weight: 800;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-.dashboard-today-label {
-  font-size: 12px;
-  margin-top: 6px;
-  opacity: 0.9;
-}
-.dashboard-today-stat.is-weather-on { background: rgba(25, 118, 210, 0.55); }
-
-/* Alertes documents */
-.dashboard-alerts-body { display: flex; flex-direction: column; gap: 8px; }
-.dashboard-alert-row {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 12px;
-  border-radius: var(--radius-sm);
-  border-left: 4px solid;
-}
-.dashboard-alert-row.status-expired { background: rgba(26,26,26,0.06);   border-left-color: #1a1a1a;  color: #1a1a1a; }
-.dashboard-alert-row.status-danger  { background: rgba(211,47,47,0.08); border-left-color: #d32f2f;  color: #b71c1c; }
-.dashboard-alert-row.status-warning { background: rgba(237,108,2,0.08); border-left-color: #ed6c02;  color: #b54708; }
-.dashboard-alert-count {
-  font-size: 20px; font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  min-width: 32px; text-align: right;
-}
-.dashboard-alert-label { font-size: 13px; flex: 1; }
-
-/* Consommable ce mois — 3 stats en ligne (total mois / cmds / cumul) */
-.dashboard-conso-body { padding-top: 4px; }
-.dashboard-conso-stats {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-}
-.dashboard-conso-stat {
-  display: flex; flex-direction: column; align-items: center;
-  padding: 10px 8px;
-  background: var(--surface-2);
-  border-radius: var(--radius-sm);
-  text-align: center;
-}
-.dashboard-conso-stat.is-primary {
-  background: var(--accent-soft);
-}
-.dashboard-conso-value {
-  font-size: 18px; font-weight: 800;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  line-height: 1.1;
-}
-.dashboard-conso-stat.is-primary .dashboard-conso-value { color: var(--accent); }
-.dashboard-conso-label {
-  font-size: 11px; font-weight: 600;
-  color: var(--text-3);
-  margin-top: 4px;
-  text-transform: uppercase; letter-spacing: 0.02em;
-  line-height: 1.2;
-}
-
-/* Budget eOTP — alertes de dépassement projeté (similaire à
-   Stock critique : liste cliquable, code couleur warning/danger) */
-.dashboard-eotp-list {
-  list-style: none; padding: 0; margin: 0;
-  display: flex; flex-direction: column; gap: 6px;
-  max-height: 280px; overflow-y: auto;
-}
-.dashboard-eotp-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  border-left: 4px solid;
-  cursor: pointer;
-  transition: background 0.12s;
-}
-.dashboard-eotp-row:active { background: var(--surface); }
-.dashboard-eotp-row.is-danger  { border-left-color: #d32f2f; background: rgba(211,47,47,0.06); }
-.dashboard-eotp-row.is-warning { border-left-color: #ed6c02; background: rgba(237,108,2,0.06); }
-.dashboard-eotp-code-wrap { display: flex; flex-direction: column; min-width: 0; }
-.dashboard-eotp-code {
-  font-size: 14px; font-weight: 700; color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.01em;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.dashboard-eotp-label {
-  font-size: 11px; color: var(--text-3);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.dashboard-eotp-ecart {
-  font-size: 13px; font-weight: 700;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-.dashboard-eotp-row.is-danger  .dashboard-eotp-ecart { color: #b71c1c; }
-.dashboard-eotp-row.is-warning .dashboard-eotp-ecart { color: #b54708; }
-
-/* Stock critique */
-.dashboard-stock-list {
-  list-style: none; padding: 0; margin: 0;
-  display: flex; flex-direction: column; gap: 6px;
-}
-.dashboard-stock-row {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  border-left: 4px solid;
-  cursor: pointer;
-  transition: background 0.12s;
-}
-.dashboard-stock-row:active { background: var(--surface); }
-.dashboard-stock-row.is-empty   { border-left-color: #1a1a1a;  background: rgba(26,26,26,0.06); }
-.dashboard-stock-row.is-danger  { border-left-color: #d32f2f;  background: rgba(211,47,47,0.06); }
-.dashboard-stock-row.is-warning { border-left-color: #ed6c02;  background: rgba(237,108,2,0.06); }
-.dashboard-stock-name {
-  font-size: 14px; font-weight: 600; color: var(--text);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.dashboard-stock-stock {
-  font-size: 13px; font-variant-numeric: tabular-nums; color: var(--text-2);
-}
-.dashboard-stock-days {
-  font-size: 13px; font-weight: 700;
-  white-space: nowrap;
-}
-.dashboard-stock-row.is-empty   .dashboard-stock-days { color: #1a1a1a; }
-.dashboard-stock-row.is-danger  .dashboard-stock-days { color: #b71c1c; }
-.dashboard-stock-row.is-warning .dashboard-stock-days { color: #b54708; }
-
-/* Effectifs par entreprise — hauteur limitée pour rester
-   visuellement comparable aux autres widgets quand il y a beaucoup
-   d'entreprises. Scroll interne au-delà. */
-.dashboard-companies-body {
-  overflow-x: auto;
-  max-height: 280px;
-  overflow-y: auto;
-}
-.dashboard-table {
-  width: 100%; border-collapse: collapse;
-  font-size: 14px;
-}
-.dashboard-table th, .dashboard-table td {
-  padding: 8px 10px;
-  text-align: left;
-  border-bottom: 1px solid var(--border);
-}
-.dashboard-table thead th {
-  font-size: 11px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.04em;
-  color: var(--text-3);
-}
-.dashboard-table .dashboard-table-num {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
-}
-.dashboard-table tfoot th {
-  font-weight: 800; color: var(--text);
-  border-bottom: none;
-}
-.dashboard-table tr.is-weather td:first-child { color: #1565c0; }
-.dashboard-weather-pill {
-  margin-left: 6px;
-  font-size: 12px;
-}
-
-/* Avancement par bâtiment */
-.dashboard-buildings-body { display: flex; flex-direction: column; gap: 10px; }
-.dashboard-building-line {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 4px;
-}
-.dashboard-building-name {
-  font-size: 14px; font-weight: 600; color: var(--text);
-}
-.dashboard-building-pct {
-  font-size: 14px; font-weight: 800;
-  color: var(--accent);
-  font-variant-numeric: tabular-nums;
-}
-.dashboard-building-row.is-done .dashboard-building-pct { color: #2e7d32; }
-.dashboard-building-bar {
-  height: 6px;
-  background: var(--surface-2);
-  border-radius: 999px;
-  overflow: hidden;
-}
-.dashboard-building-bar-fill {
-  height: 100%;
-  background: var(--accent);
-  border-radius: 999px;
-  transition: width 0.3s;
-}
-.dashboard-building-row.is-done .dashboard-building-bar-fill { background: #2e7d32; }
 
 /* ============ CONSOMMABLE : Saisie — liste groupée par commande ============ */
 .conso-entry-list {
@@ -4162,3 +3884,491 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 }
 .recap-row.is-done .recap-task-sub { color: #2e7d32; }
 .recap-task-sub-excluded { font-style: italic; }
+
+/* ============================================================
+   TABLEAU DE BORD v2 — Design « Graphite chaud » (Direction B)
+   Dark theme scopé à #page-dashboard pour ne pas casser le reste
+   de l'app. Palette importée du design Claude Design.
+   ============================================================ */
+#page-dashboard {
+  max-width: 1380px;
+  background: #13100d;
+  color: #f3efe9;
+  /* Bord arrondi pour faire flotter la "carte salle de contrôle" sur
+     le bg clair de l'app. Sur mobile on remplit l'écran. */
+  border-radius: 18px;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.28);
+  padding: 22px 24px 28px;
+  margin: 12px auto;
+  font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+}
+@media (max-width: 768px) {
+  #page-dashboard {
+    border-radius: 0;
+    padding: 16px 14px 20px;
+    margin: 0;
+    box-shadow: none;
+  }
+}
+
+/* ----- Grid 3 colonnes desktop, 1 col mobile ----- */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr 1fr;
+  gap: 18px;
+  grid-auto-flow: row dense;
+}
+.dashboard-hero          { grid-column: 1 / -1; }
+.dashboard-companies-tall { grid-row: span 2; }
+.dashboard-buildings-wide { grid-column: 1 / -1; }
+@media (max-width: 1080px) {
+  .dashboard-grid { grid-template-columns: 1fr 1fr; }
+  .dashboard-companies-tall { grid-row: auto; }
+}
+@media (max-width: 720px) {
+  .dashboard-grid { grid-template-columns: 1fr; gap: 14px; }
+}
+
+/* ----- Carte générique ----- */
+.dashboard-card {
+  background: #1c1813;
+  border: 1px solid #2a231c;
+  border-radius: 18px;
+  padding: 22px;
+  color: #f3efe9;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+.dashboard-card.dash-hero-card {
+  background: linear-gradient(180deg, #1c1813, #161310);
+  padding: 24px 26px 22px;
+}
+
+/* ----- Header de carte (eyebrow + lien Ouvrir →) ----- */
+.dash-card-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 16px;
+}
+.dash-card-eyebrow {
+  font-size: 11.5px; font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #9a9085;
+  text-transform: uppercase;
+}
+.dash-card-link {
+  font-size: 12px; font-weight: 600;
+  color: #f2691e;
+  background: none; border: none;
+  cursor: pointer;
+  padding: 4px 0;
+  font-family: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+.dash-card-link:hover { color: #f7a35f; }
+
+/* ============ HERO STRIP ============ */
+.dash-hero-head { margin-bottom: 18px; }
+.dash-hero-eyebrow {
+  font-size: 11.5px; font-weight: 700;
+  letter-spacing: 0.16em;
+  color: #f2691e;
+  margin-bottom: 6px;
+}
+.dash-hero-date {
+  font-size: 18px; font-weight: 600;
+  color: #f3efe9;
+  letter-spacing: -0.01em;
+}
+.dash-hero-strip {
+  display: grid;
+  grid-template-columns: 1.2fr 1px auto 1px auto;
+  align-items: center;
+  gap: 26px;
+}
+.dash-hero-sep {
+  width: 1px;
+  align-self: stretch;
+  background: #2a231c;
+}
+.dash-hero-presence { min-width: 0; }
+.dash-presence-row {
+  display: flex; align-items: baseline; gap: 14px;
+}
+.dash-hero-num {
+  font-size: 64px; font-weight: 800;
+  color: #ffffff;
+  line-height: 0.92;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+}
+.dash-hero-meta { padding-bottom: 6px; }
+.dash-hero-meta-line {
+  font-size: 14px; font-weight: 600;
+  color: #cfc6ba;
+}
+.dash-hero-meta-sub {
+  font-size: 12px; color: #7d7368;
+  margin-top: 2px;
+}
+.dash-presence-bar {
+  height: 7px; border-radius: 5px;
+  background: #2a231c;
+  margin-top: 16px;
+  max-width: 380px;
+  overflow: hidden;
+}
+.dash-presence-bar-fill {
+  height: 100%; border-radius: 5px;
+  background: linear-gradient(90deg, #f2691e, #f7a35f);
+  transition: width 0.4s ease;
+}
+
+/* Donut (entreprises présentes ET budget EOTP) */
+.dash-donut {
+  position: relative;
+  width: 100px; height: 100px;
+  border-radius: 50%;
+  background: conic-gradient(#f2691e 0 var(--pct), #2a231c var(--pct) 100%);
+  flex-shrink: 0;
+}
+.dash-donut-success {
+  background: conic-gradient(#3fce8e 0 var(--pct), #2a231c var(--pct) 100%);
+}
+.dash-donut-inner {
+  position: absolute; inset: 12px;
+  border-radius: 50%;
+  background: #1c1813;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+}
+.dash-hero-card .dash-donut-inner { background: #161310; }
+.dash-donut-num {
+  font-size: 26px; font-weight: 800;
+  color: #ffffff;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.dash-donut-num-success { color: #5fd9a3; font-size: 24px; }
+.dash-donut-den {
+  font-size: 14px; color: #7d7368;
+  font-weight: 600;
+}
+.dash-donut-cap {
+  font-size: 10.5px; color: #7d7368;
+  letter-spacing: 0.04em;
+  margin-top: 2px;
+}
+
+/* Hero weather */
+.dash-hero-weather { text-align: center; }
+.dash-hero-weather-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-top: 10px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 12px; font-weight: 600;
+}
+.dash-hero-weather-pill.is-ok {
+  background: #16241a;
+  border: 1px solid #234a2e;
+  color: #5fd9a3;
+}
+.dash-hero-weather-pill.is-warn {
+  background: #2a2112;
+  border: 1px solid #5a4a1e;
+  color: #f2a93b;
+}
+.dash-pill-glyph { font-size: 13px; }
+
+/* Hero strip — responsive : passe en colonne sur mobile */
+@media (max-width: 720px) {
+  .dash-hero-strip {
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  .dash-hero-presence { grid-column: 1 / -1; }
+  .dash-hero-sep { display: none; }
+  .dash-hero-num { font-size: 52px; }
+}
+
+/* ============ ALERTES DOCUMENTS ============ */
+.dash-alerts {
+  display: flex; flex-direction: column; gap: 11px;
+  flex: 1;
+}
+.dash-alert-row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 13px 15px;
+  border-radius: 12px;
+}
+.dash-alert-num {
+  font-size: 24px; font-weight: 800;
+  width: 26px; text-align: center;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.dash-alert-label {
+  font-size: 13px; color: #cfc6ba;
+  line-height: 1.35;
+}
+.dash-alert-hint { color: #9a9085; }
+.dash-alert-row.is-expired { background: #252019; }
+.dash-alert-row.is-expired .dash-alert-num { color: #f3efe9; }
+.dash-alert-row.is-danger  { background: #2a1614; }
+.dash-alert-row.is-danger  .dash-alert-num { color: #f0594b; }
+.dash-alert-row.is-warning { background: #2a2112; }
+.dash-alert-row.is-warning .dash-alert-num { color: #f2a93b; }
+
+/* ============ Empty state (success card) ============ */
+.dash-empty-ok {
+  flex: 1;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 12px;
+  padding: 20px 0;
+}
+.dash-empty-icon {
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  background: #16241a;
+  border: 1px solid #234a2e;
+  display: flex; align-items: center; justify-content: center;
+  color: #3fce8e;
+  font-size: 22px;
+  font-weight: 700;
+}
+.dash-empty-text {
+  font-size: 13px; color: #9a9085;
+  text-align: center;
+}
+.dash-empty-sub {
+  font-size: 11px; color: #7d7368;
+}
+
+/* ============ STOCK ============ */
+.dash-stock { flex: 1; display: flex; flex-direction: column; }
+.dash-stock-list {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.dash-stock-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
+  border-radius: 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.dash-stock-row.is-empty   { background: #2a1614; }
+.dash-stock-row.is-danger  { background: #2a1614; }
+.dash-stock-row.is-warning { background: #2a2112; }
+.dash-stock-name {
+  font-size: 13px; font-weight: 600;
+  color: #f3efe9;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dash-stock-stock {
+  font-size: 12px; color: #9a9085;
+  font-variant-numeric: tabular-nums;
+}
+.dash-stock-days {
+  font-size: 12px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.dash-stock-row.is-empty .dash-stock-days   { color: #f0594b; }
+.dash-stock-row.is-danger .dash-stock-days  { color: #f0594b; }
+.dash-stock-row.is-warning .dash-stock-days { color: #f2a93b; }
+
+/* ============ CONSOMMABLE ============ */
+.dash-conso { flex: 1; display: flex; flex-direction: column; }
+.dash-conso-headline { margin-bottom: 0; }
+.dash-conso-amount {
+  font-size: 32px; font-weight: 800;
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.dash-conso-sub {
+  font-size: 12px; color: #9a9085;
+  display: block;
+  margin-top: 4px;
+}
+.dash-bars {
+  display: flex; align-items: flex-end; gap: 6px;
+  height: 50px;
+  margin-top: 18px;
+  flex: 1;
+}
+.dash-bar {
+  flex: 1; min-width: 6px;
+  background: #2e271f;
+  border-radius: 3px;
+  transition: opacity 0.2s;
+}
+.dash-bar.is-current {
+  background: linear-gradient(180deg, #f2691e, #c8480f);
+}
+.dash-conso-foot {
+  display: flex; justify-content: space-between;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #2a231c;
+}
+.dash-conso-foot-right { text-align: right; }
+.dash-conso-stat-val {
+  font-size: 16px; font-weight: 700;
+  color: #f3efe9;
+  font-variant-numeric: tabular-nums;
+}
+.dash-conso-stat-lbl {
+  font-size: 11px; color: #7d7368;
+  margin-top: 2px;
+}
+
+/* ============ BUDGET EOTP ============ */
+.dash-eotp { flex: 1; display: flex; flex-direction: column; }
+.dash-eotp-ok {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center;
+  gap: 16px;
+}
+.dash-eotp-ok-text {
+  font-size: 13px; color: #9a9085;
+  line-height: 1.5;
+}
+.dash-eotp-list {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.dash-eotp-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px;
+  padding: 11px 13px;
+  border-radius: 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.dash-eotp-row.is-danger  { background: #2a1614; }
+.dash-eotp-row.is-warning { background: #2a2112; }
+.dash-eotp-code-wrap { display: flex; flex-direction: column; min-width: 0; }
+.dash-eotp-code {
+  font-size: 13px; font-weight: 700;
+  color: #f3efe9;
+  font-variant-numeric: tabular-nums;
+}
+.dash-eotp-label {
+  font-size: 11px; color: #9a9085;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dash-eotp-ecart {
+  font-size: 13px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.dash-eotp-row.is-danger .dash-eotp-ecart  { color: #f0594b; }
+.dash-eotp-row.is-warning .dash-eotp-ecart { color: #f2a93b; }
+
+/* ============ EFFECTIFS PAR ENTREPRISE (tall card) ============ */
+.dash-companies {
+  flex: 1;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.dash-company-row { display: flex; flex-direction: column; gap: 8px; }
+.dash-company-line {
+  display: flex; align-items: center; gap: 8px;
+}
+.dash-company-name {
+  flex: 1;
+  font-size: 13.5px; font-weight: 600;
+  color: #f3efe9;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;
+}
+.dash-company-num {
+  font-size: 14px; font-weight: 800;
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+  min-width: 24px; text-align: right;
+}
+.dash-company-weather {
+  font-size: 12px;
+  margin-left: 4px;
+}
+.dash-company-bar {
+  height: 8px;
+  border-radius: 5px;
+  background: #2a231c;
+  overflow: hidden;
+}
+.dash-company-bar-fill {
+  height: 100%; border-radius: 5px;
+  background: #564a3d;
+  transition: width 0.4s ease;
+}
+.dash-company-bar-fill.is-lead {
+  background: linear-gradient(90deg, #f2691e, #f7a35f);
+}
+.dash-companies-total {
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid #2a231c;
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 13px; color: #9a9085;
+}
+.dash-companies-total-num {
+  font-size: 15px; font-weight: 800;
+  color: #f2691e;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============ AVANCEMENT PAR BÂTIMENT (wide bottom) ============ */
+.dash-buildings {
+  display: flex; flex-direction: column; gap: 16px;
+}
+.dash-building-row { display: flex; flex-direction: column; gap: 8px; }
+.dash-building-line {
+  display: flex; justify-content: space-between; align-items: baseline;
+}
+.dash-building-name {
+  font-size: 13.5px; font-weight: 600;
+  color: #f3efe9;
+}
+.dash-building-pct {
+  font-size: 14px; font-weight: 700;
+  color: #f2691e;
+  font-variant-numeric: tabular-nums;
+}
+.dash-building-pct.is-dim { color: #7d7368; font-weight: 600; }
+.dash-building-bar {
+  height: 8px;
+  border-radius: 5px;
+  background: #2a231c;
+  overflow: hidden;
+}
+.dash-building-bar-fill {
+  height: 100%; border-radius: 5px;
+  background: linear-gradient(90deg, #f2691e, #f7a35f);
+  transition: width 0.4s ease;
+}
+.dash-building-bar-fill.is-empty { background: #564a3d; }
+.dash-building-row.is-done .dash-building-pct { color: #3fce8e; }
+.dash-building-row.is-done .dash-building-bar-fill {
+  background: linear-gradient(90deg, #3fce8e, #5fd9a3);
+}
+.dash-buildings-total {
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid #2a231c;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.dash-buildings-total-lbl {
+  font-size: 13px; color: #9a9085;
+}
+.dash-buildings-total-val {
+  font-size: 16px; font-weight: 800;
+  color: #f3efe9;
+  font-variant-numeric: tabular-nums;
+}
