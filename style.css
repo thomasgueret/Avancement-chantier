@@ -1,27 +1,52 @@
-/* ============ DESIGN TOKENS ============ */
+/* ============ DESIGN TOKENS — Graphite chaud (Direction B) ============ */
 :root {
-  --bg: #f5f6f8;
-  --surface: #ffffff;
-  --surface-2: #fafbfc;
-  --border: #e3e6ec;
-  --border-strong: #c9cdd6;
+  /* Surfaces (warm dark) */
+  --bg: #13100d;
+  --surface: #1c1813;
+  --surface-2: #252019;
+  --surface-3: #2e271f;
+  --border: #2a231c;
+  --border-strong: #564a3d;
 
-  --text: #1a1d23;
-  --text-2: #5a6170;
-  --text-3: #8a92a2;
+  /* Text (warm cream) */
+  --text: #f3efe9;
+  --text-2: #cfc6ba;
+  --text-3: #9a9085;
+  --text-4: #7d7368;
 
-  --accent: #ff671d;
-  --accent-dark: #d85819;
-  --accent-soft: #fff3ed;
+  /* Accent (unified orange from design file) */
+  --accent: #f2691e;
+  --accent-2: #f7a35f;
+  --accent-dark: #c8480f;
+  --accent-soft: #2a1d14;
+  --accent-glow: rgba(242, 105, 30, 0.28);
 
-  --danger: #d93025;
-  --danger-soft: #fdecea;
+  /* Status — dark theme tints */
+  --success: #3fce8e;
+  --success-2: #5fd9a3;
+  --success-soft: #16241a;
+  --success-border: #234a2e;
 
-  --radius: 12px;
-  --radius-sm: 8px;
-  --shadow-sm: 0 1px 2px rgba(20, 24, 33, 0.06);
-  --shadow-md: 0 4px 16px rgba(20, 24, 33, 0.10);
-  --shadow-lg: 0 8px 32px rgba(20, 24, 33, 0.18);
+  --warning: #f2a93b;
+  --warning-soft: #2a2112;
+  --warning-border: #5a4a1e;
+
+  --danger: #f0594b;
+  --danger-soft: #2a1614;
+  --danger-border: #5a2e2a;
+
+  --info: #5fa8d9;
+  --info-soft: #16242e;
+  --info-border: #234659;
+
+  /* Radius */
+  --radius: 14px;
+  --radius-sm: 10px;
+  --radius-lg: 18px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.40);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.50);
 
   --header-h: 56px;
   --tabbar-h: 64px;
@@ -302,12 +327,12 @@ input, select { font: inherit; }
 .weather-toggle svg { width: 22px; height: 22px; fill: currentColor; }
 .weather-toggle:active { transform: scale(0.94); }
 .weather-toggle.active {
-  background: #1976d2;
-  border-color: #1976d2;
+  background: var(--info);
+  border-color: var(--info);
   color: white;
 }
-.entry-item.is-weather { border-color: rgba(25, 118, 210, 0.4); background: rgba(25, 118, 210, 0.06); }
-.entry-item.is-weather .entry-company { color: #1565c0; }
+.entry-item.is-weather { border-color: var(--info-border); background: var(--info-soft); }
+.entry-item.is-weather .entry-company { color: var(--info); }
 
 .icon-btn {
   width: 36px; height: 36px;
@@ -513,7 +538,7 @@ input, select { font: inherit; }
 .recap-table .recap-fdc-col { border-left: 1px solid var(--border); }
 .recap-table td .recap-count { display: inline-block; }
 .recap-table td.is-weather {
-  background: rgba(25, 118, 210, 0.08);
+  background: var(--info-soft);
 }
 .recap-table td .recap-weather {
   display: inline-block;
@@ -700,7 +725,7 @@ input, select { font: inherit; }
   border-radius: var(--radius-sm);
   padding: 10px 12px;
   min-height: 44px;
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 .setup-rename-input:focus { outline: none; }
 .setup-icon-btn {
@@ -866,7 +891,7 @@ input, select { font: inherit; }
   flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
 }
-.fiche-header.is-complete { background: #06402b; }
+.fiche-header.is-complete { background: var(--success); color: #0d1f15; }
 .fiche-arrow:active { background: rgba(255, 255, 255, 0.32); }
 .fiche-arrow:disabled { opacity: 0.3; }
 .fiche-title {
@@ -906,8 +931,8 @@ input, select { font: inherit; }
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
-.progress-section-header.is-done { background: rgba(46, 125, 50, 0.08); border-color: rgba(46, 125, 50, 0.35); }
-.progress-section-header.is-done .progress-section-pct { color: #2e7d32; }
+.progress-section-header.is-done { background: var(--success-soft); border-color: var(--success-border); }
+.progress-section-header.is-done .progress-section-pct { color: var(--success-2); }
 .progress-item {
   display: flex; align-items: center; gap: 8px;
   background: var(--ouvrage-bg, var(--surface));
@@ -952,15 +977,15 @@ input, select { font: inherit; }
 .progress-tick:active { background: var(--surface); }
 .progress-tick svg { width: 20px; height: 20px; fill: currentColor; }
 .progress-item.is-done {
-  background: rgba(46, 125, 50, 0.05);
-  border-color: rgba(46, 125, 50, 0.35);
+  background: var(--success-soft);
+  border-color: var(--success-border);
 }
 .progress-item.is-done .progress-tick {
-  background: #2e7d32;
-  border-color: #2e7d32;
+  background: var(--success);
+  border-color: var(--success-2);
   color: white;
 }
-.progress-item.is-done .counter-value { color: #2e7d32; }
+.progress-item.is-done .counter-value { color: var(--success-2); }
 .progress-empty {
   list-style: none;
   text-align: center;
@@ -1017,7 +1042,7 @@ input, select { font: inherit; }
 .add-company-form input:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
 /* ============ BUTTONS ============ */
@@ -1172,8 +1197,8 @@ input, select { font: inherit; }
   border-radius: 999px;
   padding: 2px 8px;
 }
-.recap-row.is-done { background: rgba(46, 125, 50, 0.06); border-color: rgba(46, 125, 50, 0.35); }
-.recap-row.is-done .recap-task-pct { color: #2e7d32; }
+.recap-row.is-done { background: var(--success-soft); border-color: var(--success-border); }
+.recap-row.is-done .recap-task-pct { color: var(--success-2); }
 .recap-row.is-excluded { background: var(--surface-2); }
 .recap-row.is-excluded .recap-task-name { color: var(--text-3); }
 .recap-row.is-excluded .recap-task-pct { color: var(--text-3); }
@@ -1219,24 +1244,24 @@ input, select { font: inherit; }
 }
 /* Sécurité : carte verte quand tous les documents ont une date de réception */
 .admin-company.is-complete {
-  background: rgba(46, 125, 50, 0.06);
-  border-color: rgba(46, 125, 50, 0.35);
+  background: var(--success-soft);
+  border-color: var(--success-border);
 }
 .admin-company.is-complete .admin-company-header {
-  background: rgba(46, 125, 50, 0.10);
-  border-bottom-color: rgba(46, 125, 50, 0.30);
+  background: var(--success-soft);
+  border-bottom-color: var(--success-border);
 }
-.admin-company.is-complete .admin-company-name { color: #2e7d32; }
+.admin-company.is-complete .admin-company-name { color: var(--success-2); }
 
 /* eCheckIn : étiquette entreprise colorée selon la pire couleur de ses
    ouvriers PRÉSENTS (même règle que pour l'étiquette ouvrier). */
-.admin-company.worst-valid   .admin-company-header { background: rgba(46, 125, 50, 0.12);  border-bottom-color: rgba(46, 125, 50, 0.30); }
-.admin-company.worst-valid   .admin-company-name   { color: #1b5e20; }
-.admin-company.worst-warning .admin-company-header { background: rgba(237, 108, 2, 0.16);  border-bottom-color: rgba(237, 108, 2, 0.40); }
-.admin-company.worst-warning .admin-company-name   { color: #b54708; }
-.admin-company.worst-danger  .admin-company-header { background: rgba(211, 47, 47, 0.16);  border-bottom-color: rgba(211, 47, 47, 0.45); }
-.admin-company.worst-danger  .admin-company-name   { color: #b71c1c; }
-.admin-company.worst-expired .admin-company-header { background: #1a1a1a; border-bottom-color: #000; }
+.admin-company.worst-valid   .admin-company-header { background: var(--success-soft);  border-bottom-color: var(--success-border); }
+.admin-company.worst-valid   .admin-company-name   { color: var(--success-2); }
+.admin-company.worst-warning .admin-company-header { background: var(--warning-soft);  border-bottom-color: var(--warning-border); }
+.admin-company.worst-warning .admin-company-name   { color: var(--warning); }
+.admin-company.worst-danger  .admin-company-header { background: var(--danger-soft);  border-bottom-color: var(--danger-border); }
+.admin-company.worst-danger  .admin-company-name   { color: var(--danger); }
+.admin-company.worst-expired .admin-company-header { background: var(--danger); border-bottom-color: rgba(0,0,0,0.35); }
 .admin-company.worst-expired .admin-company-name   { color: white; }
 .admin-company.worst-expired .admin-add-btn,
 .admin-company.worst-expired .zone-collapse {
@@ -1282,8 +1307,8 @@ input, select { font: inherit; }
 }
 .admin-doc-delete svg { width: 18px; height: 18px; fill: currentColor; }
 .admin-doc-delete:active { background: var(--surface-2); color: var(--danger); }
-.admin-doc-row.is-received .admin-doc-name { background: rgba(46, 125, 50, 0.05); border-color: rgba(46, 125, 50, 0.30); }
-.admin-doc-row.is-received .admin-doc-date { background: rgba(46, 125, 50, 0.05); border-color: rgba(46, 125, 50, 0.30); color: #2e7d32; font-weight: 600; }
+.admin-doc-row.is-received .admin-doc-name { background: var(--success-soft); border-color: var(--success-border); }
+.admin-doc-row.is-received .admin-doc-date { background: var(--success-soft); border-color: var(--success-border); color: var(--success-2); font-weight: 600; }
 
 /* ============ ADMINISTRATIF → eCheckIn (cartes ouvriers) ============ */
 .worker-card {
@@ -1303,15 +1328,15 @@ input, select { font: inherit; }
 }
 /* Étiquette ouvrier colorée selon la pire couleur des 4 chips ;
    uniquement quand l'ouvrier est marqué Présent. */
-.worker-card.worst-valid   .worker-head { background: rgba(46, 125, 50, 0.12);  border-bottom-color: rgba(46, 125, 50, 0.30); }
-.worker-card.worst-warning .worker-head { background: rgba(237, 108, 2, 0.16);  border-bottom-color: rgba(237, 108, 2, 0.40); }
-.worker-card.worst-danger  .worker-head { background: rgba(211, 47, 47, 0.16);  border-bottom-color: rgba(211, 47, 47, 0.45); }
-.worker-card.worst-expired .worker-head { background: #1a1a1a;                  border-bottom-color: #000; color: white; }
+.worker-card.worst-valid   .worker-head { background: var(--success-soft);  border-bottom-color: var(--success-border); }
+.worker-card.worst-warning .worker-head { background: var(--warning-soft);  border-bottom-color: var(--warning-border); }
+.worker-card.worst-danger  .worker-head { background: var(--danger-soft);  border-bottom-color: var(--danger-border); }
+.worker-card.worst-expired .worker-head { background: var(--danger);                  border-bottom-color: rgba(0,0,0,0.35); color: white; }
 .worker-card.worst-expired .worker-name        { color: white; border-bottom-color: rgba(255, 255, 255, 0.30); }
 .worker-card.worst-expired .worker-name::placeholder { color: rgba(255, 255, 255, 0.55); }
 .worker-card.worst-expired .worker-delete      { color: rgba(255, 255, 255, 0.75); }
 .worker-card.worst-expired .worker-presence.active {
-  background: white; color: #1a1a1a; border-color: white;
+  background: rgba(255,255,255,0.18); color: white; border-color: rgba(255,255,255,0.65);
 }
 .worker-card.worst-expired .worker-presence:not(.active) {
   background: transparent; color: rgba(255, 255, 255, 0.7); border-color: rgba(255, 255, 255, 0.3);
@@ -1356,19 +1381,19 @@ input, select { font: inherit; }
 .worker-presence svg, .worker-type svg { width: 17px; height: 17px; fill: currentColor; }
 .worker-presence:active, .worker-type:active { transform: scale(0.94); }
 .worker-presence.active {
-  background: #2e7d32;
-  border-color: #2e7d32;
+  background: var(--success);
+  border-color: var(--success-2);
   color: white;
 }
 /* Bouton type d'emploi : orange = salarié, bleu = intérim */
 .worker-type.type-salarie {
-  background: #ed6c02;
-  border-color: #ed6c02;
+  background: var(--warning);
+  border-color: var(--warning);
   color: white;
 }
 .worker-type.type-interim {
-  background: #1976d2;
-  border-color: #1976d2;
+  background: var(--info);
+  border-color: var(--info);
   color: white;
 }
 
@@ -1442,10 +1467,10 @@ input, select { font: inherit; }
   z-index: 2;
 }
 .ec-doc-clear:active { opacity: 1; }
-.ec-doc.status-valid   { background: rgba(46, 125, 50, 0.12);  border-color: rgba(46, 125, 50, 0.45);  color: #1b5e20; }
-.ec-doc.status-warning { background: rgba(237, 108, 2, 0.15);  border-color: rgba(237, 108, 2, 0.50);  color: #b54708; }
-.ec-doc.status-danger  { background: rgba(211, 47, 47, 0.15);  border-color: rgba(211, 47, 47, 0.55);  color: #b71c1c; }
-.ec-doc.status-expired { background: #1a1a1a;                  border-color: #000;                    color: white; }
+.ec-doc.status-valid   { background: var(--success-soft);  border-color: var(--success-border);  color: var(--success-2); }
+.ec-doc.status-warning { background: var(--warning-soft);  border-color: var(--warning-border);  color: var(--warning); }
+.ec-doc.status-danger  { background: var(--danger-soft);  border-color: var(--danger-border);  color: var(--danger); }
+.ec-doc.status-expired { background: var(--danger);                  border-color: var(--danger-dark, #c8480f);                    color: white; }
 
 /* Pas de bordure inférieure de l'en-tête quand l'entreprise est repliée */
 .admin-company.is-collapsed .admin-company-header { border-bottom: none; }
@@ -1658,9 +1683,9 @@ input, select { font: inherit; }
    mais visuellement on préfère un rouge soutenu plutôt que le fond noir
    réservé aux échéances vraiment dépassées. */
 .ec-doc.doctype-validation.status-expired {
-  background: rgba(211, 47, 47, 0.16);
-  border-color: rgba(211, 47, 47, 0.55);
-  color: #b71c1c;
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+  color: var(--danger);
 }
 
 /* ============ Modale CACES (et future modales génériques) ============ */
@@ -1724,10 +1749,10 @@ input, select { font: inherit; }
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
-.caces-row.status-valid   { background: rgba(46, 125, 50, 0.08);  border-color: rgba(46, 125, 50, 0.35); }
-.caces-row.status-warning { background: rgba(237, 108, 2, 0.10);  border-color: rgba(237, 108, 2, 0.40); }
-.caces-row.status-danger  { background: rgba(211, 47, 47, 0.10);  border-color: rgba(211, 47, 47, 0.45); }
-.caces-row.status-expired { background: #1a1a1a;                  border-color: #000; color: white; }
+.caces-row.status-valid   { background: var(--success-soft);  border-color: var(--success-border); }
+.caces-row.status-warning { background: var(--warning-soft);  border-color: var(--warning-border); }
+.caces-row.status-danger  { background: var(--danger-soft);  border-color: var(--danger-border); }
+.caces-row.status-expired { background: var(--danger);                  border-color: var(--danger-dark, #c8480f); color: white; }
 .caces-row.status-expired .caces-name,
 .caces-row.status-expired .caces-date { color: white; border-bottom-color: rgba(255,255,255,0.3); }
 .caces-name {
@@ -1796,8 +1821,8 @@ input, select { font: inherit; }
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
-.stock-entry-row.type-reception .stock-entry-qty { color: #2e7d32; }
-.stock-entry-row.type-inventaire .stock-entry-qty { color: #1976d2; }
+.stock-entry-row.type-reception .stock-entry-qty { color: var(--success-2); }
+.stock-entry-row.type-inventaire .stock-entry-qty { color: var(--info); }
 .stock-entry-delete {
   flex-shrink: 0;
   width: 32px; height: 32px;
@@ -1983,10 +2008,10 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   flex-shrink: 0;
   font-weight: 700; font-variant-numeric: tabular-nums;
 }
-.stock-history-item.type-reception .stock-history-qty { color: #2e7d32; }
-.stock-history-item.type-inventaire .stock-history-qty { color: #1976d2; }
-.stock-history-item.type-reception { border-left: 3px solid #2e7d32; }
-.stock-history-item.type-inventaire { border-left: 3px solid #1976d2; }
+.stock-history-item.type-reception .stock-history-qty { color: var(--success-2); }
+.stock-history-item.type-inventaire .stock-history-qty { color: var(--info); }
+.stock-history-item.type-reception { border-left: 3px solid var(--success); }
+.stock-history-item.type-inventaire { border-left: 3px solid var(--info); }
 .stock-history-delete {
   flex-shrink: 0;
   width: 28px; height: 28px;
@@ -2441,9 +2466,9 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 .proto-tool-btn.proto-tool-danger:active { color: var(--danger); }
 /* Bouton "Série" : indicateur visuel quand le mode est actif */
 .proto-tool-btn.proto-tool-series.is-active {
-  background: rgba(46, 125, 50, 0.15);
-  color: #2e7d32;
-  border-color: #2e7d32;
+  background: var(--success-soft);
+  color: var(--success-2);
+  border-color: var(--success-2);
 }
 .proto-toolbar-sep {
   flex: 1; min-width: 8px;
@@ -2768,9 +2793,9 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   height: 100%;
   transition: flex 0.2s ease;
 }
-.proto-recap-bar-seg.is-done  { background: #2e7d32; }
-.proto-recap-bar-seg.is-doing { background: #ed6c02; }
-.proto-recap-bar-seg.is-todo  { background: #d32f2f; }
+.proto-recap-bar-seg.is-done  { background: var(--success); }
+.proto-recap-bar-seg.is-doing { background: var(--warning); }
+.proto-recap-bar-seg.is-todo  { background: var(--danger); }
 /* Légende sous la barre */
 .proto-recap-task-legend {
   display: flex; flex-wrap: wrap; gap: 10px;
@@ -2782,9 +2807,9 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 .proto-recap-task-legend-dot {
   width: 8px; height: 8px; border-radius: 50%; display: inline-block;
 }
-.proto-recap-task-legend-dot.is-done  { background: #2e7d32; }
-.proto-recap-task-legend-dot.is-doing { background: #ed6c02; }
-.proto-recap-task-legend-dot.is-todo  { background: #d32f2f; }
+.proto-recap-task-legend-dot.is-done  { background: var(--success); }
+.proto-recap-task-legend-dot.is-doing { background: var(--warning); }
+.proto-recap-task-legend-dot.is-todo  { background: var(--danger); }
 .proto-recap-task-legend-pct { font-weight: 700; color: var(--text); }
 
 /* Tâches sans lot ou sans intitulé */
@@ -2832,9 +2857,9 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   color: var(--text-2);
   cursor: pointer;
 }
-.proto-status-btn[data-proto-status="todo"].is-active  { background: rgba(211,47,47,0.10);  border-color: #d32f2f; color: #b71c1c; }
-.proto-status-btn[data-proto-status="doing"].is-active { background: rgba(237,108,2,0.10);  border-color: #ed6c02; color: #b54708; }
-.proto-status-btn[data-proto-status="done"].is-active  { background: rgba(46,125,50,0.10);  border-color: #2e7d32; color: #1b5e20; }
+.proto-status-btn[data-proto-status="todo"].is-active  { background: var(--danger-soft);  border-color: var(--danger); color: var(--danger); }
+.proto-status-btn[data-proto-status="doing"].is-active { background: var(--warning-soft);  border-color: var(--warning); color: var(--warning); }
+.proto-status-btn[data-proto-status="done"].is-active  { background: var(--success-soft);  border-color: var(--success-2); color: var(--success-2); }
 
 /* Barre sélecteur de plan (active = plan affiché) */
 .proto-plan-bar {
@@ -2898,9 +2923,9 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   -webkit-tap-highlight-color: transparent;
   cursor: pointer;
 }
-.proto-filter-status.is-active[data-proto-filter-status="todo"]  { background: #d32f2f; color: white; }
-.proto-filter-status.is-active[data-proto-filter-status="doing"] { background: #ed6c02; color: white; }
-.proto-filter-status.is-active[data-proto-filter-status="done"]  { background: #2e7d32; color: white; }
+.proto-filter-status.is-active[data-proto-filter-status="todo"]  { background: var(--danger); color: white; }
+.proto-filter-status.is-active[data-proto-filter-status="doing"] { background: var(--warning); color: white; }
+.proto-filter-status.is-active[data-proto-filter-status="done"]  { background: var(--success); color: white; }
 
 /* Modale gestionnaire de plans */
 .proto-manager-list {
@@ -3010,10 +3035,10 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   font-size: 12px; font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
-.auth-sync-chip.is-idle    { background: rgba(46, 125, 50, 0.10); color: #1b5e20; }
-.auth-sync-chip.is-syncing { background: rgba(237, 108, 2, 0.10); color: #b54708; }
-.auth-sync-chip.is-error   { background: rgba(211, 47, 47, 0.10); color: #b71c1c; }
-.auth-sync-chip.is-offline { background: rgba(120, 120, 120, 0.12); color: #555; }
+.auth-sync-chip.is-idle    { background: var(--success-soft); color: var(--success-2); }
+.auth-sync-chip.is-syncing { background: var(--warning-soft); color: var(--warning); }
+.auth-sync-chip.is-error   { background: var(--danger-soft); color: var(--danger); }
+.auth-sync-chip.is-offline { background: var(--surface-3); color: var(--text-3); }
 
 /* Bandeau en-tête : label + chip Synchro côte à côte */
 .auth-header-row {
@@ -3297,9 +3322,9 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   background: var(--border);
 }
 .cr-avanc-bar-seg { height: 100%; }
-.cr-avanc-bar-seg.is-done  { background: #2e7d32; }
-.cr-avanc-bar-seg.is-doing { background: #ed6c02; }
-.cr-avanc-bar-seg.is-todo  { background: #d32f2f; }
+.cr-avanc-bar-seg.is-done  { background: var(--success); }
+.cr-avanc-bar-seg.is-doing { background: var(--warning); }
+.cr-avanc-bar-seg.is-todo  { background: var(--danger); }
 
 /* ----- Lot row : ajout du dropdown entreprise ----- */
 .lot-company {
@@ -3384,7 +3409,7 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   display: inline-flex; align-items: center; justify-content: center;
   border-left: 1px solid var(--border);
 }
-.cr-week-delete:active { background: rgba(211, 47, 47, 0.10); }
+.cr-week-delete:active { background: var(--danger-soft); }
 
 /* Badge « 🔒 figé » au-dessus de l'aperçu d'une semaine précédente */
 .cr-avanc-frozen-note {
@@ -3408,9 +3433,9 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   width: 8px; height: 8px; border-radius: 50%;
   display: inline-block;
 }
-.cr-avanc-task-legend-dot.is-done  { background: #2e7d32; }
-.cr-avanc-task-legend-dot.is-doing { background: #ed6c02; }
-.cr-avanc-task-legend-dot.is-todo  { background: #d32f2f; }
+.cr-avanc-task-legend-dot.is-done  { background: var(--success); }
+.cr-avanc-task-legend-dot.is-doing { background: var(--warning); }
+.cr-avanc-task-legend-dot.is-todo  { background: var(--danger); }
 .cr-avanc-task-legend-pct {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -3663,7 +3688,7 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   -webkit-tap-highlight-color: transparent;
   display: inline-flex; align-items: center; justify-content: center;
 }
-.cr-entry-delete:active { background: rgba(211, 47, 47, 0.12); color: var(--danger); }
+.cr-entry-delete:active { background: var(--danger-soft); color: var(--danger); }
 
 /* Ligne 2 : chips */
 .cr-entry-chips {
@@ -3719,14 +3744,14 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 /* Chip Date — couleurs selon proximité */
 .cr-chip-date.is-disabled { opacity: 0.45; }
 .cr-chip-date.is-overdue {
-  background: rgba(211, 47, 47, 0.12);
-  color: #b71c1c;
-  border-color: rgba(211, 47, 47, 0.35);
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: var(--danger-border);
 }
 .cr-chip-date.is-soon {
-  background: rgba(237, 108, 2, 0.12);
-  color: #b54708;
-  border-color: rgba(237, 108, 2, 0.35);
+  background: var(--warning-soft);
+  color: var(--warning);
+  border-color: var(--warning-border);
 }
 
 /* Chip PM — toggle */
@@ -3781,8 +3806,8 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   border-bottom: 1px solid var(--border);
 }
 .cr-eff-htable thead th.is-weather {
-  background: rgba(33, 150, 243, 0.18);
-  color: #0d47a1;
+  background: var(--info-soft);
+  color: var(--info);
 }
 .cr-eff-htable tbody td {
   color: var(--text);
@@ -3792,7 +3817,7 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   line-height: 1.1;
 }
 .cr-eff-htable tbody td.is-weather {
-  background: rgba(33, 150, 243, 0.12);
+  background: var(--info-soft);
 }
 .cr-eff-htable .cr-eff-h-num { display: block; }
 .cr-eff-htable .cr-eff-h-wsym {
@@ -3882,7 +3907,7 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.recap-row.is-done .recap-task-sub { color: #2e7d32; }
+.recap-row.is-done .recap-task-sub { color: var(--success-2); }
 .recap-task-sub-excluded { font-style: italic; }
 
 /* ============================================================
@@ -3892,22 +3917,16 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
    ============================================================ */
 #page-dashboard {
   max-width: 1380px;
-  background: #13100d;
-  color: #f3efe9;
-  /* Bord arrondi pour faire flotter la "carte salle de contrôle" sur
-     le bg clair de l'app. Sur mobile on remplit l'écran. */
-  border-radius: 18px;
-  box-shadow: 0 24px 60px rgba(0,0,0,0.28);
+  background: var(--bg);
+  color: var(--text);
   padding: 22px 24px 28px;
   margin: 12px auto;
   font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
 }
 @media (max-width: 768px) {
   #page-dashboard {
-    border-radius: 0;
     padding: 16px 14px 20px;
     margin: 0;
-    box-shadow: none;
   }
 }
 
@@ -3931,11 +3950,11 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 
 /* ----- Carte générique ----- */
 .dashboard-card {
-  background: #1c1813;
-  border: 1px solid #2a231c;
-  border-radius: 18px;
-  padding: 22px;
-  color: #f3efe9;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  color: var(--text);
   display: flex;
   flex-direction: column;
   position: relative;

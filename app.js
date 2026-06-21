@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.17';
+const APP_VERSION = '1.18';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -31,7 +31,7 @@ const CHART_COLORS = [
   '#455a64'  // ardoise
 ];
 const TOTAL_KEY = '__total__';
-const TOTAL_COLOR = '#1a1d23';
+const TOTAL_COLOR = '#f3efe9';
 
 // ---------- State ----------
 const state = {
