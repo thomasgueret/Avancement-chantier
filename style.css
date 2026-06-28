@@ -4391,3 +4391,148 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   color: #f3efe9;
   font-variant-numeric: tabular-nums;
 }
+
+/* ============ SUIVI DES HEURES (onglet dédié, optimisé PC) ============ */
+/* La page s'élargit en desktop pour afficher le maximum de colonnes sans
+   défilement horizontal (tableau de 13 colonnes pensé pour le PC). */
+#page-heures { max-width: 1320px; }
+.heures-pc-note { font-style: italic; }
+
+.heures-select-section { margin: 8px 0 16px; }
+.heures-subtitle {
+  font-size: 14px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-2); margin: 0 0 6px;
+}
+.heures-eotp-select {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin-top: 8px;
+}
+/* Chip cliquable (case à cocher) pour inclure un eOTP au tableau */
+.heures-eotp-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 13px; font-weight: 600;
+  color: var(--text-2);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.heures-eotp-chip:active { transform: scale(0.98); }
+.heures-eotp-chip.is-selected {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.heures-eotp-chip input { width: 16px; height: 16px; accent-color: var(--accent); margin: 0; }
+
+.heures-empty {
+  margin: 0; padding: 16px;
+  font-size: 13px; font-style: italic;
+  color: var(--text-3);
+  text-align: center;
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+}
+
+/* Conteneur scrollable horizontalement (tableau large pensé pour PC) */
+.heures-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.heures-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 100%;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.heures-table th, .heures-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+  white-space: nowrap;
+}
+.heures-table thead th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--surface-2);
+  font-weight: 700;
+  color: var(--text-2);
+  border-bottom: 1px solid var(--border-strong);
+  font-size: 12px;
+  vertical-align: bottom;
+}
+/* 1re colonne (Tâches / eOTP) figée au défilement horizontal */
+.heures-table .heures-col-taches,
+.heures-table .heures-cell-label {
+  position: sticky; left: 0; z-index: 1;
+  background: var(--surface);
+  text-align: left;
+  font-weight: 700;
+  color: var(--text);
+  min-width: 180px; max-width: 280px;
+  white-space: normal;
+  border-right: 1px solid var(--border);
+}
+.heures-table thead .heures-col-taches { z-index: 3; background: var(--surface-2); }
+.heures-table tbody tr:nth-child(even) .heures-cell-label { background: var(--surface-2); }
+.heures-table tbody tr:nth-child(even) td { background: var(--surface-2); }
+
+/* Colonnes calculées (lecture seule) : fond légèrement contrasté */
+.heures-table td.is-calc,
+.heures-table th.is-calc {
+  background: var(--surface-2);
+  font-weight: 600;
+  color: var(--text);
+}
+.heures-table tbody tr:nth-child(even) td.is-calc { background: var(--surface-3); }
+
+/* Inputs inline intégrés aux cellules */
+.heures-input {
+  width: 100%; min-width: 64px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  padding: 5px 6px;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--text);
+}
+.heures-table td.heures-col-unite .heures-input { text-align: center; min-width: 48px; }
+.heures-input::placeholder { color: var(--text-3); }
+.heures-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+/* Écart au stade : vert si dans le budget, rouge si dépassement */
+.heures-table .heures-calc-ecart.is-positive,
+.heures-table tfoot .heures-col-ecart.is-positive { color: var(--success); }
+.heures-table .heures-calc-ecart.is-negative,
+.heures-table tfoot .heures-col-ecart.is-negative { color: var(--danger); }
+
+/* Pied de tableau : totaux */
+.heures-table tfoot th, .heures-table tfoot td {
+  position: sticky; bottom: 0; z-index: 1;
+  background: var(--surface-2);
+  font-weight: 700;
+  color: var(--text);
+  border-top: 2px solid var(--border-strong);
+  border-bottom: none;
+}
+.heures-table tfoot .heures-cell-label,
+.heures-table tfoot .heures-col-taches {
+  position: sticky; left: 0; z-index: 2;
+  background: var(--surface-2);
+  text-align: left;
+}

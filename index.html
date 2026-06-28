@@ -419,6 +419,26 @@
       <div class="cr-body" id="crbody"></div>
       <p class="empty-state" id="crempty" hidden>Aucune entreprise. Ajoutez-en depuis l'onglet Effectifs.</p>
     </section>
+
+    <!-- ============== SUIVI DES HEURES ============== -->
+    <section class="page" id="page-heures">
+      <h2 class="section-title">Suivi des heures</h2>
+      <p class="section-help heures-pc-note">
+        Tableau récapitulatif des budgets en heures par eOTP. Optimisé pour une
+        consultation sur ordinateur — sur téléphone, faites défiler le tableau
+        horizontalement.
+      </p>
+
+      <!-- Sélection des eOTP à inclure dans le suivi -->
+      <div class="heures-select-section">
+        <h3 class="heures-subtitle">eOTP suivis</h3>
+        <p class="section-help">Cochez les lignes de budget eOTP à faire apparaître dans le tableau.</p>
+        <div class="heures-eotp-select" id="heureseotpselect"></div>
+      </div>
+
+      <!-- Tableau principal -->
+      <div class="heures-table-wrap" id="heurestablewrap"></div>
+    </section>
   </main>
 
   <!-- ============== TAB BAR ============== -->
@@ -446,6 +466,10 @@
     <button class="tab-btn" data-page="consommable" role="tab">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4Z"/></svg>
       <span>Consommable</span>
+    </button>
+    <button class="tab-btn" data-page="heures" role="tab">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7Z"/></svg>
+      <span>Heures</span>
     </button>
     <button class="tab-btn" data-page="proto" role="tab">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17v4h4l11-11-4-4L3 17Zm17.7-11.6-2.1-2.1a1 1 0 0 0-1.4 0l-1.8 1.8 3.5 3.5 1.8-1.8a1 1 0 0 0 0-1.4Z"/></svg>
