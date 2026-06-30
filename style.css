@@ -4469,6 +4469,22 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   font-size: 12px;
   vertical-align: bottom;
 }
+/* Date de référence éditable dans l'en-tête « SAP (…) » */
+.heures-sap-date {
+  width: 5ch; min-width: 5ch;
+  border: none;
+  border-bottom: 1px dashed var(--border-strong);
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+  color: var(--accent);
+  text-align: center;
+  padding: 0 1px;
+}
+.heures-sap-date:focus {
+  outline: none;
+  border-bottom-color: var(--accent);
+}
 /* 1re colonne (Tâches / eOTP) figée au défilement horizontal */
 .heures-table .heures-col-taches,
 .heures-table .heures-cell-label {

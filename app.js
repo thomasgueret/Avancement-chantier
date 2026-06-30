@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.20';
+const APP_VERSION = '1.21';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -67,6 +67,7 @@ const state = {
   // Suivi des heures : données par eOTP (indexées par eotpId, survit au renommage du code).
   // { [eotpId]: { selected, budgetHeures, unite, qteTotal, qteRealisee, sap, correction, pumaCumule } }
   heuresData: {},
+  heuresSapDate: '03/04',  // date de référence affichée dans l'en-tête « SAP (…) »
   consoRecapMode: 'product', // 'product' | 'eotp' : axe de regroupement du récap Consommable
   stockCBMode: 'product',    // 'product' | 'eotp' : axe de regroupement du récap CB Stock
   projectStart: '',          // date ISO YYYY-MM-DD : début prévu du chantier
@@ -158,6 +159,7 @@ function load() {
     if (data.eotps) state.eotps = data.eotps;
     if (typeof data.eotpRegistryInitialized === 'boolean') state.eotpRegistryInitialized = data.eotpRegistryInitialized;
     if (data.heuresData && typeof data.heuresData === 'object') state.heuresData = data.heuresData;
+    if (typeof data.heuresSapDate === 'string') state.heuresSapDate = data.heuresSapDate;
     if (data.consoRecapMode === 'product' || data.consoRecapMode === 'eotp') state.consoRecapMode = data.consoRecapMode;
     if (data.stockCBMode === 'product' || data.stockCBMode === 'eotp') state.stockCBMode = data.stockCBMode;
     if (typeof data.projectStart === 'string') state.projectStart = data.projectStart;
@@ -224,6 +226,7 @@ function save() {
     eotps: state.eotps,
     eotpRegistryInitialized: state.eotpRegistryInitialized,
     heuresData: state.heuresData,
+    heuresSapDate: state.heuresSapDate,
     consoRecapMode: state.consoRecapMode,
     stockCBMode: state.stockCBMode,
     projectStart: state.projectStart,
@@ -5979,6 +5982,17 @@ function toggleHeuresSelected(eotpId) {
   renderHeures();
 }
 
+// Date de référence affichée entre parenthèses dans l'en-tête « SAP (…) ».
+// Label global du tableau (et non par eOTP). Éditable en texte libre.
+function getHeuresSapDate() {
+  return typeof state.heuresSapDate === 'string' ? state.heuresSapDate : '03/04';
+}
+function setHeuresSapDate(value) {
+  state.heuresSapDate = String(value || '');
+  save();
+  // Pas de re-rendu : l'input conserve sa valeur, rien d'autre n'en dépend.
+}
+
 function setHeuresField(eotpId, field, value) {
   const row = getHeuresRow(eotpId);
   if (field === 'unite') {
@@ -6043,7 +6057,7 @@ const HEURES_COLUMNS = [
   { key: 'rad',          label: 'RAD',                     kind: 'calc', title: 'Reste à faire : Qté totale − Qté réalisé au stade' },
   { key: 'avancement',   label: 'Avancement (%)',          kind: 'calc', title: 'Qté réalisée ÷ Qté totale' },
   { key: 'droit',        label: 'Droit à dépenser',        kind: 'calc', title: 'Budget heure × avancement % (valeur acquise)' },
-  { key: 'sap',          label: 'SAP (03/04)',             kind: 'num' },
+  { key: 'sap',          label: 'SAP',                     kind: 'num' },
   { key: 'correction',   label: 'Correction (PUMA-SAP)',   kind: 'num',  title: 'Peut être négative' },
   { key: 'pumaCumule',   label: 'PUMA cumulé',             kind: 'num' },
   { key: 'pumaEcart',    label: 'PUMA cumulé + Écart SAP', kind: 'calc', title: 'PUMA cumulé + Correction' },
@@ -6093,9 +6107,23 @@ function renderHeuresTable() {
   for (const col of HEURES_COLUMNS) {
     const th = document.createElement('th');
     th.scope = 'col';
-    th.textContent = col.label;
     th.className = 'heures-col-' + col.key + (col.kind === 'calc' ? ' is-calc' : '');
     if (col.title) th.title = col.title;
+    if (col.key === 'sap') {
+      // En-tête « SAP (date) » dont le texte entre parenthèses est éditable.
+      th.appendChild(document.createTextNode(col.label + ' ('));
+      const dateInput = document.createElement('input');
+      dateInput.type = 'text';
+      dateInput.className = 'heures-sap-date';
+      dateInput.value = getHeuresSapDate();
+      dateInput.maxLength = 12;
+      dateInput.setAttribute('aria-label', 'Date de référence SAP');
+      dateInput.addEventListener('input', () => setHeuresSapDate(dateInput.value));
+      th.appendChild(dateInput);
+      th.appendChild(document.createTextNode(')'));
+    } else {
+      th.textContent = col.label;
+    }
     hr.appendChild(th);
   }
   thead.appendChild(hr);
