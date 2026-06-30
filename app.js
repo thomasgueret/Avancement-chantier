@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.21';
+const APP_VERSION = '1.22';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -65,9 +65,13 @@ const state = {
   eotps: [],              // lignes de budget eOTP : [{ id, code, label, budget }]
   eotpRegistryInitialized: false, // flag de migration douce (une fois)
   // Suivi des heures : données par eOTP (indexées par eotpId, survit au renommage du code).
-  // { [eotpId]: { selected, budgetHeures, unite, qteTotal, qteRealisee, sap, correction, pumaCumule } }
+  // Suivi des heures organisé par semaines (instantanés pour comparer les écarts).
+  heuresWeeks: [],          // [{ id, name, createdAt, sapDate }]
+  heuresActiveWeekId: '',   // id de la semaine affichée
+  // Données par semaine puis par eOTP :
+  // { [weekId]: { [eotpId]: { selected, budgetHeures, unite, qteTotal, qteRealisee, sap, correction, pumaCumule } } }
   heuresData: {},
-  heuresSapDate: '03/04',  // date de référence affichée dans l'en-tête « SAP (…) »
+  heuresSapDate: '03/04',   // hérité (v1.21) — migré vers la 1re semaine, ignoré ensuite
   consoRecapMode: 'product', // 'product' | 'eotp' : axe de regroupement du récap Consommable
   stockCBMode: 'product',    // 'product' | 'eotp' : axe de regroupement du récap CB Stock
   projectStart: '',          // date ISO YYYY-MM-DD : début prévu du chantier
@@ -160,6 +164,8 @@ function load() {
     if (typeof data.eotpRegistryInitialized === 'boolean') state.eotpRegistryInitialized = data.eotpRegistryInitialized;
     if (data.heuresData && typeof data.heuresData === 'object') state.heuresData = data.heuresData;
     if (typeof data.heuresSapDate === 'string') state.heuresSapDate = data.heuresSapDate;
+    if (Array.isArray(data.heuresWeeks)) state.heuresWeeks = data.heuresWeeks;
+    if (typeof data.heuresActiveWeekId === 'string') state.heuresActiveWeekId = data.heuresActiveWeekId;
     if (data.consoRecapMode === 'product' || data.consoRecapMode === 'eotp') state.consoRecapMode = data.consoRecapMode;
     if (data.stockCBMode === 'product' || data.stockCBMode === 'eotp') state.stockCBMode = data.stockCBMode;
     if (typeof data.projectStart === 'string') state.projectStart = data.projectStart;
@@ -200,6 +206,7 @@ function load() {
   migrateEOTPsFromConsoEntries();
   migrateProtoPlansFromLegacy();
   migrateCRState();
+  migrateHeuresWeeks();
 }
 function save() {
   const data = {
@@ -227,6 +234,8 @@ function save() {
     eotpRegistryInitialized: state.eotpRegistryInitialized,
     heuresData: state.heuresData,
     heuresSapDate: state.heuresSapDate,
+    heuresWeeks: state.heuresWeeks,
+    heuresActiveWeekId: state.heuresActiveWeekId,
     consoRecapMode: state.consoRecapMode,
     stockCBMode: state.stockCBMode,
     projectStart: state.projectStart,
@@ -5930,13 +5939,121 @@ function eotpDisplay(eotp) {
 // Champs numériques de saisie (parse FR : virgule décimale acceptée).
 const HEURES_NUM_FIELDS = ['budgetHeures', 'qteTotal', 'qteRealisee', 'sap', 'correction', 'pumaCumule'];
 
-// Accès paresseux à l'objet de données d'un eOTP (créé au besoin).
-function getHeuresRow(eotpId) {
+// --- Semaines (instantanés du tableau, pour comparer les écarts) ----------
+// Migration douce : l'ancien format (v1.19-1.21) stockait heuresData à plat
+// { [eotpId]: row }. On le bascule dans une 1re semaine « Semaine 1 ».
+function migrateHeuresWeeks() {
+  if (!Array.isArray(state.heuresWeeks)) state.heuresWeeks = [];
+  if (state.heuresWeeks.length > 0) return;
+
+  const old = state.heuresData;
+  const vals = old && typeof old === 'object' ? Object.values(old) : [];
+  const looksFlat = vals.some(v => v && typeof v === 'object' &&
+    ('budgetHeures' in v || 'selected' in v || 'qteTotal' in v));
+
+  const wid = 'hw_' + uid();
+  state.heuresWeeks = [{
+    id: wid, name: 'Semaine 1', createdAt: Date.now(),
+    sapDate: typeof state.heuresSapDate === 'string' ? state.heuresSapDate : '03/04'
+  }];
+  state.heuresActiveWeekId = wid;
+  // Nidifie l'ancien jeu plat sous la 1re semaine ; sinon repart vide.
+  state.heuresData = { [wid]: looksFlat ? old : {} };
+}
+
+function getHeuresWeeks() {
+  if (!Array.isArray(state.heuresWeeks) || state.heuresWeeks.length === 0) {
+    migrateHeuresWeeks();
+  }
+  return state.heuresWeeks;
+}
+function getHeuresActiveWeek() {
+  const weeks = getHeuresWeeks();
+  const found = weeks.find(w => w.id === state.heuresActiveWeekId);
+  return found || weeks[weeks.length - 1];
+}
+function setHeuresActiveWeek(weekId) {
+  state.heuresActiveWeekId = weekId;
+  save();
+  renderHeures();
+}
+function getNextHeuresWeekName(weeks) {
+  let max = 0;
+  for (const w of weeks) {
+    const m = /^Semaine\s+(\d+)$/i.exec((w.name || '').trim());
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return 'Semaine ' + (max + 1);
+}
+// Bucket de données d'une semaine (créé au besoin).
+function getHeuresWeekData(weekId) {
   if (!state.heuresData || typeof state.heuresData !== 'object') state.heuresData = {};
-  let row = state.heuresData[eotpId];
+  if (!state.heuresData[weekId] || typeof state.heuresData[weekId] !== 'object') {
+    state.heuresData[weekId] = {};
+  }
+  return state.heuresData[weekId];
+}
+// Nouvelle semaine = copie intégrale de la semaine active (report des budgets
+// et quantités pour rendre les écarts d'une semaine à l'autre exploitables).
+function addHeuresWeek() {
+  const weeks = getHeuresWeeks();
+  const active = getHeuresActiveWeek();
+  const wid = 'hw_' + uid();
+  const newWeek = {
+    id: wid,
+    name: getNextHeuresWeekName(weeks),
+    createdAt: Date.now(),
+    sapDate: active ? (active.sapDate || '03/04') : '03/04'
+  };
+  weeks.push(newWeek);
+  // Copie profonde des lignes de la semaine active.
+  const prevData = active ? getHeuresWeekData(active.id) : {};
+  const copy = {};
+  for (const eotpId of Object.keys(prevData)) {
+    copy[eotpId] = { ...prevData[eotpId] };
+  }
+  state.heuresData[wid] = copy;
+  state.heuresActiveWeekId = wid;
+  save();
+  renderHeures();
+  // Sélectionne le texte de l'onglet fraîchement créé pour le renommer vite.
+  requestAnimationFrame(() => {
+    const inp = document.querySelector('.heures-week-tab.is-active .heures-week-name');
+    if (inp) { inp.focus(); inp.select(); }
+  });
+}
+function renameHeuresWeek(weekId, name) {
+  const w = getHeuresWeeks().find(x => x.id === weekId);
+  if (!w) return;
+  w.name = String(name || '');
+  save();
+  // Pas de re-rendu : l'input garde le focus pendant la frappe.
+}
+function deleteHeuresWeek(weekId) {
+  const weeks = getHeuresWeeks();
+  if (weeks.length <= 1) return; // garde toujours au moins une semaine
+  const w = weeks.find(x => x.id === weekId);
+  if (!w) return;
+  if (!confirm(`Supprimer « ${w.name || 'cette semaine'} » et ses données ?`)) return;
+  const idx = weeks.findIndex(x => x.id === weekId);
+  weeks.splice(idx, 1);
+  if (state.heuresData) delete state.heuresData[weekId];
+  if (state.heuresActiveWeekId === weekId) {
+    const fallback = weeks[Math.max(0, idx - 1)];
+    state.heuresActiveWeekId = fallback ? fallback.id : '';
+  }
+  save();
+  renderHeures();
+}
+
+// Accès paresseux à l'objet de données d'un eOTP pour la SEMAINE ACTIVE.
+function getHeuresRow(eotpId) {
+  const week = getHeuresActiveWeek();
+  const bucket = getHeuresWeekData(week.id);
+  let row = bucket[eotpId];
   if (!row) {
     row = { selected: false, budgetHeures: 0, unite: '', qteTotal: 0, qteRealisee: 0, sap: 0, correction: 0, pumaCumule: 0 };
-    state.heuresData[eotpId] = row;
+    bucket[eotpId] = row;
   }
   return row;
 }
@@ -5983,12 +6100,14 @@ function toggleHeuresSelected(eotpId) {
 }
 
 // Date de référence affichée entre parenthèses dans l'en-tête « SAP (…) ».
-// Label global du tableau (et non par eOTP). Éditable en texte libre.
+// Propre à la semaine active (chaque instantané a sa date d'extraction SAP).
 function getHeuresSapDate() {
-  return typeof state.heuresSapDate === 'string' ? state.heuresSapDate : '03/04';
+  const week = getHeuresActiveWeek();
+  return week && typeof week.sapDate === 'string' ? week.sapDate : '03/04';
 }
 function setHeuresSapDate(value) {
-  state.heuresSapDate = String(value || '');
+  const week = getHeuresActiveWeek();
+  if (week) week.sapDate = String(value || '');
   save();
   // Pas de re-rendu : l'input conserve sa valeur, rien d'autre n'en dépend.
 }
@@ -6013,8 +6132,70 @@ function setHeuresField(eotpId, field, value) {
 }
 
 function renderHeures() {
+  renderHeuresWeekTabs();
   renderHeuresEOTPSelect();
   renderHeuresTable();
+}
+
+// Onglets de semaines, design « classeur ». L'onglet actif porte un champ
+// éditable pour renommer la semaine ; un onglet « + » crée une semaine.
+function renderHeuresWeekTabs() {
+  const el = document.getElementById('heuresweektabs');
+  if (!el) return;
+  el.innerHTML = '';
+  const weeks = getHeuresWeeks();
+  const active = getHeuresActiveWeek();
+
+  for (const w of weeks) {
+    const isActive = active && w.id === active.id;
+    const tab = document.createElement('div');
+    tab.className = 'heures-week-tab' + (isActive ? ' is-active' : '');
+    tab.dataset.weekId = w.id;
+
+    if (isActive) {
+      // Onglet actif : nom éditable + petite croix de suppression.
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'heures-week-name';
+      input.value = w.name || '';
+      input.maxLength = 24;
+      input.size = Math.max(6, (w.name || '').length);
+      input.setAttribute('aria-label', 'Nom de la semaine');
+      input.addEventListener('input', () => {
+        input.size = Math.max(6, input.value.length);
+        renameHeuresWeek(w.id, input.value);
+      });
+      tab.appendChild(input);
+      if (weeks.length > 1) {
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'heures-week-del';
+        del.setAttribute('aria-label', 'Supprimer la semaine');
+        del.textContent = '×';
+        del.addEventListener('click', (e) => { e.stopPropagation(); deleteHeuresWeek(w.id); });
+        tab.appendChild(del);
+      }
+    } else {
+      // Onglet inactif : bouton de sélection.
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'heures-week-label';
+      btn.textContent = w.name || '(sans nom)';
+      btn.addEventListener('click', () => setHeuresActiveWeek(w.id));
+      tab.appendChild(btn);
+    }
+    el.appendChild(tab);
+  }
+
+  // Onglet « + » : nouvelle semaine (copie de la semaine active).
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'heures-week-tab heures-week-add';
+  add.setAttribute('aria-label', 'Nouvelle semaine');
+  add.title = 'Nouvelle semaine (copie de la semaine active)';
+  add.textContent = '+';
+  add.addEventListener('click', addHeuresWeek);
+  el.appendChild(add);
 }
 
 function renderHeuresEOTPSelect() {

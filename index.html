@@ -423,11 +423,10 @@
     <!-- ============== SUIVI DES HEURES ============== -->
     <section class="page" id="page-heures">
       <h2 class="section-title">Suivi des heures</h2>
-      <p class="section-help heures-pc-note">
-        Tableau récapitulatif des budgets en heures par eOTP. Optimisé pour une
-        consultation sur ordinateur — sur téléphone, faites défiler le tableau
-        horizontalement.
-      </p>
+
+      <!-- Onglets de semaines (design classeur). Chaque semaine est un
+           instantané complet du tableau, pour comparer les écarts. -->
+      <div class="heures-week-tabs" id="heuresweektabs"></div>
 
       <!-- Sélection des eOTP à inclure dans le suivi -->
       <div class="heures-select-section">

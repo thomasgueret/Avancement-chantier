@@ -4396,7 +4396,70 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 /* La page s'élargit en desktop pour afficher le maximum de colonnes sans
    défilement horizontal (tableau de 13 colonnes pensé pour le PC). */
 #page-heures { max-width: 1320px; }
-.heures-pc-note { font-style: italic; }
+
+/* ----- Onglets de semaines (design « classeur ») ----- */
+.heures-week-tabs {
+  display: flex; align-items: flex-end; gap: 4px;
+  margin: 6px 0 16px;
+  padding: 0 1px;
+  border-bottom: 2px solid var(--accent);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+.heures-week-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-bottom: 2px solid transparent;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  font-size: 13px; font-weight: 600;
+  color: var(--text-2);
+  white-space: nowrap;
+  position: relative; bottom: -2px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.heures-week-tab:not(.is-active):hover { background: var(--surface-3); color: var(--text); }
+.heures-week-tab.is-active {
+  background: var(--surface);
+  border-color: var(--accent);
+  border-top-width: 3px;
+  border-bottom-color: var(--surface); /* « connecte » l'onglet au plan en gommant la tranche */
+  color: var(--text);
+  z-index: 1;
+}
+.heures-week-label {
+  border: none; background: transparent;
+  font: inherit; color: inherit;
+  cursor: pointer; padding: 0;
+}
+.heures-week-name {
+  border: none; background: transparent;
+  font: inherit; font-weight: 700;
+  color: var(--accent);
+  padding: 0; min-width: 6ch;
+}
+.heures-week-name:focus { outline: none; }
+.heures-week-del {
+  border: none; background: transparent;
+  color: var(--text-3);
+  font-size: 15px; line-height: 1;
+  cursor: pointer; padding: 0 1px;
+}
+.heures-week-del:hover { color: var(--danger); }
+.heures-week-add {
+  background: transparent;
+  border-style: dashed;
+  color: var(--text-3);
+  font-size: 15px; font-weight: 700;
+}
+.heures-week-add:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
 
 .heures-select-section { margin: 8px 0 16px; }
 .heures-subtitle {
