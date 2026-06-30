@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.19';
+const APP_VERSION = '1.20';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -5950,9 +5950,13 @@ function computeHeuresRow(row) {
   const ratio = qteTotal > 0 ? budget / qteTotal : null;          // Budget h / Qté totale
   const avancement = qteTotal > 0 ? qteReal / qteTotal : null;    // Qté réalisée / Qté totale (0..1)
   const droit = avancement != null ? budget * avancement : 0;     // Budget h × avancement % (valeur acquise)
+  const rad = qteTotal > 0 ? qteTotal - qteReal : null;           // Reste à faire : Qté totale − Qté réalisée
   const pumaEcart = puma + correction;                            // PUMA cumulé + Correction
+  const ratioActuel = qteReal > 0 ? pumaEcart / qteReal : null;   // (PUMA + Écart SAP) / Qté réalisée
+  const fdcAuto = (ratioActuel != null && rad != null)            // Projection fin de chantier
+    ? pumaEcart + ratioActuel * rad : null;                       //   = (PUMA + Écart) + Ratio actuel × RAD
   const ecart = droit - pumaEcart;                                // Droit à dépenser − (PUMA + Correction)
-  return { ratio, avancement, droit, pumaEcart, ecart };
+  return { ratio, avancement, droit, rad, pumaEcart, ratioActuel, fdcAuto, ecart };
 }
 
 // Formatage heures : entier si rond, sinon 1 décimale, séparateurs FR.
@@ -5981,7 +5985,12 @@ function setHeuresField(eotpId, field, value) {
     row.unite = (value || '').trim();
   } else if (HEURES_NUM_FIELDS.includes(field)) {
     const n = parseFloat(String(value).replace(',', '.'));
-    row[field] = Number.isFinite(n) && n >= 0 ? n : 0;
+    // La Correction (PUMA-SAP) peut être négative ; les autres champs sont positifs.
+    if (field === 'correction') {
+      row[field] = Number.isFinite(n) ? n : 0;
+    } else {
+      row[field] = Number.isFinite(n) && n >= 0 ? n : 0;
+    }
   }
   save();
   // Re-rendu ciblé des colonnes calculées de la ligne + du pied, sans
@@ -6031,24 +6040,30 @@ const HEURES_COLUMNS = [
   { key: 'ratio',        label: 'Ratio théorique',         kind: 'calc', title: 'Budget heure ÷ Qté totale' },
   { key: 'qteTotal',     label: 'Qté totale (ouvrage)',    kind: 'num' },
   { key: 'qteRealisee',  label: 'Qté réalisé au stade',    kind: 'num',  title: 'Saisie manuelle — liaison avec l\'Avancement à venir' },
+  { key: 'rad',          label: 'RAD',                     kind: 'calc', title: 'Reste à faire : Qté totale − Qté réalisé au stade' },
   { key: 'avancement',   label: 'Avancement (%)',          kind: 'calc', title: 'Qté réalisée ÷ Qté totale' },
   { key: 'droit',        label: 'Droit à dépenser',        kind: 'calc', title: 'Budget heure × avancement % (valeur acquise)' },
   { key: 'sap',          label: 'SAP (03/04)',             kind: 'num' },
-  { key: 'correction',   label: 'Correction (PUMA-SAP)',   kind: 'num' },
+  { key: 'correction',   label: 'Correction (PUMA-SAP)',   kind: 'num',  title: 'Peut être négative' },
   { key: 'pumaCumule',   label: 'PUMA cumulé',             kind: 'num' },
   { key: 'pumaEcart',    label: 'PUMA cumulé + Écart SAP', kind: 'calc', title: 'PUMA cumulé + Correction' },
+  { key: 'ratioActuel',  label: 'Ratio actuel',            kind: 'calc', title: '(PUMA cumulé + Écart SAP) ÷ Qté réalisé au stade' },
+  { key: 'fdcAuto',      label: 'FDC auto',                kind: 'calc', title: '(PUMA cumulé + Écart SAP) + Ratio actuel × (Qté totale − Qté réalisé au stade)' },
   { key: 'ecart',        label: 'Écart au stade',          kind: 'calc', title: 'Droit à dépenser − (PUMA cumulé + Correction)' }
 ];
 
 // Texte affiché pour une cellule calculée donnée.
 function heuresCalcText(key, comp) {
   switch (key) {
-    case 'ratio':      return comp.ratio != null ? fmtHeures(comp.ratio) : '—';
-    case 'avancement': return comp.avancement != null ? Math.round(comp.avancement * 100) + ' %' : '—';
-    case 'droit':      return fmtHeures(comp.droit) + ' h';
-    case 'pumaEcart':  return fmtHeures(comp.pumaEcart) + ' h';
-    case 'ecart':      return fmtHeures(comp.ecart) + ' h';
-    default:           return '—';
+    case 'ratio':       return comp.ratio != null ? fmtHeures(comp.ratio) : '—';
+    case 'avancement':  return comp.avancement != null ? Math.round(comp.avancement * 100) + ' %' : '—';
+    case 'droit':       return fmtHeures(comp.droit) + ' h';
+    case 'rad':         return comp.rad != null ? fmtHeures(comp.rad) : '—';
+    case 'pumaEcart':   return fmtHeures(comp.pumaEcart) + ' h';
+    case 'ratioActuel': return comp.ratioActuel != null ? fmtHeures(comp.ratioActuel) : '—';
+    case 'fdcAuto':     return comp.fdcAuto != null ? fmtHeures(comp.fdcAuto) + ' h' : '—';
+    case 'ecart':       return fmtHeures(comp.ecart) + ' h';
+    default:            return '—';
   }
 }
 
@@ -6181,7 +6196,7 @@ function buildHeuresFoot(selected) {
   const tr = document.createElement('tr');
 
   // Sommes des colonnes additives
-  let sumBudget = 0, sumDroit = 0, sumSap = 0, sumCorr = 0, sumPuma = 0, sumPumaEcart = 0, sumEcart = 0;
+  let sumBudget = 0, sumDroit = 0, sumSap = 0, sumCorr = 0, sumPuma = 0, sumPumaEcart = 0, sumFdc = 0, sumEcart = 0;
   for (const e of selected) {
     const row = getHeuresRow(e.id);
     const comp = computeHeuresRow(row);
@@ -6191,6 +6206,7 @@ function buildHeuresFoot(selected) {
     sumPuma      += Number(row.pumaCumule) || 0;
     sumDroit     += comp.droit;
     sumPumaEcart += comp.pumaEcart;
+    if (comp.fdcAuto != null) sumFdc += comp.fdcAuto;
     sumEcart     += comp.ecart;
   }
   // Avancement global pondéré par les budgets : Σ droit / Σ budget
@@ -6203,12 +6219,15 @@ function buildHeuresFoot(selected) {
     ratio:        '—',
     qteTotal:     '—',
     qteRealisee:  '—',
+    rad:          '—',
     avancement:   globalAvancement != null ? Math.round(globalAvancement * 100) + ' %' : '—',
     droit:        fmtHeures(sumDroit) + ' h',
     sap:          fmtHeures(sumSap) + ' h',
     correction:   fmtHeures(sumCorr) + ' h',
     pumaCumule:   fmtHeures(sumPuma) + ' h',
     pumaEcart:    fmtHeures(sumPumaEcart) + ' h',
+    ratioActuel:  '—',
+    fdcAuto:      fmtHeures(sumFdc) + ' h',
     ecart:        fmtHeures(sumEcart) + ' h'
   };
 
