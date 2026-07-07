@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.23';
+const APP_VERSION = '1.24';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -112,6 +112,15 @@ const state = {
   syncStatus: 'idle',        // 'idle' | 'syncing' | 'error' | 'offline'
   syncTimestamp: 0,          // ms epoch — dernier changement local connu
   syncLastPulled: 0,         // ms epoch — dernier pull réussi depuis le serveur
+  // Horodatage PAR CLÉ du dernier changement local ({ [clé]: ms epoch }).
+  // Voyage dans le payload de synchro : permet la fusion clé par clé au
+  // pull (au lieu d'un écrasement intégral « last-write-wins » qui a déjà
+  // fait perdre des données — cf. plans Proto).
+  syncKeyStamps: {},
+  // updated_at (ms) de la dernière version serveur vue par CET appareil.
+  // Sert de garde au push : si le serveur a bougé depuis, on fusionne
+  // d'abord. Persisté localement, jamais synchronisé.
+  syncLastSeenRemoteTs: 0,
   currentDate: todayISO(),
   chartHidden: {},        // { [companyId]: true } — entreprises masquées du graphique
   chartRange: 30          // 7 | 30 | 'all'
@@ -189,9 +198,13 @@ function load() {
     if (data.crSectionLabels     && typeof data.crSectionLabels     === 'object') state.crSectionLabels     = data.crSectionLabels;
     if (Array.isArray(data.crCustomSections))                                     state.crCustomSections    = data.crCustomSections;
     if (data.crWeeks && typeof data.crWeeks === 'object') state.crWeeks = data.crWeeks;
+    if (data.crSelectedCompanyId) state.crSelectedCompanyId = data.crSelectedCompanyId;
+    if (data.crSelectedWeekId && typeof data.crSelectedWeekId === 'object') state.crSelectedWeekId = data.crSelectedWeekId;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
     if (typeof data.syncTimestamp === 'number') state.syncTimestamp = data.syncTimestamp;
+    if (data.syncKeyStamps && typeof data.syncKeyStamps === 'object') state.syncKeyStamps = data.syncKeyStamps;
+    if (typeof data.syncLastSeenRemoteTs === 'number') state.syncLastSeenRemoteTs = data.syncLastSeenRemoteTs;
     // Champs hérités (ancien modèle à liste unique) → migrés ensuite
     if (data.tasks) state._legacyTasks = data.tasks;
     if (data.zoneHasTasks) state._legacyZoneHasTasks = data.zoneHasTasks;
@@ -207,9 +220,13 @@ function load() {
   migrateProtoPlansFromLegacy();
   migrateCRState();
   migrateHeuresWeeks();
+  initSyncStamps();
 }
-function save() {
-  const data = {
+
+// Snapshot des clés persistées en localStorage (source de vérité unique,
+// partagée entre save() et le self-check d'intégrité de la synchro).
+function buildPersistedData() {
+  return {
     companies: state.companies,
     zones: state.zones,
     taskSetups: state.taskSetups,
@@ -256,20 +273,117 @@ function save() {
     crSectionLabels: state.crSectionLabels,
     crCustomSections: state.crCustomSections,
     crWeeks: state.crWeeks,
+    crSelectedCompanyId: state.crSelectedCompanyId,
+    crSelectedWeekId: state.crSelectedWeekId,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange,
-    syncTimestamp: state.syncTimestamp
+    syncTimestamp: state.syncTimestamp,
+    syncKeyStamps: state.syncKeyStamps,
+    syncLastSeenRemoteTs: state.syncLastSeenRemoteTs
   };
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
-  catch (e) { console.warn('localStorage save KO', e); }
-  // Synchro : à chaque save, on bump le timestamp et on schedule un
-  // push vers Supabase (sauf quand on est justement en train d'appliquer
-  // l'état distant — sinon boucle infinie).
+}
+
+// Clés du state volontairement NON persistées (état d'exécution pur).
+// Toute autre clé du state doit figurer dans buildPersistedData(), sinon
+// le self-check ci-dessous la signale : c'est le garde-fou contre les
+// « données d'un nouvel onglet oubliées de la synchro ».
+const TRANSIENT_STATE_KEYS = new Set([
+  'syncStatus',      // état réseau courant
+  'syncLastPulled',  // horloge de session
+  'currentDate',     // curseur « aujourd'hui » (recalculé au boot)
+  'protoPlan', 'protoPlanW', 'protoPlanH' // héritage v0.63, migré au load
+]);
+
+// Vérifie la couverture persistance/synchro de toutes les clés du state.
+// Appelé au boot : signale en console toute clé ni persistée, ni déclarée
+// transitoire — et toute clé exclue de la synchro qui n'existe plus.
+function syncSelfCheck() {
+  const persisted = new Set(Object.keys(buildPersistedData()));
+  const issues = [];
+  for (const k in state) {
+    if (k.startsWith('_')) continue;
+    if (!persisted.has(k) && !TRANSIENT_STATE_KEYS.has(k)) {
+      issues.push(`clé « ${k} » ni persistée (save) ni déclarée transitoire — elle sera perdue au rechargement et jamais synchronisée`);
+    }
+  }
+  for (const k of SYNC_EXCLUDED_KEYS) {
+    if (!(k in state)) issues.push(`clé exclue de la synchro « ${k} » absente du state (obsolète ?)`);
+  }
+  if (issues.length) console.warn('[SyncSelfCheck] ⚠️\n - ' + issues.join('\n - '));
+  else console.info('[SyncSelfCheck] ✓ toutes les clés du state sont couvertes (persistance + synchro)');
+  return issues;
+}
+
+// Cache des JSON par clé du dernier save : permet de détecter QUELLES
+// clés ont changé (→ bump de leur stamp) sans re-stringifier deux fois.
+let _syncJsonCache = null;
+
+// Initialise le cache + amorce les stamps au premier chargement (migration
+// depuis les versions sans syncKeyStamps : toutes les clés datées du
+// dernier changement local connu).
+function initSyncStamps() {
+  if (!state.syncKeyStamps || typeof state.syncKeyStamps !== 'object') state.syncKeyStamps = {};
+  const data = buildPersistedData();
+  _syncJsonCache = {};
+  const seed = state.syncTimestamp || 0;
+  for (const k of Object.keys(data)) {
+    _syncJsonCache[k] = JSON.stringify(data[k] === undefined ? null : data[k]);
+    if (!SYNC_EXCLUDED_KEYS.has(k) && k !== 'syncKeyStamps' && !(k in state.syncKeyStamps)) {
+      state.syncKeyStamps[k] = seed;
+    }
+  }
+}
+
+// Sauvegarde locale. Retourne true si l'écriture localStorage a réussi —
+// false = stockage plein (quota) : la donnée n'est PAS persistée et
+// l'utilisateur doit en être informé par l'appelant ou par le toast ici.
+let _lastQuotaToastAt = 0;
+function save() {
+  const now = Date.now();
+  // 1) Détection des clés modifiées → bump de leur stamp (fusion synchro).
+  //    Le JSON de chaque clé est assemblé à la main pour ne stringifier
+  //    qu'une seule fois (les plans pèsent lourd).
+  // NB : dans buildPersistedData, syncKeyStamps est déclarée APRÈS toutes
+  // les clés métier — quand on la sérialise, les bumps de ce save sont
+  // donc déjà posés (l'itération suit l'ordre de déclaration).
+  const data = buildPersistedData();
+  if (!_syncJsonCache) _syncJsonCache = {};
+  const parts = [];
+  for (const k of Object.keys(data)) {
+    const j = JSON.stringify(data[k] === undefined ? null : data[k]);
+    if (_syncJsonCache[k] !== j) {
+      // Pendant l'application d'un état distant, les stamps sont posés par
+      // la fusion elle-même (valeurs du serveur) — on ne bump pas.
+      if (!_syncApplying && !SYNC_EXCLUDED_KEYS.has(k) && k !== 'syncKeyStamps') {
+        state.syncKeyStamps[k] = now;
+      }
+      _syncJsonCache[k] = j;
+    }
+    parts.push(JSON.stringify(k) + ':' + j);
+  }
+  const json = '{' + parts.join(',') + '}';
+
+  // 2) Écriture localStorage — un échec (quota plein) est SIGNALÉ, pas
+  //    avalé : sans ça l'utilisateur croit ses données sauvegardées alors
+  //    qu'elles disparaîtront au prochain rechargement.
+  let ok = true;
+  try { localStorage.setItem(STORAGE_KEY, json); }
+  catch (e) {
+    ok = false;
+    console.error('localStorage save KO (quota ?)', e);
+    if (now - _lastQuotaToastAt > 30000 && typeof showToast === 'function') {
+      _lastQuotaToastAt = now;
+      showToast('⚠️ Stockage local plein : les dernières modifications ne sont PAS sauvegardées. Supprimez des plans ou libérez de l\'espace.', 'error');
+    }
+  }
+  // 3) Synchro : à chaque save, on bump le timestamp et on schedule un
+  //    push vers Supabase (sauf pendant l'application de l'état distant).
   if (!_syncApplying) {
-    state.syncTimestamp = Date.now();
+    state.syncTimestamp = now;
     _hasPendingPush = true;
     if (typeof schedulePush === 'function') schedulePush();
   }
+  return ok;
 }
 
 // ---------- Utils ----------
@@ -411,6 +525,7 @@ function renderAll() {
   renderCR();
   renderHeures();
   renderDashboard();
+  renderBackupsList(); // async, best-effort
 }
 
 function renderDate() {
@@ -8831,9 +8946,18 @@ function addProtoPlanFromCanvas(canvas, baseName, folderId, suffix) {
       id: 'pln_' + uid(), folderId: folder.id, name,
       dataUrl, w: canvas.width, h: canvas.height
     };
+    const prevActiveId = state.protoActivePlanId;
     state.protoPlans.push(plan);
     state.protoActivePlanId = plan.id;
-    save();
+    // save() retourne false si le quota localStorage est dépassé : dans ce
+    // cas le plan N'EST PAS persisté — on annule au lieu de laisser croire
+    // qu'il est sauvegardé (il disparaîtrait au prochain rechargement).
+    if (!save()) {
+      state.protoPlans.pop();
+      state.protoActivePlanId = prevActiveId;
+      save();
+      return false;
+    }
     return true;
   } catch (err) {
     return false;
@@ -9884,6 +10008,143 @@ function deleteProtoShape() {
 }
 
 // ====================================================================
+//   SAUVEGARDES DE SECOURS (IndexedDB)
+// ====================================================================
+// Filet de sécurité contre les écrasements de synchro : avant chaque
+// application d'un état distant qui modifie des données, l'état local
+// courant est photographié dans IndexedDB (quota bien plus large que
+// localStorage — les plans y tiennent). Ring de BACKUP_KEEP snapshots,
+// restauration depuis Données → Admin.
+
+const BACKUP_DB_NAME = 'chantier_backups';
+const BACKUP_STORE = 'snapshots';
+const BACKUP_KEEP = 5;
+
+function openBackupDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(BACKUP_DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(BACKUP_STORE)) {
+        db.createObjectStore(BACKUP_STORE, { keyPath: 'id', autoIncrement: true });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function idbReq(req) {
+  return new Promise((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// Photographie l'état persisté ACTUEL (le JSON localStorage, déjà
+// sérialisé — coût quasi nul) et taille le ring à BACKUP_KEEP.
+async function createLocalBackup(reason) {
+  const json = localStorage.getItem(STORAGE_KEY);
+  if (!json) return null;
+  const db = await openBackupDB();
+  try {
+    const tx = db.transaction(BACKUP_STORE, 'readwrite');
+    const store = tx.objectStore(BACKUP_STORE);
+    await idbReq(store.add({ ts: Date.now(), reason: reason || 'manuelle', size: json.length, json }));
+    // Prune : garde les BACKUP_KEEP plus récents
+    const keys = await idbReq(store.getAllKeys());
+    if (keys.length > BACKUP_KEEP) {
+      keys.sort((a, b) => a - b);
+      for (const k of keys.slice(0, keys.length - BACKUP_KEEP)) {
+        await idbReq(store.delete(k));
+      }
+    }
+    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+    return true;
+  } finally { db.close(); }
+}
+
+// Liste les sauvegardes (métadonnées seulement pour l'affichage).
+async function listLocalBackups() {
+  const db = await openBackupDB();
+  try {
+    const store = db.transaction(BACKUP_STORE, 'readonly').objectStore(BACKUP_STORE);
+    const all = await idbReq(store.getAll());
+    return all
+      .map(b => ({ id: b.id, ts: b.ts, reason: b.reason, size: b.size }))
+      .sort((a, b) => b.ts - a.ts);
+  } finally { db.close(); }
+}
+
+// Restaure une sauvegarde : l'état restauré devient LA référence (tous
+// ses stamps sont datés de maintenant, il gagnera la fusion partout et
+// sera poussé vers le serveur). L'état actuel est sauvegardé avant.
+async function restoreLocalBackup(id) {
+  const db = await openBackupDB();
+  let record;
+  try {
+    const store = db.transaction(BACKUP_STORE, 'readonly').objectStore(BACKUP_STORE);
+    record = await idbReq(store.get(id));
+  } finally { db.close(); }
+  if (!record || !record.json) throw new Error('Sauvegarde introuvable');
+  await createLocalBackup('avant restauration');
+  const data = JSON.parse(record.json);
+  // L'état restauré fait autorité : stamps à maintenant, version serveur
+  // « jamais vue » pour forcer une fusion propre au prochain cycle.
+  const now = Date.now();
+  const stamps = {};
+  for (const k of Object.keys(data)) {
+    if (!SYNC_EXCLUDED_KEYS.has(k) && k !== 'syncKeyStamps') stamps[k] = now;
+  }
+  data.syncKeyStamps = stamps;
+  data.syncTimestamp = now;
+  data.syncLastSeenRemoteTs = 0;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  window.location.reload();
+}
+
+// Liste des sauvegardes dans Données → Admin (asynchrone, best-effort).
+async function renderBackupsList() {
+  const ul = document.getElementById('backuplist');
+  if (!ul) return;
+  let backups = [];
+  try { backups = await listLocalBackups(); }
+  catch (e) { console.warn('Lecture des sauvegardes KO', e); }
+  ul.innerHTML = '';
+  if (backups.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'backup-empty';
+    li.textContent = 'Aucune sauvegarde pour l\'instant. Elles se créent automatiquement dès que la synchro modifie vos données.';
+    ul.appendChild(li);
+    return;
+  }
+  for (const b of backups) {
+    const li = document.createElement('li');
+    li.className = 'backup-item';
+    li.innerHTML = `
+      <div class="backup-meta">
+        <span class="backup-date"></span>
+        <span class="backup-reason"></span>
+      </div>
+      <span class="backup-size"></span>
+      <button class="backup-restore" type="button">Restaurer</button>
+    `;
+    const d = new Date(b.ts);
+    li.querySelector('.backup-date').textContent =
+      d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' }) +
+      ' ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    li.querySelector('.backup-reason').textContent = b.reason || '';
+    li.querySelector('.backup-size').textContent = (b.size / 1024 / 1024).toFixed(2).replace('.', ',') + ' Mo';
+    li.querySelector('.backup-restore').addEventListener('click', async () => {
+      if (!confirm(`Restaurer la sauvegarde du ${li.querySelector('.backup-date').textContent} ?\n\nVos données actuelles seront d'abord sauvegardées, puis remplacées. L'état restauré deviendra la référence pour tous les appareils.`)) return;
+      try { await restoreLocalBackup(b.id); }
+      catch (e) { showToast('Restauration impossible : ' + (e.message || 'erreur'), 'error'); }
+    });
+    ul.appendChild(li);
+  }
+}
+
+// ====================================================================
 //   SUPABASE + SYNCHRONISATION — modèle simplifié, sans compte
 // ====================================================================
 // Tout le monde partage la même ligne site_data identifiée par
@@ -9913,6 +10174,9 @@ function loadSupabase() {
   })().catch((err) => {
     supabaseLoadPromise = null;
     console.error('Supabase SDK chargement KO', err);
+    // Sans SDK, RIEN ne se synchronise : le signaler au lieu de laisser
+    // la pastille sur « Synchronisé » (faux sentiment de sécurité).
+    if (typeof setSyncStatus === 'function') setSyncStatus('error');
     return null;
   });
   return supabaseLoadPromise;
@@ -9928,6 +10192,9 @@ function loadSupabase() {
 const SYNC_DEBOUNCE_MS = 1500;
 const SYNC_POLL_INTERVAL_MS = 20000; // pull périodique toutes les 20s
 const SYNC_OP_TIMEOUT_MS = 5000;     // timeout dur sur chaque op réseau
+// Le push peut transporter plusieurs Mo (plans en dataUrl) : sur une
+// connexion chantier, 5 s ne suffisent pas toujours → timeout dédié.
+const SYNC_PUSH_TIMEOUT_MS = 20000;
 
 // Wrappe une promise dans un timeout dur. Si la promise ne résout pas
 // dans le délai imparti, on rejette pour éviter un hang permanent
@@ -9963,7 +10230,7 @@ const SYNC_EXCLUDED_KEYS = new Set([
   'echeckinCollapsed',               // sections eCheckIn pliées/dépliées
   'crSelectedCompanyId',             // entreprise sélectionnée dans le slider CR (UI)
   'crSelectedWeekId',                // semaine CR sélectionnée par entreprise (UI)
-  'syncStatus', 'syncTimestamp', 'syncLastPulled',
+  'syncStatus', 'syncTimestamp', 'syncLastPulled', 'syncLastSeenRemoteTs',
   'protoPlan', 'protoPlanW', 'protoPlanH' // champs hérités migrés
 ]);
 
@@ -9977,7 +10244,7 @@ function schedulePush() {
   if (!isSupabaseConfigured()) return;
   clearTimeout(syncPushTimer);
   syncPushTimer = setTimeout(() => {
-    withTimeout(doSyncPush(), 'push debounced').catch(err => console.warn('[Sync] push debounced KO', err));
+    withTimeout(doSyncPush(), 'push debounced', SYNC_PUSH_TIMEOUT_MS).catch(err => console.warn('[Sync] push debounced KO', err));
   }, SYNC_DEBOUNCE_MS);
 }
 
@@ -9985,6 +10252,7 @@ function getSyncablePayload() {
   const out = {};
   for (const k in state) {
     if (SYNC_EXCLUDED_KEYS.has(k)) continue;
+    if (k.startsWith('_')) continue; // clés transitoires/héritées (_legacy*)
     out[k] = state[k];
   }
   // Marqueur d'appareil — sera lu côté pull pour éviter qu'un appareil
@@ -9998,12 +10266,33 @@ function setSyncStatus(s) {
   updateSyncChip();
 }
 
+// Push avec GARDE ANTI-ÉCRASEMENT : avant d'écrire, on vérifie que la
+// version serveur est bien celle qu'on a vue en dernier. Si un autre
+// appareil a écrit entre-temps, on FUSIONNE d'abord (pull) puis on push
+// l'état fusionné. Sans cette garde, un appareil à l'état périmé qui
+// fait une modification anodine écrase tout le travail des autres
+// (c'est exactement ainsi que les plans Proto ont été perdus).
 async function doSyncPush() {
   const supa = await loadSupabase();
-  if (!supa) return;
+  if (!supa) { setSyncStatus('error'); return; }
   setSyncStatus('syncing');
   try {
+    const { data: head, error: headErr } = await supa
+      .from('site_data')
+      .select('updated_at')
+      .eq('site_id', SHARED_SITE_ID)
+      .maybeSingle();
+    if (headErr) throw headErr;
+    const headTs = head && head.updated_at ? new Date(head.updated_at).getTime() : 0;
+    if (headTs && headTs !== (state.syncLastSeenRemoteTs || 0)) {
+      // Le serveur a une version qu'on n'a jamais intégrée → fusion d'abord.
+      await doSyncPull(false, { skipPushGuard: true });
+    }
     const payload = getSyncablePayload();
+    const payloadJson = JSON.stringify(payload);
+    if (payloadJson.length > 4_000_000) {
+      console.warn(`[Sync] payload volumineux : ${(payloadJson.length / 1e6).toFixed(1)} Mo — les plans uploadés alourdissent chaque synchro.`);
+    }
     const updatedAt = new Date(state.syncTimestamp || Date.now()).toISOString();
     // Upsert : crée la ligne au premier push, puis met à jour à chaque sauvegarde.
     const { error } = await supa.from('site_data').upsert({
@@ -10012,6 +10301,7 @@ async function doSyncPush() {
       updated_at: updatedAt
     }, { onConflict: 'site_id' });
     if (error) throw error;
+    state.syncLastSeenRemoteTs = new Date(updatedAt).getTime();
     _hasPendingPush = false;
     setSyncStatus('idle');
   } catch (err) {
@@ -10020,9 +10310,14 @@ async function doSyncPush() {
   }
 }
 
-async function doSyncPull(initial = false) {
+// Pull avec FUSION PAR CLÉ : chaque clé du state est arbitrée par son
+// horodatage (syncKeyStamps) — la version la plus récente gagne, clé par
+// clé. Un appareil qui n'a pas touché aux plans ne peut donc plus les
+// écraser en poussant une modification d'effectifs. Avant d'appliquer le
+// moindre changement distant, une sauvegarde locale est créée (IndexedDB).
+async function doSyncPull(initial = false, opts = {}) {
   const supa = await loadSupabase();
-  if (!supa) return;
+  if (!supa) { setSyncStatus('error'); return; }
   setSyncStatus('syncing');
   try {
     const { data, error } = await supa
@@ -10033,27 +10328,24 @@ async function doSyncPull(initial = false) {
     if (error) throw error;
     if (data) {
       const remoteTs = data.updated_at ? new Date(data.updated_at).getTime() : 0;
-      const localTs = state.syncTimestamp || 0;
-      const remoteHasData = data.state && Object.keys(data.state || {}).length > 0;
-      // Skip si le push vient de cet appareil-ci (le state distant
-      // contient un marqueur _sourceDeviceId qu'on a mis nous-même)
-      const sameDevice = data.state && data.state._sourceDeviceId === DEVICE_ID;
+      const remoteState = data.state || {};
+      const remoteHasData = Object.keys(remoteState).length > 0;
+      const sameDevice = remoteState._sourceDeviceId === DEVICE_ID;
+      const alreadySeen = remoteTs && remoteTs === (state.syncLastSeenRemoteTs || 0);
       if (!remoteHasData && initial) {
         // Serveur vide à la 1re connexion → on push notre état local
         await doSyncPush();
-      } else if (remoteHasData && !sameDevice && (initial ? remoteTs >= localTs : remoteTs > localTs)) {
-        // Appliquer l'état distant (flag pour ne pas re-déclencher push)
-        _syncApplying = true;
-        try {
-          for (const k in data.state) {
-            if (SYNC_EXCLUDED_KEYS.has(k)) continue;
-            if (k === '_sourceDeviceId') continue;
-            state[k] = data.state[k];
-          }
-          state.syncTimestamp = remoteTs;
-          save();
-          renderAll();
-        } finally { _syncApplying = false; }
+      } else if (remoteHasData && !sameDevice && !alreadySeen) {
+        const changedKeys = await applyRemoteStateMerge(remoteState, remoteTs);
+        state.syncLastSeenRemoteTs = remoteTs;
+        if (changedKeys.localWins > 0 && !opts.skipPushGuard) {
+          // Des clés locales plus récentes ont survécu à la fusion : le
+          // serveur ne les a pas encore → push pour faire converger.
+          _hasPendingPush = true;
+          schedulePush();
+        }
+      } else if (sameDevice || alreadySeen) {
+        state.syncLastSeenRemoteTs = remoteTs;
       }
     } else if (initial) {
       await doSyncPush();
@@ -10064,6 +10356,63 @@ async function doSyncPull(initial = false) {
     console.error('Sync pull KO', err);
     setSyncStatus('error');
   }
+}
+
+// Fusion de l'état distant dans le state local, clé par clé.
+// Règle : pour chaque clé synchronisable, gagne la version au stamp le
+// plus récent. Un payload d'ancien client (sans stamps) est daté de son
+// updated_at global. Retourne { remoteWins, localWins }.
+async function applyRemoteStateMerge(remoteState, remoteTs) {
+  const remoteStamps = (remoteState.syncKeyStamps && typeof remoteState.syncKeyStamps === 'object')
+    ? remoteState.syncKeyStamps : {};
+  const localStamps = state.syncKeyStamps || {};
+  const keys = new Set();
+  for (const k of Object.keys(remoteState)) keys.add(k);
+  for (const k in state) keys.add(k);
+  keys.delete('_sourceDeviceId');
+  keys.delete('syncKeyStamps');
+
+  // 1er passage : déterminer qui gagne quoi (sans rien modifier).
+  const toApply = [];
+  let localWins = 0;
+  for (const k of keys) {
+    if (SYNC_EXCLUDED_KEYS.has(k) || k.startsWith('_')) continue;
+    const inRemote = Object.prototype.hasOwnProperty.call(remoteState, k);
+    if (!inRemote) { localWins++; continue; } // clé locale inconnue du serveur (nouvelle version d'app)
+    const rStamp = Number(remoteStamps[k]) || remoteTs || 0;
+    const lStamp = Number(localStamps[k]) || 0;
+    if (rStamp > lStamp) {
+      // Ne compte comme changement que si la valeur diffère réellement.
+      const rJson = JSON.stringify(remoteState[k] === undefined ? null : remoteState[k]);
+      const lJson = JSON.stringify(state[k] === undefined ? null : state[k]);
+      if (rJson !== lJson) toApply.push({ k, rStamp });
+      else if (rStamp > lStamp) localStamps[k] = rStamp; // aligne le stamp, valeur identique
+    } else if (lStamp > rStamp) {
+      const rJson = JSON.stringify(remoteState[k] === undefined ? null : remoteState[k]);
+      const lJson = JSON.stringify(state[k] === undefined ? null : state[k]);
+      if (rJson !== lJson) localWins++;
+    }
+  }
+
+  if (toApply.length === 0) return { remoteWins: 0, localWins };
+
+  // 2e passage : SAUVEGARDE de l'état actuel avant tout écrasement, puis
+  // application des clés distantes gagnantes.
+  try {
+    await createLocalBackup('avant synchro (' + toApply.map(x => x.k).slice(0, 5).join(', ') + (toApply.length > 5 ? '…' : '') + ')');
+  } catch (e) { console.warn('Backup avant synchro KO (on continue)', e); }
+
+  _syncApplying = true;
+  try {
+    for (const { k, rStamp } of toApply) {
+      state[k] = remoteState[k];
+      localStamps[k] = rStamp;
+    }
+    state.syncTimestamp = Math.max(state.syncTimestamp || 0, remoteTs || 0);
+    save();
+    renderAll();
+  } finally { _syncApplying = false; }
+  return { remoteWins: toApply.length, localWins };
 }
 
 async function setupSyncRealtime() {
@@ -10121,7 +10470,7 @@ async function forceFullSync() {
   }
   clearTimeout(syncPushTimer);
   if (_hasPendingPush) {
-    try { await withTimeout(doSyncPush(), 'force push'); } catch (e) { console.warn(e); }
+    try { await withTimeout(doSyncPush(), 'force push', SYNC_PUSH_TIMEOUT_MS); } catch (e) { console.warn(e); }
   }
   try { await withTimeout(doSyncPull(true), 'force pull'); } catch (e) { console.warn(e); }
   showToast('Synchronisation effectuée');
@@ -10165,6 +10514,7 @@ function init() {
   load();
   migratePresences();
   migrateSetups();
+  syncSelfCheck();
   document.getElementById('appversion').textContent = `Version ${APP_VERSION}`;
   renderAll();
 
@@ -10182,6 +10532,19 @@ function init() {
   document.getElementById('zoneaddroot').addEventListener('click', () => addZone(null));
   const zoneBatchClear = document.getElementById('zonebatchclear');
   if (zoneBatchClear) zoneBatchClear.addEventListener('click', clearZoneSelection);
+
+  // Sauvegardes de secours (Données → Admin)
+  const backupCreateBtn = document.getElementById('backupcreate');
+  if (backupCreateBtn) backupCreateBtn.addEventListener('click', async () => {
+    backupCreateBtn.disabled = true;
+    try {
+      await createLocalBackup('manuelle');
+      showToast('Sauvegarde créée');
+      renderBackupsList();
+    } catch (e) {
+      showToast('Sauvegarde impossible : ' + (e.message || 'erreur'), 'error');
+    } finally { backupCreateBtn.disabled = false; }
+  });
 
   // Tâches
   document.getElementById('taskfab').addEventListener('click', addTask);
