@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.24';
+const APP_VERSION = '1.25';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -2063,8 +2063,13 @@ function setProgress(zoneId, taskId, percent) {
   save();
 }
 
-// Avancement global pondéré par le ratio de production des tâches (0..100)
+// Avancement global d'un ouvrage : PONDÉRÉ PAR LES HEURES ALLOUÉES à
+// chaque tâche (heures = quantité de la zone × ratio de la tâche). La
+// quantité étant commune à toutes les tâches d'un même ouvrage, elle se
+// simplifie : pondérer par les heures ⇔ pondérer par les ratios. Une
+// tâche à 10 h pèse donc 5× plus qu'une tâche à 2 h dans le % global.
 // Les tâches « hors ratio » (excluded) sont ignorées dans ce calcul.
+// Repli sur la moyenne simple si aucun ratio n'est renseigné.
 // Avancement d'un ouvrage donné dans une zone (0..100, raw, non arrondi)
 function getOuvrageRawProgress(zoneId, setup) {
   if (!setup) return 0;
@@ -2253,7 +2258,7 @@ function renderProgressList() {
   const ouvrages = getZoneOuvrages(zoneId);
   if (ouvrages.length === 0) return;
 
-  for (const { setup } of ouvrages) {
+  for (const { setup, quantity } of ouvrages) {
     // En-tête de section : nom de l'ouvrage + % de l'ouvrage
     const ouvragePct = getOuvrageProgress(zoneId, setup);
     const header = document.createElement('li');
@@ -2275,12 +2280,12 @@ function renderProgressList() {
       continue;
     }
     for (const task of setup.tasks) {
-      list.appendChild(buildProgressItem(zoneId, setup, task));
+      list.appendChild(buildProgressItem(zoneId, setup, task, quantity));
     }
   }
 }
 
-function buildProgressItem(zoneId, setup, task) {
+function buildProgressItem(zoneId, setup, task, quantity) {
   const percent = getProgress(zoneId, task.id);
   const isDone = percent >= 100;
   const li = document.createElement('li');
@@ -2305,6 +2310,20 @@ function buildProgressItem(zoneId, setup, task) {
     tag.className = 'progress-tag';
     tag.textContent = 'hors ratio';
     li.querySelector('.progress-info').appendChild(tag);
+  }
+  // Récap quantité + heures allouées (quantité × ratio), entre le nom et
+  // le sélecteur de %. Rien n'est affiché si la quantité n'est pas
+  // renseignée dans Données → Zones. Ces heures sont la pondération de la
+  // tâche dans le % global de l'ouvrage (cf. getOuvrageRawProgress).
+  if (quantity > 0) {
+    const meta = document.createElement('span');
+    meta.className = 'progress-task-meta';
+    const qtyTxt = `${formatRatio(quantity)} ${setup.unit || 'm²'}`;
+    const hours = quantity * (task.ratio || 0);
+    meta.textContent = (!task.excluded && hours > 0)
+      ? `${qtyTxt} · ${formatRatio(Math.round(hours * 10) / 10)} h`
+      : qtyTxt;
+    li.querySelector('.progress-info').after(meta);
   }
   li.querySelector('.counter-value').textContent = `${percent} %`;
   const decBtn = li.querySelector('[data-action="dec"]');

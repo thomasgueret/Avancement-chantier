@@ -994,6 +994,18 @@ input, select { font: inherit; }
   color: var(--text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* Récap quantité · heures allouées, entre le nom et le compteur de %.
+   Les heures (quantité × ratio) sont la pondération de la tâche dans
+   l'avancement global de l'ouvrage. */
+.progress-task-meta {
+  flex-shrink: 0;
+  font-size: 11.5px; font-weight: 600;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+}
+.progress-item.is-done .progress-task-meta { color: var(--success-2); }
 .progress-tag {
   flex-shrink: 0;
   font-size: 10px; font-weight: 700;
