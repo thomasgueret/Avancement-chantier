@@ -131,7 +131,13 @@
       <!-- Sous-page : Zones -->
       <div class="sub-page" id="sub-zones" data-group="donnees">
         <div class="list-section">
-          <p class="section-help">Construisez l'arborescence du chantier. Ajoutez des sous-niveaux pour détailler (Bâtiment → Étage → Mur…).</p>
+          <p class="section-help">Construisez l'arborescence du chantier. Ajoutez des sous-niveaux pour détailler (Bâtiment → Étage → Mur…). Cochez plusieurs zones pour affecter un ouvrage à toutes en une fois.</p>
+          <!-- Barre d'actions groupées (visible dès qu'une zone est cochée) -->
+          <div class="zone-batch-bar" id="zonebatchbar" hidden>
+            <span class="zone-batch-count" id="zonebatchcount"></span>
+            <span class="zone-batch-hint">Ajouter un ouvrage à une zone cochée l'ajoute à toutes.</span>
+            <button class="zone-batch-clear" id="zonebatchclear" type="button">Tout décocher</button>
+          </div>
           <div class="zone-tree" id="zonetree"></div>
           <div class="empty-state" id="zoneempty">
             <p>Aucune zone créée.</p>

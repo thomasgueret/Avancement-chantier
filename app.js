@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.22';
+const APP_VERSION = '1.23';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -1230,14 +1230,25 @@ function getZoneDescendants(id) {
   return out;
 }
 
+// Sélection multi-zones (transitoire : non persistée ni synchronisée).
+// Permet d'appliquer une action — ex. affecter un ouvrage — à toutes les
+// zones cochées d'un coup.
+const zoneSelection = new Set();
+
 function renderZones() {
   const tree = document.getElementById('zonetree');
   const empty = document.getElementById('zoneempty');
   if (!tree || !empty) return;
   tree.innerHTML = '';
 
+  // Purge les ids sélectionnés qui n'existent plus (zones supprimées).
+  for (const id of [...zoneSelection]) {
+    if (!state.zones.some(z => z.id === id)) zoneSelection.delete(id);
+  }
+
   if (state.zones.length === 0) {
     empty.classList.add('show');
+    updateZoneBatchBar();
     return;
   }
   empty.classList.remove('show');
@@ -1246,9 +1257,10 @@ function renderZones() {
     const children = getZoneChildren(zone.id);
     const hasChildren = children.length > 0;
     const collapsed = !!state.zoneCollapsed[zone.id];
+    const isSelected = zoneSelection.has(zone.id);
 
     const row = document.createElement('div');
-    row.className = 'zone-row';
+    row.className = 'zone-row' + (isSelected ? ' is-selected' : '');
     row.dataset.id = zone.id;
     row.dataset.depth = String(depth);
     row.style.setProperty('--depth', depth);
@@ -1257,6 +1269,7 @@ function renderZones() {
       : `<span class="zone-collapse-spacer"></span>`;
     row.innerHTML = `
       <div class="zone-row-main">
+        <input class="zone-check" type="checkbox" aria-label="Sélectionner cette zone" />
         ${collapseHtml}
         <input class="zone-name-input" type="text" maxlength="80" placeholder="Nom de la zone" />
         <span class="zone-task-slot"></span>
@@ -1266,6 +1279,9 @@ function renderZones() {
         </button>
       </div>
     `;
+    const check = row.querySelector('.zone-check');
+    check.checked = isSelected;
+    check.addEventListener('change', () => toggleZoneSelection(zone.id, check.checked, row));
     const input = row.querySelector('.zone-name-input');
     input.value = zone.name;
     input.addEventListener('input', () => renameZone(zone.id, input.value));
@@ -1287,6 +1303,36 @@ function renderZones() {
   };
 
   for (const root of getZoneChildren(null)) renderNode(root, 0);
+  updateZoneBatchBar();
+}
+
+// Coche/décoche une zone. Mise à jour ciblée (pas de re-render : on ne
+// casse ni le focus ni la position de défilement).
+function toggleZoneSelection(zoneId, checked, row) {
+  if (checked) zoneSelection.add(zoneId);
+  else zoneSelection.delete(zoneId);
+  if (row) row.classList.toggle('is-selected', checked);
+  updateZoneBatchBar();
+}
+
+function clearZoneSelection() {
+  zoneSelection.clear();
+  document.querySelectorAll('.zone-row.is-selected').forEach(r => {
+    r.classList.remove('is-selected');
+    const cb = r.querySelector('.zone-check');
+    if (cb) cb.checked = false;
+  });
+  updateZoneBatchBar();
+}
+
+// Barre d'actions groupées : visible dès qu'au moins une zone est cochée.
+function updateZoneBatchBar() {
+  const bar = document.getElementById('zonebatchbar');
+  if (!bar) return;
+  const n = zoneSelection.size;
+  bar.hidden = n === 0;
+  const count = document.getElementById('zonebatchcount');
+  if (count) count.textContent = n > 1 ? `${n} zones sélectionnées` : `${n} zone sélectionnée`;
 }
 
 function toggleCollapse(zoneId) {
@@ -1303,13 +1349,11 @@ function addZone(parentId) {
   if (parentId) delete state.zoneCollapsed[parentId];
   save();
   renderZones();
-  // focus le champ de la nouvelle zone
-  const input = document.querySelector(`.zone-row[data-id="${zone.id}"] input`);
-  if (input) {
-    input.focus();
-    // assure que le champ est visible
-    input.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  }
+  // Place le curseur dans le champ de la nouvelle zone SANS décaler la vue :
+  // preventScroll garde la position de défilement (et donc le « + » cliqué)
+  // au même endroit, pour enchaîner les ajouts sans remonter à chaque fois.
+  const input = document.querySelector(`.zone-row[data-id="${zone.id}"] .zone-name-input`);
+  if (input) input.focus({ preventScroll: true });
 }
 
 function renameZone(id, name) {
@@ -1401,7 +1445,7 @@ function buildZoneTaskPicker(zone) {
   }
   select.addEventListener('change', () => {
     const sid = select.value;
-    if (sid) addOuvrageToZone(zone.id, sid);
+    if (sid) addOuvrageToZones(zone.id, sid);
     select.value = '';
   });
   picker.appendChild(select);
@@ -1443,6 +1487,27 @@ function addOuvrageToZone(zoneId, setupId) {
   if (!state.zoneOuvrages[zoneId]) state.zoneOuvrages[zoneId] = [];
   if (state.zoneOuvrages[zoneId].some(o => o.setupId === setupId)) return;
   state.zoneOuvrages[zoneId].push({ setupId, quantity: 0 });
+  save();
+  renderZones();
+  renderAvancement();
+}
+
+// Affecte un ouvrage à une zone ; si cette zone fait partie d'une sélection
+// multiple (cases cochées), l'ouvrage est affecté à TOUTES les zones cochées
+// d'un coup. Sinon, comportement normal (une seule zone).
+function addOuvrageToZones(zoneId, setupId) {
+  const targets = (zoneSelection.has(zoneId) && zoneSelection.size > 0)
+    ? [...zoneSelection]
+    : [zoneId];
+  let changed = false;
+  for (const zid of targets) {
+    if (!state.zones.some(z => z.id === zid)) continue; // zone disparue
+    if (!state.zoneOuvrages[zid]) state.zoneOuvrages[zid] = [];
+    if (state.zoneOuvrages[zid].some(o => o.setupId === setupId)) continue; // déjà présent
+    state.zoneOuvrages[zid].push({ setupId, quantity: 0 });
+    changed = true;
+  }
+  if (!changed) return;
   save();
   renderZones();
   renderAvancement();
@@ -10115,6 +10180,8 @@ function init() {
 
   // Zones
   document.getElementById('zoneaddroot').addEventListener('click', () => addZone(null));
+  const zoneBatchClear = document.getElementById('zonebatchclear');
+  if (zoneBatchClear) zoneBatchClear.addEventListener('click', clearZoneSelection);
 
   // Tâches
   document.getElementById('taskfab').addEventListener('click', addTask);
