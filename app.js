@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.25';
+const APP_VERSION = '1.26';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -1189,10 +1189,23 @@ function renderDashboardCompaniesPresence() {
 }
 
 // --- Widget « Avancement par bâtiment » ---
+// % global d'un bâtiment : même pondération horaire que les zones —
+// chaque couple (zone, ouvrage) pèse ses heures allouées. Une façade de
+// 40 h compte ainsi plus qu'un petit voile de 3 h. Repli sur la moyenne
+// simple des zones si aucune heure n'est calculable.
 function getBuildingOverallProgress(buildingId) {
   const descendants = getDescendantZones(buildingId);
   const active = descendants.filter(zid => getZoneOuvrages(zid).length > 0);
   if (active.length === 0) return null;
+  let totalHours = 0, weighted = 0;
+  for (const zid of active) {
+    for (const o of getZoneOuvrages(zid)) {
+      const h = getOuvrageAllocatedHours(o.quantity, o.setup);
+      totalHours += h;
+      weighted += h * getOuvrageRawProgress(zid, o.setup);
+    }
+  }
+  if (totalHours > 0) return weighted / totalHours;
   const total = active.reduce((sum, zid) => sum + getZoneProgress(zid), 0);
   return total / active.length;
 }
@@ -2088,11 +2101,35 @@ function getOuvrageRawProgress(zoneId, setup) {
 function getOuvrageProgress(zoneId, setup) {
   return Math.round(getOuvrageRawProgress(zoneId, setup) * 10) / 10;
 }
-// % global de la zone : moyenne simple des % par ouvrage
-// (placeholder en attendant la décision sur la pondération horaire)
+
+// Heures totales allouées à un ouvrage dans une zone :
+//   quantité de la zone × Σ des ratios des tâches actives (h/unité).
+// Ex. bardage 20 m² à 2 h/m² = 40 h ; habillage alu 5 ml à 0,58 h/ml = 2,9 h.
+// 0 si la quantité ou les ratios ne sont pas renseignés.
+function getOuvrageAllocatedHours(quantity, setup) {
+  if (!setup || !(quantity > 0)) return 0;
+  const totalRatio = setup.tasks
+    .filter(t => !t.excluded)
+    .reduce((s, t) => s + (t.ratio || 0), 0);
+  return quantity * totalRatio;
+}
+
+// % global de la zone : PONDÉRÉ PAR LES HEURES ALLOUÉES de chaque ouvrage
+// (quantité × Σ ratios). Indispensable quand une même zone porte des
+// ouvrages d'unités différentes : bardage 40 h à 0 % + habillage alu
+// 2,9 h à 100 % → 2,9 / 42,9 = 6,8 %, et non 50 % en moyenne simple.
+// Repli sur la moyenne simple si aucun ouvrage n'a d'heures calculables
+// (quantités ou ratios non renseignés).
 function getZoneProgress(zoneId) {
   const ouvrages = getZoneOuvrages(zoneId);
   if (ouvrages.length === 0) return 0;
+  let totalHours = 0, weighted = 0;
+  for (const o of ouvrages) {
+    const h = getOuvrageAllocatedHours(o.quantity, o.setup);
+    totalHours += h;
+    weighted += h * getOuvrageRawProgress(zoneId, o.setup);
+  }
+  if (totalHours > 0) return Math.round((weighted / totalHours) * 10) / 10;
   let sum = 0;
   for (const o of ouvrages) sum += getOuvrageRawProgress(zoneId, o.setup);
   return Math.round((sum / ouvrages.length) * 10) / 10;
