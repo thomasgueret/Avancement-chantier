@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.29';
+const APP_VERSION = '1.30';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -133,7 +133,10 @@ let setupRenaming = false;
 function load() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
+    // Pas de données locales (nouvel appareil) : on saute la lecture mais
+    // les migrations plus bas DOIVENT quand même tourner (migrateSetups
+    // crée la configuration par défaut, etc.).
+    if (!raw) { runPostLoadMigrations(); return; }
     const data = JSON.parse(raw);
     if (data.companies) state.companies = data.companies;
     if (data.zones) state.zones = data.zones;
@@ -214,12 +217,23 @@ function load() {
   } catch (e) {
     console.warn('Lecture stockage impossible', e);
   }
-  // Migrations post-load
+  runPostLoadMigrations();
+}
+
+// Migrations post-load. TOUTES doivent tourner AVANT initSyncStamps : le
+// baseline (_syncJsonCache + seed des stamps) doit refléter l'état DÉJÀ
+// migré, sinon le 1er save() prend le reformatage d'une migration pour une
+// modif utilisateur « de maintenant » et tamponne la clé à l'heure du
+// démarrage — ce qui a fait gagner des données périmées lors de la fusion
+// et effacé des effectifs. (Régression corrigée en v1.30.)
+function runPostLoadMigrations() {
   migrateConsoProductsFromEntries();
   migrateEOTPsFromConsoEntries();
   migrateProtoPlansFromLegacy();
   migrateCRState();
   migrateHeuresWeeks();
+  migratePresences();
+  migrateSetups();
   initSyncStamps();
 }
 
@@ -10102,7 +10116,7 @@ function deleteProtoShape() {
 
 const BACKUP_DB_NAME = 'chantier_backups';
 const BACKUP_STORE = 'snapshots';
-const BACKUP_KEEP = 5;
+const BACKUP_KEEP = 20;
 
 function openBackupDB() {
   return new Promise((resolve, reject) => {
@@ -10146,6 +10160,19 @@ async function createLocalBackup(reason) {
     await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
     return true;
   } finally { db.close(); }
+}
+
+// Sauvegarde « de sécurité » périodique : au démarrage, si aucune
+// sauvegarde n'a été prise depuis > 12 h, on en crée une. Garantit un
+// point de restauration récent même sans conflit de synchro.
+async function maybeCreateStartupBackup() {
+  try {
+    const backups = await listLocalBackups();
+    const last = backups.length ? backups[0].ts : 0;
+    if (Date.now() - last > 12 * 3600 * 1000) {
+      await createLocalBackup('démarrage (sécurité quotidienne)');
+    }
+  } catch (e) { console.warn('Backup démarrage KO', e); }
 }
 
 // Liste les sauvegardes (métadonnées seulement pour l'affichage).
@@ -10691,6 +10718,66 @@ async function doSyncPull(initial = false, opts = {}) {
 // Règle : pour chaque clé synchronisable, gagne la version au stamp le
 // plus récent. Un payload d'ancien client (sans stamps) est daté de son
 // updated_at global. Retourne { remoteWins, localWins }.
+// Collections « journal » : enregistrements saisis à la main, NON
+// reconstituables. Lors d'une fusion on ne SUPPRIME jamais un
+// enregistrement présent d'un côté (union) — un appareil périmé ne peut
+// donc pas effacer les effectifs/saisies des autres. Un conflit ponctuel
+// (même enregistrement édité des deux côtés) est tranché par l'horodatage
+// de clé le plus récent. Compromis assumé : la suppression d'un
+// enregistrement entier ne se propage pas depuis un appareil très en
+// retard (il « réapparaît » — bénin et rare, contre une perte de données
+// catastrophique).
+const SYNC_UNION_DICT_KEYS = new Set([
+  'presences', 'weather', 'taskProgress', 'zoneUpdated',
+  'adminDocs', 'workerDocs', 'heuresData', 'crEntries'
+]);
+const SYNC_UNION_ARRAY_KEYS = new Set([
+  'stockEntries', 'consommableEntries', 'protoShapes'
+]);
+
+function _isPlainObject(v) { return v && typeof v === 'object' && !Array.isArray(v); }
+function _jsonEq(a, b) {
+  return JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
+}
+
+// Union récursive de deux objets : toute sous-clé présente d'un côté est
+// conservée ; en cas de conflit sur une feuille, le côté « le plus récent »
+// gagne (remoteNewer). Les tableaux et scalaires sont des feuilles.
+function unionMergeDeep(local, remote, remoteNewer) {
+  if (_isPlainObject(local) && _isPlainObject(remote)) {
+    const out = {};
+    const keys = new Set([...Object.keys(local), ...Object.keys(remote)]);
+    for (const k of keys) {
+      const hl = Object.prototype.hasOwnProperty.call(local, k);
+      const hr = Object.prototype.hasOwnProperty.call(remote, k);
+      if (hl && hr) out[k] = unionMergeDeep(local[k], remote[k], remoteNewer);
+      else if (hl) out[k] = local[k];
+      else out[k] = remote[k];
+    }
+    return out;
+  }
+  if (_jsonEq(local, remote)) return local;
+  return remoteNewer ? remote : local;
+}
+
+// Union de deux tableaux d'enregistrements par id : aucun id supprimé,
+// conflit tranché par récence. Conserve l'ordre local puis ajoute les
+// enregistrements présents seulement côté distant.
+function unionMergeById(localArr, remoteArr, remoteNewer) {
+  const local = Array.isArray(localArr) ? localArr : [];
+  const remote = Array.isArray(remoteArr) ? remoteArr : [];
+  const keyOf = (x) => (x && x.id != null) ? x.id : JSON.stringify(x);
+  const byId = new Map();
+  const order = [];
+  for (const it of local) { const k = keyOf(it); if (!byId.has(k)) order.push(k); byId.set(k, it); }
+  for (const it of remote) {
+    const k = keyOf(it);
+    if (!byId.has(k)) { order.push(k); byId.set(k, it); }
+    else if (remoteNewer && !_jsonEq(byId.get(k), it)) byId.set(k, it);
+  }
+  return order.map(k => byId.get(k));
+}
+
 async function applyRemoteStateMerge(remoteState, remoteTs) {
   const remoteStamps = (remoteState.syncKeyStamps && typeof remoteState.syncKeyStamps === 'object')
     ? remoteState.syncKeyStamps : {};
@@ -10701,41 +10788,52 @@ async function applyRemoteStateMerge(remoteState, remoteTs) {
   keys.delete('_sourceDeviceId');
   keys.delete('syncKeyStamps');
 
-  // 1er passage : déterminer qui gagne quoi (sans rien modifier).
+  // 1er passage : déterminer la valeur retenue pour chaque clé (sans rien
+  // modifier). toApply = { k, value, stamp }. localWins compte les clés
+  // dont notre version détient des données que le serveur n'a pas encore
+  // (→ il faudra pousser pour faire converger).
   const toApply = [];
   let localWins = 0;
   for (const k of keys) {
     if (SYNC_EXCLUDED_KEYS.has(k) || k.startsWith('_')) continue;
     const inRemote = Object.prototype.hasOwnProperty.call(remoteState, k);
-    if (!inRemote) { localWins++; continue; } // clé locale inconnue du serveur (nouvelle version d'app)
+    if (!inRemote) { localWins++; continue; } // clé locale inconnue du serveur
     const rStamp = Number(remoteStamps[k]) || remoteTs || 0;
     const lStamp = Number(localStamps[k]) || 0;
+
+    // Collections journal : fusion union (jamais de perte d'enregistrement).
+    if (SYNC_UNION_DICT_KEYS.has(k) || SYNC_UNION_ARRAY_KEYS.has(k)) {
+      const remoteNewer = rStamp >= lStamp;
+      const merged = SYNC_UNION_ARRAY_KEYS.has(k)
+        ? unionMergeById(state[k], remoteState[k], remoteNewer)
+        : unionMergeDeep(_isPlainObject(state[k]) ? state[k] : {}, _isPlainObject(remoteState[k]) ? remoteState[k] : {}, remoteNewer);
+      if (!_jsonEq(merged, state[k])) toApply.push({ k, value: merged, stamp: Math.max(rStamp, lStamp) });
+      if (!_jsonEq(merged, remoteState[k])) localWins++; // le serveur ignore une partie de nos données
+      continue;
+    }
+
+    // Autres clés (structurelles / scalaires) : dernier stamp gagnant.
     if (rStamp > lStamp) {
-      // Ne compte comme changement que si la valeur diffère réellement.
-      const rJson = JSON.stringify(remoteState[k] === undefined ? null : remoteState[k]);
-      const lJson = JSON.stringify(state[k] === undefined ? null : state[k]);
-      if (rJson !== lJson) toApply.push({ k, rStamp });
-      else if (rStamp > lStamp) localStamps[k] = rStamp; // aligne le stamp, valeur identique
+      if (!_jsonEq(remoteState[k], state[k])) toApply.push({ k, value: remoteState[k], stamp: rStamp });
+      else localStamps[k] = rStamp; // aligne le stamp, valeur identique
     } else if (lStamp > rStamp) {
-      const rJson = JSON.stringify(remoteState[k] === undefined ? null : remoteState[k]);
-      const lJson = JSON.stringify(state[k] === undefined ? null : state[k]);
-      if (rJson !== lJson) localWins++;
+      if (!_jsonEq(remoteState[k], state[k])) localWins++;
     }
   }
 
   if (toApply.length === 0) return { remoteWins: 0, localWins };
 
   // 2e passage : SAUVEGARDE de l'état actuel avant tout écrasement, puis
-  // application des clés distantes gagnantes.
+  // application des valeurs retenues.
   try {
     await createLocalBackup('avant synchro (' + toApply.map(x => x.k).slice(0, 5).join(', ') + (toApply.length > 5 ? '…' : '') + ')');
   } catch (e) { console.warn('Backup avant synchro KO (on continue)', e); }
 
   _syncApplying = true;
   try {
-    for (const { k, rStamp } of toApply) {
-      state[k] = remoteState[k];
-      localStamps[k] = rStamp;
+    for (const { k, value, stamp } of toApply) {
+      state[k] = value;
+      localStamps[k] = stamp;
     }
     state.syncTimestamp = Math.max(state.syncTimestamp || 0, remoteTs || 0);
     save();
@@ -10847,9 +10945,7 @@ document.addEventListener('visibilitychange', () => {
 
 // ---------- Init ----------
 function init() {
-  load();
-  migratePresences();
-  migrateSetups();
+  load(); // inclut désormais migratePresences() + migrateSetups() (cf. load)
   syncSelfCheck();
   document.getElementById('appversion').textContent = `Version ${APP_VERSION}`;
   renderAll();
@@ -10859,6 +10955,7 @@ function init() {
   // reprise des uploads en attente vers le bucket Storage.
   (async () => {
     try {
+      await maybeCreateStartupBackup();
       const migrated = await migratePlanImagesToIDB();
       if (migrated) renderProto(); // ré-affiche le plan actif depuis le cache
       await gcPlanImages();
