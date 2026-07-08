@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.30';
+const APP_VERSION = '1.31';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -2372,14 +2372,20 @@ function buildProgressItem(zoneId, setup, task, quantity) {
   if (quantity > 0) {
     const meta = document.createElement('span');
     meta.className = 'progress-task-meta';
-    const qtyTxt = `${formatRatio(quantity)} ${setup.unit || 'm²'}`;
+    // Deux lignes empilées (gain de largeur) : quantité au-dessus, ratio
+    // d'heures réalisées / allouées en dessous.
+    const qty = document.createElement('span');
+    qty.className = 'progress-task-meta-qty';
+    qty.textContent = `${formatRatio(quantity)} ${setup.unit || 'm²'}`;
+    meta.appendChild(qty);
     const hours = quantity * (task.ratio || 0);
     if (!task.excluded && hours > 0) {
       const allocated = Math.round(hours * 10) / 10;
       const realized = Math.round(hours * percent / 100 * 10) / 10;
-      meta.textContent = `${qtyTxt} · ${formatRatio(realized)} / ${formatRatio(allocated)} h`;
-    } else {
-      meta.textContent = qtyTxt;
+      const hrs = document.createElement('span');
+      hrs.className = 'progress-task-meta-hours';
+      hrs.textContent = `${formatRatio(realized)} / ${formatRatio(allocated)} h`;
+      meta.appendChild(hrs);
     }
     li.querySelector('.progress-info').after(meta);
   }

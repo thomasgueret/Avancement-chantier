@@ -994,18 +994,23 @@ input, select { font: inherit; }
   color: var(--text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-/* Récap quantité · heures allouées, entre le nom et le compteur de %.
+/* Récap entre le nom et le compteur de % : quantité au-dessus, ratio
+   heures réalisées / allouées en dessous (empilé pour gagner en largeur).
    Les heures (quantité × ratio) sont la pondération de la tâche dans
    l'avancement global de l'ouvrage. */
 .progress-task-meta {
   flex-shrink: 0;
+  display: flex; flex-direction: column;
+  align-items: flex-end; gap: 1px;
   font-size: 11.5px; font-weight: 600;
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  text-align: right;
+  line-height: 1.2;
 }
-.progress-item.is-done .progress-task-meta { color: var(--success-2); }
+.progress-task-meta-hours { font-size: 11px; color: var(--text-4); }
+.progress-item.is-done .progress-task-meta,
+.progress-item.is-done .progress-task-meta-hours { color: var(--success-2); }
 .progress-tag {
   flex-shrink: 0;
   font-size: 10px; font-weight: 700;
