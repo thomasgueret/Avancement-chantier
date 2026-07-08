@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.28';
+const APP_VERSION = '1.29';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -8446,11 +8446,13 @@ function renderProto() {
   // IndexedDB (ou le bucket Storage si elle vient d'un autre appareil).
   const img = document.getElementById('protoimage');
   const cachedImg = planImageCache.get(plan.id);
-  img.src = cachedImg || '';
-  if (!cachedImg) {
-    loadPlanImage(plan.id).then(dataUrl => {
-      if (dataUrl && state.protoActivePlanId === plan.id) img.src = dataUrl;
-    });
+  if (cachedImg) {
+    img.src = cachedImg;
+  } else {
+    // Pas d'image en cache : on évite un src vide (flash d'image cassée)
+    // et on tente le chargement avec réessais (IDB → bucket Storage).
+    img.removeAttribute('src');
+    ensurePlanImageDisplayed(plan.id, img);
   }
   const svg = document.getElementById('protosvg');
   svg.setAttribute('viewBox', `0 0 ${plan.w} ${plan.h}`);
@@ -10272,27 +10274,51 @@ async function loadPlanImage(planId) {
   if (!supa || !supa.storage) return null;
   try {
     const { data, error } = await supa.storage.from(PLANS_BUCKET).download(planId + '.jpg');
-    if (error || !data) { notePlanBucketError(error); return null; }
+    if (error || !data) { classifyPlanStorageError(error); return null; }
     const dataUrl = await blobToDataUrl(data);
     planImageCache.set(planId, dataUrl);
     mediaPutPlanImage(planId, dataUrl).catch(e => console.warn('IDB put KO', e));
     return dataUrl;
-  } catch (e) { notePlanBucketError(e); return null; }
+  } catch (e) { classifyPlanStorageError(e); return null; }
 }
 
-function notePlanBucketError(err) {
+// Distingue le bucket absent (problème de config, on latche + informe)
+// d'une erreur TRANSITOIRE (image d'un autre appareil pas encore
+// uploadée = « Object not found » ; réseau). Un objet manquant NE doit
+// PAS désactiver la synchro : il suffit de réessayer un peu plus tard.
+function classifyPlanStorageError(err) {
   const msg = String((err && err.message) || err || '');
-  // « Bucket not found » / 400/404 : le bucket n'existe pas encore côté
-  // Supabase → informer une fois, arrêter de réessayer cette session.
-  if (/bucket|not.*found|400|404/i.test(msg)) {
+  if (/bucket not found|bucket.*does not exist|no such bucket/i.test(msg)) {
     _planBucketMissing = true;
     if (!_planBucketToastShown && typeof showToast === 'function') {
       _planBucketToastShown = true;
       showToast('Synchro des plans inactive : bucket « plans » absent côté Supabase (exécutez supabase-plans.sql).', 'error');
     }
     console.warn('[Plans] bucket Storage indisponible :', msg);
-  } else {
-    console.warn('[Plans] Storage KO :', msg);
+    return 'bucket-missing';
+  }
+  // Object not found / 404 / réseau → transitoire, on réessaiera.
+  console.info('[Plans] image indisponible pour l\'instant (transitoire) :', msg);
+  return 'transient';
+}
+
+// Affiche l'image d'un plan dans <img>, avec réessais si elle vient
+// d'être uploadée par un autre appareil et n'est pas encore disponible
+// (fenêtre de quelques secondes le temps de l'upload). S'arrête si le
+// plan n'est plus actif ou si le bucket est absent.
+const PLAN_IMG_RETRY_DELAYS = [2000, 4000, 8000, 15000];
+async function ensurePlanImageDisplayed(planId, imgEl) {
+  for (let attempt = 0; attempt <= PLAN_IMG_RETRY_DELAYS.length; attempt++) {
+    if (state.protoActivePlanId !== planId) return;      // l'utilisateur a changé de plan
+    const dataUrl = await loadPlanImage(planId);
+    if (dataUrl) {
+      if (state.protoActivePlanId === planId && imgEl) imgEl.src = dataUrl;
+      return;
+    }
+    if (_planBucketMissing) return;                      // inutile d'insister
+    if (attempt < PLAN_IMG_RETRY_DELAYS.length) {
+      await new Promise(r => setTimeout(r, PLAN_IMG_RETRY_DELAYS[attempt]));
+    }
   }
 }
 
@@ -10328,7 +10354,7 @@ async function processPlanUploadQueue() {
       const blob = await (await fetch(dataUrl)).blob();
       const { error } = await supa.storage.from(PLANS_BUCKET)
         .upload(planId + '.jpg', blob, { upsert: true, contentType: 'image/jpeg' });
-      if (error) { notePlanBucketError(error); break; } // on retentera plus tard
+      if (error) { classifyPlanStorageError(error); break; } // bucket absent ou réseau → on retentera
       q.shift(); setPlanUploadQueue(q);
     }
   } catch (e) {
