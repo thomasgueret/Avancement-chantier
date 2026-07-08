@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.27';
+const APP_VERSION = '1.28';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -8318,6 +8318,7 @@ function removeProtoFolder(id) {
   state.protoPlans = getProtoPlans().filter(p => p.folderId !== id);
   state.protoShapes = state.protoShapes.filter(s => !ids.has(s.planId));
   state.protoFolders = getProtoFolders().filter(x => x.id !== id);
+  for (const pid of ids) deletePlanImageEverywhere(pid);
   // Si le plan actif a disparu, en choisit un autre
   if (!getActiveProtoPlan()) state.protoActivePlanId = (getProtoPlans()[0]?.id) || '';
   save();
@@ -8338,6 +8339,7 @@ function removeProtoPlan(id) {
   if (!confirm(`Supprimer le plan « ${p.name || 'sans nom'} » et ses ${nb} forme(s) ?`)) return;
   state.protoPlans = getProtoPlans().filter(x => x.id !== id);
   state.protoShapes = state.protoShapes.filter(s => s.planId !== id);
+  deletePlanImageEverywhere(id);
   if (state.protoActivePlanId === id) {
     state.protoActivePlanId = (getProtoPlans()[0]?.id) || '';
   }
@@ -8439,9 +8441,17 @@ function renderProto() {
   empty.hidden  = !!plan;
   editor.hidden = !plan;
   if (!plan) return;
-  // Image + SVG calés sur la même viewBox = dimensions naturelles px
+  // Image + SVG calés sur la même viewBox = dimensions naturelles px.
+  // L'image vient du cache mémoire ; sinon chargement asynchrone depuis
+  // IndexedDB (ou le bucket Storage si elle vient d'un autre appareil).
   const img = document.getElementById('protoimage');
-  img.src = plan.dataUrl;
+  const cachedImg = planImageCache.get(plan.id);
+  img.src = cachedImg || '';
+  if (!cachedImg) {
+    loadPlanImage(plan.id).then(dataUrl => {
+      if (dataUrl && state.protoActivePlanId === plan.id) img.src = dataUrl;
+    });
+  }
   const svg = document.getElementById('protosvg');
   svg.setAttribute('viewBox', `0 0 ${plan.w} ${plan.h}`);
   renderProtoPlanSelector();
@@ -9005,22 +9015,29 @@ function addProtoPlanFromCanvas(canvas, baseName, folderId, suffix) {
       name = candidate;
     }
     const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    // L'image vit en IndexedDB (+ bucket Supabase Storage pour les autres
+    // appareils) ; le state ne porte que les métadonnées — le quota
+    // localStorage n'est plus une contrainte.
     const plan = {
       id: 'pln_' + uid(), folderId: folder.id, name,
-      dataUrl, w: canvas.width, h: canvas.height
+      w: canvas.width, h: canvas.height
     };
     const prevActiveId = state.protoActivePlanId;
     state.protoPlans.push(plan);
     state.protoActivePlanId = plan.id;
-    // save() retourne false si le quota localStorage est dépassé : dans ce
-    // cas le plan N'EST PAS persisté — on annule au lieu de laisser croire
-    // qu'il est sauvegardé (il disparaîtrait au prochain rechargement).
     if (!save()) {
       state.protoPlans.pop();
       state.protoActivePlanId = prevActiveId;
       save();
       return false;
     }
+    planImageCache.set(plan.id, dataUrl);
+    mediaPutPlanImage(plan.id, dataUrl)
+      .then(() => queuePlanUpload(plan.id))
+      .catch(e => {
+        console.error('IDB plan KO', e);
+        showToast('Image du plan non persistée (stockage navigateur indisponible)', 'error');
+      });
     return true;
   } catch (err) {
     return false;
@@ -9250,7 +9267,9 @@ function loadImagePromise(dataUrl) {
 // au SVG). Le canvas a la résolution naturelle du plan, garantissant
 // un export net même après agrandissement dans le PDF.
 async function renderProtoExportCanvas(plan) {
-  const img = await loadImagePromise(plan.dataUrl);
+  const dataUrl = await loadPlanImage(plan.id);
+  if (!dataUrl) throw new Error('Image du plan indisponible (pas encore synchronisée ?)');
+  const img = await loadImagePromise(dataUrl);
   const canvas = document.createElement('canvas');
   canvas.width  = plan.w;
   canvas.height = plan.h;
@@ -10166,6 +10185,206 @@ async function restoreLocalBackup(id) {
   window.location.reload();
 }
 
+// ====================================================================
+//   IMAGES DES PLANS — IndexedDB local + Supabase Storage pour la synchro
+// ====================================================================
+// Les images (dataUrl JPEG ~0,5 Mo pièce) ne vivent plus dans le state :
+//  - localStorage ne contient que les métadonnées {id, folderId, name, w, h}
+//    → plus jamais de quota dépassé (~5 Mo), capacité ~200-500 plans en IDB ;
+//  - le payload de synchro redescend à quelques centaines de Ko → push/pull
+//    rapides, plus de risque de timeout Supabase ;
+//  - chaque image est uploadée UNE SEULE FOIS dans le bucket Storage
+//    « plans » (SQL de création : supabase-plans.sql) et téléchargée à la
+//    demande par les autres appareils, puis mise en cache local.
+
+const MEDIA_DB_NAME = 'chantier_media';
+const MEDIA_STORE = 'plans';
+const PLAN_UPLOAD_QUEUE_KEY = 'chantier_plan_upload_queue';
+const PLANS_BUCKET = 'plans';
+
+const planImageCache = new Map(); // planId → dataUrl (cache mémoire de session)
+let _planBucketMissing = false;   // bucket absent : on arrête de réessayer cette session
+let _planBucketToastShown = false;
+
+function openMediaDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(MEDIA_DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(MEDIA_STORE)) {
+        db.createObjectStore(MEDIA_STORE, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function mediaPutPlanImage(planId, dataUrl) {
+  const db = await openMediaDB();
+  try {
+    const tx = db.transaction(MEDIA_STORE, 'readwrite');
+    tx.objectStore(MEDIA_STORE).put({ id: planId, dataUrl });
+    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+  } finally { db.close(); }
+}
+async function mediaGetPlanImage(planId) {
+  const db = await openMediaDB();
+  try {
+    const rec = await idbReq(db.transaction(MEDIA_STORE, 'readonly').objectStore(MEDIA_STORE).get(planId));
+    return rec ? rec.dataUrl : null;
+  } finally { db.close(); }
+}
+async function mediaDeletePlanImage(planId) {
+  const db = await openMediaDB();
+  try {
+    const tx = db.transaction(MEDIA_STORE, 'readwrite');
+    tx.objectStore(MEDIA_STORE).delete(planId);
+    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+  } finally { db.close(); }
+}
+async function mediaListPlanIds() {
+  const db = await openMediaDB();
+  try {
+    return await idbReq(db.transaction(MEDIA_STORE, 'readonly').objectStore(MEDIA_STORE).getAllKeys());
+  } finally { db.close(); }
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result);
+    fr.onerror = () => rej(fr.error);
+    fr.readAsDataURL(blob);
+  });
+}
+
+// Récupère l'image d'un plan : cache mémoire → IndexedDB → Supabase
+// Storage (autre appareil). Renvoie null si introuvable partout.
+async function loadPlanImage(planId) {
+  if (planImageCache.has(planId)) return planImageCache.get(planId);
+  try {
+    const local = await mediaGetPlanImage(planId);
+    if (local) { planImageCache.set(planId, local); return local; }
+  } catch (e) { console.warn('IDB plans KO', e); }
+  // Téléchargement depuis le bucket (image uploadée par un autre appareil)
+  if (_planBucketMissing) return null;
+  const supa = await loadSupabase();
+  if (!supa || !supa.storage) return null;
+  try {
+    const { data, error } = await supa.storage.from(PLANS_BUCKET).download(planId + '.jpg');
+    if (error || !data) { notePlanBucketError(error); return null; }
+    const dataUrl = await blobToDataUrl(data);
+    planImageCache.set(planId, dataUrl);
+    mediaPutPlanImage(planId, dataUrl).catch(e => console.warn('IDB put KO', e));
+    return dataUrl;
+  } catch (e) { notePlanBucketError(e); return null; }
+}
+
+function notePlanBucketError(err) {
+  const msg = String((err && err.message) || err || '');
+  // « Bucket not found » / 400/404 : le bucket n'existe pas encore côté
+  // Supabase → informer une fois, arrêter de réessayer cette session.
+  if (/bucket|not.*found|400|404/i.test(msg)) {
+    _planBucketMissing = true;
+    if (!_planBucketToastShown && typeof showToast === 'function') {
+      _planBucketToastShown = true;
+      showToast('Synchro des plans inactive : bucket « plans » absent côté Supabase (exécutez supabase-plans.sql).', 'error');
+    }
+    console.warn('[Plans] bucket Storage indisponible :', msg);
+  } else {
+    console.warn('[Plans] Storage KO :', msg);
+  }
+}
+
+// --- File d'attente d'upload (persistée : survit aux rechargements) ---
+function getPlanUploadQueue() {
+  try { return JSON.parse(localStorage.getItem(PLAN_UPLOAD_QUEUE_KEY) || '[]'); }
+  catch (_) { return []; }
+}
+function setPlanUploadQueue(ids) {
+  try { localStorage.setItem(PLAN_UPLOAD_QUEUE_KEY, JSON.stringify(ids)); } catch (_) {}
+}
+function queuePlanUpload(planId) {
+  const q = getPlanUploadQueue();
+  if (!q.includes(planId)) { q.push(planId); setPlanUploadQueue(q); }
+  processPlanUploadQueue();
+}
+let _planUploadRunning = false;
+async function processPlanUploadQueue() {
+  if (_planUploadRunning || _planBucketMissing || !isSupabaseConfigured()) return;
+  const supa = await loadSupabase();
+  if (!supa || !supa.storage) return;
+  _planUploadRunning = true;
+  try {
+    let q = getPlanUploadQueue();
+    while (q.length > 0) {
+      const planId = q[0];
+      // Plan supprimé entre-temps : on retire de la file sans uploader
+      if (!getProtoPlans().some(p => p.id === planId)) {
+        q.shift(); setPlanUploadQueue(q); continue;
+      }
+      const dataUrl = planImageCache.get(planId) || await mediaGetPlanImage(planId);
+      if (!dataUrl) { q.shift(); setPlanUploadQueue(q); continue; }
+      const blob = await (await fetch(dataUrl)).blob();
+      const { error } = await supa.storage.from(PLANS_BUCKET)
+        .upload(planId + '.jpg', blob, { upsert: true, contentType: 'image/jpeg' });
+      if (error) { notePlanBucketError(error); break; } // on retentera plus tard
+      q.shift(); setPlanUploadQueue(q);
+    }
+  } catch (e) {
+    console.warn('[Plans] upload KO (retentera)', e);
+  } finally { _planUploadRunning = false; }
+}
+
+// Suppression distante (best-effort : une image orpheline dans le bucket
+// n'a aucun impact fonctionnel).
+async function deletePlanImageRemote(planId) {
+  if (_planBucketMissing || !isSupabaseConfigured()) return;
+  try {
+    const supa = await loadSupabase();
+    if (supa && supa.storage) await supa.storage.from(PLANS_BUCKET).remove([planId + '.jpg']);
+  } catch (e) { console.warn('[Plans] suppression distante KO', e); }
+}
+
+// Suppression complète (cache + IDB + file + bucket) — utilisée par
+// removeProtoPlan / removeProtoFolder.
+function deletePlanImageEverywhere(planId) {
+  planImageCache.delete(planId);
+  setPlanUploadQueue(getPlanUploadQueue().filter(id => id !== planId));
+  mediaDeletePlanImage(planId).catch(e => console.warn('IDB delete KO', e));
+  deletePlanImageRemote(planId);
+}
+
+// Migration : extrait les dataUrl encore présents dans state.protoPlans
+// (versions ≤ 1.27, ou payload poussé par un ancien client) vers IDB,
+// allège le state et programme l'upload vers le bucket.
+async function migratePlanImagesToIDB() {
+  const plans = getProtoPlans();
+  const toMigrate = plans.filter(p => typeof p.dataUrl === 'string' && p.dataUrl.length > 0);
+  if (toMigrate.length === 0) return false;
+  for (const p of toMigrate) {
+    planImageCache.set(p.id, p.dataUrl);
+    try { await mediaPutPlanImage(p.id, p.dataUrl); }
+    catch (e) { console.warn('Migration plan → IDB KO pour', p.id, e); continue; }
+    delete p.dataUrl;
+    queuePlanUpload(p.id);
+  }
+  save(); // le JSON localStorage redevient léger
+  console.info(`[Plans] ${toMigrate.length} image(s) migrée(s) vers IndexedDB`);
+  return true;
+}
+
+// Nettoyage : supprime de l'IDB les images de plans qui n'existent plus.
+async function gcPlanImages() {
+  try {
+    const ids = await mediaListPlanIds();
+    const known = new Set(getProtoPlans().map(p => p.id));
+    for (const id of ids) {
+      if (!known.has(id)) await mediaDeletePlanImage(id);
+    }
+  } catch (e) { console.warn('GC plans KO', e); }
+}
+
 // Liste des sauvegardes dans Données → Admin (asynchrone, best-effort).
 async function renderBackupsList() {
   const ul = document.getElementById('backuplist');
@@ -10349,7 +10568,8 @@ async function doSyncPush() {
     const headTs = head && head.updated_at ? new Date(head.updated_at).getTime() : 0;
     if (headTs && headTs !== (state.syncLastSeenRemoteTs || 0)) {
       // Le serveur a une version qu'on n'a jamais intégrée → fusion d'abord.
-      await doSyncPull(false, { skipPushGuard: true });
+      // (skipHeadCheck : on vient de vérifier updated_at, inutile de relire.)
+      await doSyncPull(false, { skipPushGuard: true, skipHeadCheck: true });
     }
     const payload = getSyncablePayload();
     const payloadJson = JSON.stringify(payload);
@@ -10367,6 +10587,8 @@ async function doSyncPush() {
     state.syncLastSeenRemoteTs = new Date(updatedAt).getTime();
     _hasPendingPush = false;
     setSyncStatus('idle');
+    // Profite du réseau disponible pour écouler les images en attente
+    processPlanUploadQueue();
   } catch (err) {
     console.error('Sync push KO', err);
     setSyncStatus('error');
@@ -10383,6 +10605,24 @@ async function doSyncPull(initial = false, opts = {}) {
   if (!supa) { setSyncStatus('error'); return; }
   setSyncStatus('syncing');
   try {
+    // PULL EN DEUX TEMPS : on lit d'abord SEULEMENT updated_at (quelques
+    // octets). Si le serveur n'a pas bougé depuis la dernière version vue,
+    // on s'arrête là — le polling (20 s) ne télécharge plus l'état complet
+    // inutilement (avant : tout l'état à chaque tick, plans compris).
+    if (!opts.skipHeadCheck) {
+      const { data: head, error: headErr } = await supa
+        .from('site_data')
+        .select('updated_at')
+        .eq('site_id', SHARED_SITE_ID)
+        .maybeSingle();
+      if (headErr) throw headErr;
+      const headTs = head && head.updated_at ? new Date(head.updated_at).getTime() : 0;
+      if (!initial && head && headTs && headTs === (state.syncLastSeenRemoteTs || 0)) {
+        state.syncLastPulled = Date.now();
+        setSyncStatus('idle');
+        return;
+      }
+    }
     const { data, error } = await supa
       .from('site_data')
       .select('state, updated_at')
@@ -10475,6 +10715,12 @@ async function applyRemoteStateMerge(remoteState, remoteTs) {
     save();
     renderAll();
   } finally { _syncApplying = false; }
+  // Un ancien client (≤ v1.27) peut avoir poussé des plans avec l'image
+  // dataUrl embarquée : on l'extrait vers IndexedDB pour ré-alléger le
+  // state (et on la republie vers le bucket au passage).
+  if (getProtoPlans().some(p => typeof p.dataUrl === 'string' && p.dataUrl.length > 0)) {
+    migratePlanImagesToIDB().catch(e => console.warn('Migration plans post-pull KO', e));
+  }
   return { remoteWins: toApply.length, localWins };
 }
 
@@ -10560,6 +10806,7 @@ window.addEventListener('online', () => {
     setSyncStatus('idle');
     schedulePush();
   }
+  processPlanUploadQueue(); // reprend les uploads d'images en attente
 });
 window.addEventListener('offline', () => {
   if (isSupabaseConfigured()) setSyncStatus('offline');
@@ -10580,6 +10827,18 @@ function init() {
   syncSelfCheck();
   document.getElementById('appversion').textContent = `Version ${APP_VERSION}`;
   renderAll();
+
+  // Images des plans : migration v1.27 → IndexedDB (allège localStorage
+  // et le payload de synchro), nettoyage des images orphelines, puis
+  // reprise des uploads en attente vers le bucket Storage.
+  (async () => {
+    try {
+      const migrated = await migratePlanImagesToIDB();
+      if (migrated) renderProto(); // ré-affiche le plan actif depuis le cache
+      await gcPlanImages();
+      processPlanUploadQueue();
+    } catch (e) { console.warn('Init images plans KO', e); }
+  })();
 
   // Tabs (bas de l'écran)
   document.querySelectorAll('.tab-btn').forEach(btn => {
