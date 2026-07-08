@@ -69,6 +69,29 @@ body {
 }
 button { font: inherit; cursor: pointer; }
 input, select { font: inherit; }
+/* Menus déroulants : sur PC, le popup natif des <option> a un fond clair.
+   Sans couleur explicite, les options héritent du texte crème du thème
+   sombre → texte illisible (blanc sur blanc). On force donc un texte
+   quasi-noir sur fond clair dans le popup, et un filet de sécurité pour
+   tout <select> qui n'aurait pas de fond propre (état fermé lisible). */
+select { color: var(--text); background-color: var(--surface); color-scheme: light; }
+option {
+  background-color: #ffffff;
+  color: #1a1a1a;
+}
+
+/* Onglet ST — placeholder en attendant le contenu */
+.st-placeholder {
+  text-align: center;
+  padding: 40px 16px;
+  color: var(--text-3);
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  margin-top: 8px;
+}
+.st-placeholder p { margin: 4px 0; }
+.st-placeholder .hint { font-size: 13px; color: var(--text-4); }
 
 /* ============ HEADER ============ */
 .app-header {
