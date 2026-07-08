@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.26';
+const APP_VERSION = '1.27';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -2348,18 +2348,25 @@ function buildProgressItem(zoneId, setup, task, quantity) {
     tag.textContent = 'hors ratio';
     li.querySelector('.progress-info').appendChild(tag);
   }
-  // Récap quantité + heures allouées (quantité × ratio), entre le nom et
-  // le sélecteur de %. Rien n'est affiché si la quantité n'est pas
-  // renseignée dans Données → Zones. Ces heures sont la pondération de la
-  // tâche dans le % global de l'ouvrage (cf. getOuvrageRawProgress).
+  // Récap quantité + heures « réalisées / allouées », entre le nom et le
+  // sélecteur de %. Les heures allouées = quantité × ratio ; les heures
+  // réalisées = allouées × avancement (ex. 4 h à 80 % → 3,2 / 4 h).
+  // Rien n'est affiché si la quantité n'est pas renseignée dans
+  // Données → Zones. Ces heures sont la pondération de la tâche dans le
+  // % global de l'ouvrage (cf. getOuvrageRawProgress) — l'affichage des
+  // heures réalisées est purement informatif.
   if (quantity > 0) {
     const meta = document.createElement('span');
     meta.className = 'progress-task-meta';
     const qtyTxt = `${formatRatio(quantity)} ${setup.unit || 'm²'}`;
     const hours = quantity * (task.ratio || 0);
-    meta.textContent = (!task.excluded && hours > 0)
-      ? `${qtyTxt} · ${formatRatio(Math.round(hours * 10) / 10)} h`
-      : qtyTxt;
+    if (!task.excluded && hours > 0) {
+      const allocated = Math.round(hours * 10) / 10;
+      const realized = Math.round(hours * percent / 100 * 10) / 10;
+      meta.textContent = `${qtyTxt} · ${formatRatio(realized)} / ${formatRatio(allocated)} h`;
+    } else {
+      meta.textContent = qtyTxt;
+    }
     li.querySelector('.progress-info').after(meta);
   }
   li.querySelector('.counter-value').textContent = `${percent} %`;
