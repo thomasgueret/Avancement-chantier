@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.32';
+const APP_VERSION = '1.33';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -108,6 +108,10 @@ const state = {
   crCustomSections: [],      // [{ key: 'custom_<uid>', label }] — rubriques ajoutées par l'utilisateur
   crWeeks: {},               // { [companyId]: [{ id, label, createdAt }] }
   crSelectedWeekId: {},      // { [companyId]: weekId } — semaine active (UI per-device)
+  // ST (sous-traitants) : lignes texte + montants € par groupe et par entreprise.
+  // { [companyId]: { [groupKey]: [{ id, text, amount }] } }
+  stEntries: {},
+  stSelectedCompanyId: null, // entreprise affichée dans le slider ST (UI per-device)
   // Synchronisation (modèle simplifié : un seul jeu partagé via Supabase)
   syncStatus: 'idle',        // 'idle' | 'syncing' | 'error' | 'offline'
   syncTimestamp: 0,          // ms epoch — dernier changement local connu
@@ -203,6 +207,8 @@ function load() {
     if (data.crWeeks && typeof data.crWeeks === 'object') state.crWeeks = data.crWeeks;
     if (data.crSelectedCompanyId) state.crSelectedCompanyId = data.crSelectedCompanyId;
     if (data.crSelectedWeekId && typeof data.crSelectedWeekId === 'object') state.crSelectedWeekId = data.crSelectedWeekId;
+    if (data.stEntries && typeof data.stEntries === 'object') state.stEntries = data.stEntries;
+    if (data.stSelectedCompanyId) state.stSelectedCompanyId = data.stSelectedCompanyId;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
     if (typeof data.syncTimestamp === 'number') state.syncTimestamp = data.syncTimestamp;
@@ -289,6 +295,8 @@ function buildPersistedData() {
     crWeeks: state.crWeeks,
     crSelectedCompanyId: state.crSelectedCompanyId,
     crSelectedWeekId: state.crSelectedWeekId,
+    stEntries: state.stEntries,
+    stSelectedCompanyId: state.stSelectedCompanyId,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange,
     syncTimestamp: state.syncTimestamp,
@@ -537,6 +545,7 @@ function renderAll() {
   renderStock();
   renderConsommable();
   renderCR();
+  renderST();
   renderHeures();
   renderDashboard();
   renderBackupsList(); // async, best-effort
@@ -6718,6 +6727,207 @@ function buildHeuresFoot(selected) {
   return tfoot;
 }
 
+// ========================================================================
+// ST (sous-traitants) — onglets par entreprise (comme CR) + 4 groupes de
+// lignes texte/montant avec total en bas de chaque groupe.
+// ========================================================================
+const ST_GROUPS = [
+  { key: 'conforme', label: 'Conforme' },
+  { key: 'marche',   label: 'Marché traité' },
+  { key: 'rad',      label: 'Reste à Dépenser' },
+  { key: 'rat',      label: 'Reste à Traiter' }
+];
+
+function getSTSelectedCompany() {
+  if (!state.companies.length) return null;
+  if (state.stSelectedCompanyId) {
+    const c = state.companies.find(c => c.id === state.stSelectedCompanyId);
+    if (c) return c;
+  }
+  return state.companies[0];
+}
+function setSTSelectedCompany(companyId) {
+  state.stSelectedCompanyId = companyId;
+  save();
+  renderST();
+}
+
+function getSTEntries(companyId, groupKey) {
+  const c = state.stEntries[companyId];
+  if (!c || !Array.isArray(c[groupKey])) return [];
+  return c[groupKey];
+}
+function ensureSTBucket(companyId, groupKey) {
+  if (!state.stEntries[companyId]) state.stEntries[companyId] = {};
+  if (!Array.isArray(state.stEntries[companyId][groupKey])) state.stEntries[companyId][groupKey] = [];
+  return state.stEntries[companyId][groupKey];
+}
+function getSTGroupTotal(companyId, groupKey) {
+  return getSTEntries(companyId, groupKey).reduce((s, e) => s + (Number(e.amount) || 0), 0);
+}
+function addSTEntry(companyId, groupKey) {
+  const list = ensureSTBucket(companyId, groupKey);
+  list.push({ id: uid(), text: '', amount: 0 });
+  save();
+  renderST();
+  requestAnimationFrame(() => {
+    const last = document.querySelector(
+      `.st-entry[data-company-id="${cssEscape(companyId)}"][data-group-key="${groupKey}"]:last-of-type .st-entry-text`);
+    if (last) last.focus();
+  });
+}
+function setSTEntryField(companyId, groupKey, entryId, field, value) {
+  const list = getSTEntries(companyId, groupKey);
+  const entry = list.find(e => e.id === entryId);
+  if (!entry) return;
+  if (field === 'text') {
+    entry.text = value;
+    save();
+    // pas de re-render : on ne casse pas le focus de la frappe
+  } else if (field === 'amount') {
+    const n = parseFloat(String(value).replace(/[^\d,.-]/g, '').replace(',', '.'));
+    entry.amount = Number.isFinite(n) ? n : 0;
+    save();
+    refreshSTGroupTotal(companyId, groupKey); // total à jour sans re-render
+  }
+}
+function deleteSTEntry(companyId, groupKey, entryId) {
+  const c = state.stEntries[companyId];
+  if (!c || !Array.isArray(c[groupKey])) return;
+  c[groupKey] = c[groupKey].filter(e => e.id !== entryId);
+  save();
+  renderST();
+}
+function refreshSTGroupTotal(companyId, groupKey) {
+  const el = document.querySelector(
+    `.st-group[data-company-id="${cssEscape(companyId)}"][data-group-key="${groupKey}"] .st-group-total-val`);
+  if (el) el.textContent = fmtEur(getSTGroupTotal(companyId, groupKey));
+}
+
+function renderST() {
+  const slider = document.getElementById('stslider');
+  const body = document.getElementById('stbody');
+  const empty = document.getElementById('stempty');
+  if (!slider || !body) return;
+  if (!state.stEntries || typeof state.stEntries !== 'object') state.stEntries = {};
+  slider.innerHTML = '';
+  body.innerHTML = '';
+  if (!state.companies.length) {
+    if (empty) empty.hidden = false;
+    slider.hidden = true; body.hidden = true;
+    return;
+  }
+  if (empty) empty.hidden = true;
+  slider.hidden = false; body.hidden = false;
+
+  const selected = getSTSelectedCompany();
+  for (const c of state.companies) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'cr-slider-chip' + (selected && c.id === selected.id ? ' is-active' : '');
+    chip.dataset.stAction = 'select-company';
+    chip.dataset.companyId = c.id;
+    chip.textContent = c.name;
+    slider.appendChild(chip);
+  }
+  if (!selected) return;
+
+  const card = document.createElement('div');
+  card.className = 'st-company';
+  for (const g of ST_GROUPS) card.appendChild(buildSTGroup(selected.id, g));
+  body.appendChild(card);
+}
+
+function buildSTGroup(companyId, group) {
+  const wrap = document.createElement('div');
+  wrap.className = 'st-group';
+  wrap.dataset.companyId = companyId;
+  wrap.dataset.groupKey = group.key;
+
+  const head = document.createElement('div');
+  head.className = 'st-group-head';
+  head.innerHTML = `
+    <span class="st-group-name"></span>
+    <button type="button" class="st-add-entry" data-st-action="add-entry" data-company-id="${companyId}" data-group-key="${group.key}" aria-label="Ajouter une ligne">+</button>
+  `;
+  head.querySelector('.st-group-name').textContent = group.label;
+  wrap.appendChild(head);
+
+  const list = document.createElement('div');
+  list.className = 'st-group-body';
+  const entries = getSTEntries(companyId, group.key);
+  if (entries.length === 0) {
+    const ph = document.createElement('p');
+    ph.className = 'st-group-empty';
+    ph.textContent = 'Aucune ligne. Touchez + pour en ajouter une.';
+    list.appendChild(ph);
+  } else {
+    for (const e of entries) list.appendChild(buildSTEntry(companyId, group.key, e));
+  }
+  wrap.appendChild(list);
+
+  // Total du groupe : bandeau orange, écriture blanche.
+  const foot = document.createElement('div');
+  foot.className = 'st-group-total';
+  foot.innerHTML = `<span class="st-group-total-label">Total</span><span class="st-group-total-val"></span>`;
+  foot.querySelector('.st-group-total-val').textContent = fmtEur(getSTGroupTotal(companyId, group.key));
+  wrap.appendChild(foot);
+  return wrap;
+}
+
+function buildSTEntry(companyId, groupKey, entry) {
+  const row = document.createElement('div');
+  row.className = 'st-entry';
+  row.dataset.companyId = companyId;
+  row.dataset.groupKey = groupKey;
+  row.dataset.entryId = entry.id;
+
+  const ta = document.createElement('textarea');
+  ta.className = 'st-entry-text';
+  ta.rows = 1;
+  ta.placeholder = 'Description…';
+  ta.value = entry.text || '';
+  ta.dataset.stAction = 'edit-text';
+  ta.dataset.companyId = companyId;
+  ta.dataset.groupKey = groupKey;
+  ta.dataset.entryId = entry.id;
+  const autoResize = () => { ta.style.height = 'auto'; ta.style.height = (ta.scrollHeight + 2) + 'px'; };
+  ta.addEventListener('input', autoResize);
+  setTimeout(autoResize, 0);
+  row.appendChild(ta);
+
+  const amtWrap = document.createElement('div');
+  amtWrap.className = 'st-entry-amount-wrap';
+  const amt = document.createElement('input');
+  amt.className = 'st-entry-amount';
+  amt.type = 'text';
+  amt.inputMode = 'decimal';
+  amt.placeholder = '0';
+  amt.value = entry.amount ? fmtPriceForInput(entry.amount) : '';
+  amt.dataset.stAction = 'edit-amount';
+  amt.dataset.companyId = companyId;
+  amt.dataset.groupKey = groupKey;
+  amt.dataset.entryId = entry.id;
+  amtWrap.appendChild(amt);
+  const eur = document.createElement('span');
+  eur.className = 'st-entry-eur';
+  eur.textContent = '€';
+  amtWrap.appendChild(eur);
+  row.appendChild(amtWrap);
+
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'st-entry-delete';
+  del.dataset.stAction = 'delete-entry';
+  del.dataset.companyId = companyId;
+  del.dataset.groupKey = groupKey;
+  del.dataset.entryId = entry.id;
+  del.setAttribute('aria-label', 'Supprimer cette ligne');
+  del.innerHTML = '×';
+  row.appendChild(del);
+  return row;
+}
+
 // Unité la plus récemment utilisée pour un produit (pour pré-remplir
 // le sélecteur unité quand on choisit un produit existant).
 function getMostRecentUnitForProduct(name) {
@@ -7993,6 +8203,7 @@ function switchPage(name) {
   if (name === 'dashboard') renderDashboard();
   if (name === 'proto') renderProto();
   if (name === 'cr') renderCR();
+  if (name === 'st') renderST();
   // Synchro : à chaque changement d'onglet, on tente un pull en arrière-
   // plan pour récupérer les dernières modifs des coéquipiers.
   if (isSupabaseConfigured()) {
@@ -10571,6 +10782,7 @@ const SYNC_EXCLUDED_KEYS = new Set([
   'echeckinCollapsed',               // sections eCheckIn pliées/dépliées
   'crSelectedCompanyId',             // entreprise sélectionnée dans le slider CR (UI)
   'crSelectedWeekId',                // semaine CR sélectionnée par entreprise (UI)
+  'stSelectedCompanyId',             // entreprise sélectionnée dans le slider ST (UI)
   'syncStatus', 'syncTimestamp', 'syncLastPulled', 'syncLastSeenRemoteTs',
   'protoPlan', 'protoPlanW', 'protoPlanH' // champs hérités migrés
 ]);
@@ -10735,7 +10947,7 @@ async function doSyncPull(initial = false, opts = {}) {
 // catastrophique).
 const SYNC_UNION_DICT_KEYS = new Set([
   'presences', 'weather', 'taskProgress', 'zoneUpdated',
-  'adminDocs', 'workerDocs', 'heuresData', 'crEntries'
+  'adminDocs', 'workerDocs', 'heuresData', 'crEntries', 'stEntries'
 ]);
 const SYNC_UNION_ARRAY_KEYS = new Set([
   'stockEntries', 'consommableEntries', 'protoShapes'
@@ -11364,6 +11576,30 @@ function init() {
       const ta = e.target.closest('textarea[data-cr-action="edit-entry"]');
       if (!ta) return;
       updateCREntry(ta.dataset.companyId, ta.dataset.weekId, ta.dataset.sectionKey, ta.dataset.entryId, ta.value);
+    });
+  }
+
+  // ----- ST : délégation d'événements sur la page entière -----
+  const stPage = document.getElementById('page-st');
+  if (stPage) {
+    stPage.addEventListener('click', (e) => {
+      const t = e.target.closest('[data-st-action]');
+      if (!t) return;
+      const { stAction, companyId, groupKey, entryId } = t.dataset;
+      if (stAction === 'select-company') setSTSelectedCompany(companyId);
+      else if (stAction === 'add-entry') addSTEntry(companyId, groupKey);
+      else if (stAction === 'delete-entry') {
+        if (confirm('Supprimer cette ligne ?')) deleteSTEntry(companyId, groupKey, entryId);
+      }
+    });
+    stPage.addEventListener('input', (e) => {
+      const el = e.target.closest('[data-st-action]');
+      if (!el) return;
+      if (el.dataset.stAction === 'edit-text') {
+        setSTEntryField(el.dataset.companyId, el.dataset.groupKey, el.dataset.entryId, 'text', el.value);
+      } else if (el.dataset.stAction === 'edit-amount') {
+        setSTEntryField(el.dataset.companyId, el.dataset.groupKey, el.dataset.entryId, 'amount', el.value);
+      }
     });
   }
 

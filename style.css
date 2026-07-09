@@ -80,18 +80,105 @@ option {
   color: #1a1a1a;
 }
 
-/* Onglet ST — placeholder en attendant le contenu */
-.st-placeholder {
-  text-align: center;
-  padding: 40px 16px;
-  color: var(--text-3);
-  background: var(--surface);
-  border: 1px dashed var(--border-strong);
+/* ============ ONGLET ST (sous-traitants) ============ */
+.st-company { display: flex; flex-direction: column; gap: 14px; }
+.st-group {
+  border: 1px solid var(--border);
   border-radius: var(--radius);
-  margin-top: 8px;
+  background: var(--surface);
+  overflow: hidden;
 }
-.st-placeholder p { margin: 4px 0; }
-.st-placeholder .hint { font-size: 13px; color: var(--text-4); }
+.st-group-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.st-group-name {
+  flex: 1; min-width: 0;
+  font-size: 13px; font-weight: 700;
+  color: var(--text);
+  text-transform: uppercase; letter-spacing: 0.03em;
+}
+.st-add-entry {
+  flex-shrink: 0;
+  width: 30px; height: 30px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; background: var(--accent); color: #fff;
+  border-radius: 50%; font-size: 18px; font-weight: 700;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.st-add-entry:active { background: var(--accent-dark); }
+.st-group-body { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; }
+.st-group-empty {
+  margin: 0; font-size: 12px; font-style: italic;
+  color: var(--text-3);
+}
+
+/* Ligne : description (gauche) + montant € (droite) + suppression */
+.st-entry {
+  display: flex; align-items: flex-start; gap: 8px;
+}
+.st-entry-text {
+  flex: 1; min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  font-family: inherit; font-size: 14px; color: var(--text);
+  resize: none; padding: 8px 10px;
+  min-height: 38px; max-height: 200px;
+  line-height: 1.35; overflow: hidden;
+}
+.st-entry-text:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+.st-entry-text::placeholder { color: var(--text-3); font-style: italic; }
+.st-entry-amount-wrap {
+  flex-shrink: 0;
+  display: flex; align-items: center;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  padding-right: 8px;
+}
+.st-entry-amount-wrap:focus-within { border-color: var(--accent); background: var(--surface); }
+.st-entry-amount {
+  width: 92px;
+  border: none; background: transparent;
+  font-family: inherit; font-size: 14px; font-weight: 600;
+  color: var(--text);
+  text-align: right;
+  padding: 8px 4px 8px 10px;
+  font-variant-numeric: tabular-nums;
+}
+.st-entry-amount:focus { outline: none; }
+.st-entry-amount::placeholder { color: var(--text-3); }
+.st-entry-eur { font-size: 13px; font-weight: 600; color: var(--text-2); }
+.st-entry-delete {
+  flex-shrink: 0;
+  width: 32px; height: 38px;
+  border: none; background: transparent;
+  color: var(--text-3);
+  font-size: 20px; line-height: 1;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+  border-radius: var(--radius-sm);
+}
+.st-entry-delete:active { background: var(--surface-2); color: var(--danger); }
+
+/* Total du groupe : bandeau orange, écriture blanche */
+.st-group-total {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--accent);
+  color: #fff;
+}
+.st-group-total-label {
+  font-size: 12px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.st-group-total-val {
+  font-size: 16px; font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
 
 /* ============ HEADER ============ */
 .app-header {
