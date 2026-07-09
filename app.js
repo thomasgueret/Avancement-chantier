@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.33';
+const APP_VERSION = '1.34';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -6788,7 +6788,8 @@ function setSTEntryField(companyId, groupKey, entryId, field, value) {
     const n = parseFloat(String(value).replace(/[^\d,.-]/g, '').replace(',', '.'));
     entry.amount = Number.isFinite(n) ? n : 0;
     save();
-    refreshSTGroupTotal(companyId, groupKey); // total à jour sans re-render
+    refreshSTGroupTotal(companyId, groupKey); // total du groupe à jour…
+    refreshSTRecap(companyId);                // …et le bandeau récap
   }
 }
 function deleteSTEntry(companyId, groupKey, entryId) {
@@ -6834,8 +6835,60 @@ function renderST() {
 
   const card = document.createElement('div');
   card.className = 'st-company';
+  card.appendChild(buildSTRecap(selected.id));
   for (const g of ST_GROUPS) card.appendChild(buildSTGroup(selected.id, g));
   body.appendChild(card);
+}
+
+// Récap financier de l'entreprise sélectionnée.
+//  Total budget   = groupe « Conforme »
+//  Total dépenses = « Marché traité » + « Reste à Dépenser » + « Reste à Traiter »
+//  Écart          = budget − dépenses   (pourcentage = écart / budget × 100)
+function computeSTRecap(companyId) {
+  const budget = getSTGroupTotal(companyId, 'conforme');
+  const depenses = getSTGroupTotal(companyId, 'marche')
+    + getSTGroupTotal(companyId, 'rad')
+    + getSTGroupTotal(companyId, 'rat');
+  const ecart = budget - depenses;
+  const pct = budget !== 0 ? (ecart / budget) * 100 : null;
+  return { budget, depenses, ecart, pct };
+}
+function stEcartText(r) {
+  return r.pct != null
+    ? `${fmtEur(r.ecart)} (${formatPct(Math.round(r.pct * 10) / 10)} %)`
+    : fmtEur(r.ecart);
+}
+function buildSTRecap(companyId) {
+  const r = computeSTRecap(companyId);
+  const el = document.createElement('div');
+  el.className = 'st-recap';
+  el.dataset.companyId = companyId;
+  el.innerHTML = `
+    <div class="st-recap-cell">
+      <span class="st-recap-label">Total budget</span>
+      <span class="st-recap-val" data-st-recap="budget"></span>
+    </div>
+    <div class="st-recap-cell">
+      <span class="st-recap-label">Total dépenses</span>
+      <span class="st-recap-val" data-st-recap="depenses"></span>
+    </div>
+    <div class="st-recap-cell">
+      <span class="st-recap-label">Écart</span>
+      <span class="st-recap-val" data-st-recap="ecart"></span>
+    </div>
+  `;
+  el.querySelector('[data-st-recap="budget"]').textContent = fmtEur(r.budget);
+  el.querySelector('[data-st-recap="depenses"]').textContent = fmtEur(r.depenses);
+  el.querySelector('[data-st-recap="ecart"]').textContent = stEcartText(r);
+  return el;
+}
+function refreshSTRecap(companyId) {
+  const el = document.querySelector(`.st-recap[data-company-id="${cssEscape(companyId)}"]`);
+  if (!el) return;
+  const r = computeSTRecap(companyId);
+  el.querySelector('[data-st-recap="budget"]').textContent = fmtEur(r.budget);
+  el.querySelector('[data-st-recap="depenses"]').textContent = fmtEur(r.depenses);
+  el.querySelector('[data-st-recap="ecart"]').textContent = stEcartText(r);
 }
 
 function buildSTGroup(companyId, group) {

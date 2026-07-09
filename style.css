@@ -82,6 +82,29 @@ option {
 
 /* ============ ONGLET ST (sous-traitants) ============ */
 .st-company { display: flex; flex-direction: column; gap: 14px; }
+
+/* Bandeau récap (budget / dépenses / écart) — fond orange, texte blanc */
+.st-recap {
+  display: flex; flex-wrap: wrap;
+  gap: 10px 22px;
+  padding: 14px 16px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: var(--radius);
+}
+.st-recap-cell {
+  display: flex; flex-direction: column; gap: 2px;
+  flex: 1 1 auto; min-width: 120px;
+}
+.st-recap-label {
+  font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  opacity: 0.9;
+}
+.st-recap-val {
+  font-size: 18px; font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
 .st-group {
   border: 1px solid var(--border);
   border-radius: var(--radius);
