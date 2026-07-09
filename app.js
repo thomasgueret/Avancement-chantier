@@ -7,7 +7,16 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.34';
+const APP_VERSION = '1.35';
+
+// ====================================================================
+//   MOT DE PASSE DE L'ONGLET « ST »
+// ====================================================================
+// Pour CHANGER le mot de passe de l'onglet ST : modifiez la valeur
+// ci-dessous (fichier app.js, tout en haut). C'est le seul endroit à
+// éditer. Note : c'est une protection d'affichage (le code est public
+// côté navigateur), pas un secret cryptographique.
+const ST_PASSWORD = 'Thomas123';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -6805,6 +6814,44 @@ function refreshSTGroupTotal(companyId, groupKey) {
   if (el) el.textContent = fmtEur(getSTGroupTotal(companyId, groupKey));
 }
 
+// Déverrouillage de l'onglet ST — valable pour la session (jusqu'au
+// rechargement de la page). Non persisté, non synchronisé.
+let stUnlocked = false;
+
+// Écran de saisie du mot de passe (cf. constante ST_PASSWORD en haut du
+// fichier). Une fois le bon mot de passe entré, l'onglet reste déverrouillé
+// jusqu'au prochain rechargement de l'app.
+function buildSTLock() {
+  const wrap = document.createElement('div');
+  wrap.className = 'st-lock';
+  wrap.innerHTML = `
+    <div class="st-lock-icon">🔒</div>
+    <p class="st-lock-title">Contenu protégé</p>
+    <p class="st-lock-help">Entrez le mot de passe pour afficher l'onglet ST.</p>
+    <input type="password" class="st-lock-input" placeholder="Mot de passe" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <button type="button" class="btn-primary st-lock-btn">Déverrouiller</button>
+    <p class="st-lock-error" hidden>Mot de passe incorrect.</p>
+  `;
+  const input = wrap.querySelector('.st-lock-input');
+  const btn   = wrap.querySelector('.st-lock-btn');
+  const err   = wrap.querySelector('.st-lock-error');
+  const attempt = () => {
+    if (input.value === ST_PASSWORD) {
+      stUnlocked = true;
+      renderST();
+    } else {
+      err.hidden = false;
+      input.value = '';
+      input.focus();
+    }
+  };
+  btn.addEventListener('click', attempt);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); attempt(); } });
+  input.addEventListener('input', () => { err.hidden = true; });
+  setTimeout(() => input.focus(), 60);
+  return wrap;
+}
+
 function renderST() {
   const slider = document.getElementById('stslider');
   const body = document.getElementById('stbody');
@@ -6813,6 +6860,15 @@ function renderST() {
   if (!state.stEntries || typeof state.stEntries !== 'object') state.stEntries = {};
   slider.innerHTML = '';
   body.innerHTML = '';
+  // Verrou : tant que le mot de passe n'est pas saisi, on masque tout le
+  // contenu (sélecteur + groupes) et on affiche l'écran de déverrouillage.
+  if (!stUnlocked) {
+    slider.hidden = true;
+    if (empty) empty.hidden = true;
+    body.hidden = false;
+    body.appendChild(buildSTLock());
+    return;
+  }
   if (!state.companies.length) {
     if (empty) empty.hidden = false;
     slider.hidden = true; body.hidden = true;

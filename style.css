@@ -81,6 +81,35 @@ option {
 }
 
 /* ============ ONGLET ST (sous-traitants) ============ */
+/* Écran de verrouillage (mot de passe) */
+.st-lock {
+  max-width: 340px;
+  margin: 32px auto;
+  display: flex; flex-direction: column; align-items: center;
+  gap: 10px;
+  padding: 28px 22px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-align: center;
+}
+.st-lock-icon { font-size: 34px; }
+.st-lock-title { margin: 0; font-size: 16px; font-weight: 700; color: var(--text); }
+.st-lock-help { margin: 0 0 6px; font-size: 13px; color: var(--text-3); }
+.st-lock-input {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  padding: 11px 14px;
+  font-size: 16px;
+  color: var(--text);
+  text-align: center;
+}
+.st-lock-input:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+.st-lock-btn { width: 100%; }
+.st-lock-error { margin: 2px 0 0; font-size: 13px; font-weight: 600; color: var(--danger); }
+
 .st-company { display: flex; flex-direction: column; gap: 14px; }
 
 /* Bandeau récap (budget / dépenses / écart) — fond orange, texte blanc */
