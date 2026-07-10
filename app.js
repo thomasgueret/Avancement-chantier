@@ -7,15 +7,15 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.35';
+const APP_VERSION = '1.36';
 
 // ====================================================================
-//   MOT DE PASSE DE L'ONGLET « ST »
+//   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
 // ====================================================================
-// Pour CHANGER le mot de passe de l'onglet ST : modifiez la valeur
-// ci-dessous (fichier app.js, tout en haut). C'est le seul endroit à
-// éditer. Note : c'est une protection d'affichage (le code est public
-// côté navigateur), pas un secret cryptographique.
+// Pour CHANGER le mot de passe : modifiez la valeur ci-dessous (fichier
+// app.js, tout en haut). C'est le seul endroit à éditer, et il protège
+// les DEUX onglets ST et Devis. Note : c'est une protection d'affichage
+// (le code est public côté navigateur), pas un secret cryptographique.
 const ST_PASSWORD = 'Thomas123';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
@@ -118,9 +118,12 @@ const state = {
   crWeeks: {},               // { [companyId]: [{ id, label, createdAt }] }
   crSelectedWeekId: {},      // { [companyId]: weekId } — semaine active (UI per-device)
   // ST (sous-traitants) : lignes texte + montants € par groupe et par entreprise.
-  // { [companyId]: { [groupKey]: [{ id, text, amount }] } }
+  // { [companyId]: { [groupKey]: [{ id, text, amount, sourceDevisLineId? }] } }
   stEntries: {},
   stSelectedCompanyId: null, // entreprise affichée dans le slider ST (UI per-device)
+  // Devis : [{ id, number, etat, lines: [{ id, text, amount, companyId }] }]
+  devis: [],
+  devisSelectedId: '',       // devis affiché (UI per-device)
   // Synchronisation (modèle simplifié : un seul jeu partagé via Supabase)
   syncStatus: 'idle',        // 'idle' | 'syncing' | 'error' | 'offline'
   syncTimestamp: 0,          // ms epoch — dernier changement local connu
@@ -218,6 +221,8 @@ function load() {
     if (data.crSelectedWeekId && typeof data.crSelectedWeekId === 'object') state.crSelectedWeekId = data.crSelectedWeekId;
     if (data.stEntries && typeof data.stEntries === 'object') state.stEntries = data.stEntries;
     if (data.stSelectedCompanyId) state.stSelectedCompanyId = data.stSelectedCompanyId;
+    if (Array.isArray(data.devis)) state.devis = data.devis;
+    if (typeof data.devisSelectedId === 'string') state.devisSelectedId = data.devisSelectedId;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
     if (typeof data.syncTimestamp === 'number') state.syncTimestamp = data.syncTimestamp;
@@ -306,6 +311,8 @@ function buildPersistedData() {
     crSelectedWeekId: state.crSelectedWeekId,
     stEntries: state.stEntries,
     stSelectedCompanyId: state.stSelectedCompanyId,
+    devis: state.devis,
+    devisSelectedId: state.devisSelectedId,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange,
     syncTimestamp: state.syncTimestamp,
@@ -555,6 +562,7 @@ function renderAll() {
   renderConsommable();
   renderCR();
   renderST();
+  renderDevis();
   renderHeures();
   renderDashboard();
   renderBackupsList(); // async, best-effort
@@ -6814,20 +6822,20 @@ function refreshSTGroupTotal(companyId, groupKey) {
   if (el) el.textContent = fmtEur(getSTGroupTotal(companyId, groupKey));
 }
 
-// Déverrouillage de l'onglet ST — valable pour la session (jusqu'au
-// rechargement de la page). Non persisté, non synchronisé.
-let stUnlocked = false;
+// Déverrouillage PARTAGÉ des onglets protégés (ST + Devis) — valable pour
+// la session (jusqu'au rechargement). Non persisté, non synchronisé.
+// Un seul mot de passe (ST_PASSWORD) et un seul déverrouillage pour les deux.
+let protectedUnlocked = false;
 
 // Écran de saisie du mot de passe (cf. constante ST_PASSWORD en haut du
-// fichier). Une fois le bon mot de passe entré, l'onglet reste déverrouillé
-// jusqu'au prochain rechargement de l'app.
-function buildSTLock() {
+// fichier). onUnlock() est appelé une fois le bon mot de passe entré.
+function buildProtectedLock(tabLabel, onUnlock) {
   const wrap = document.createElement('div');
   wrap.className = 'st-lock';
   wrap.innerHTML = `
     <div class="st-lock-icon">🔒</div>
     <p class="st-lock-title">Contenu protégé</p>
-    <p class="st-lock-help">Entrez le mot de passe pour afficher l'onglet ST.</p>
+    <p class="st-lock-help">Entrez le mot de passe pour afficher l'onglet ${tabLabel}.</p>
     <input type="password" class="st-lock-input" placeholder="Mot de passe" autocomplete="off" autocapitalize="off" spellcheck="false">
     <button type="button" class="btn-primary st-lock-btn">Déverrouiller</button>
     <p class="st-lock-error" hidden>Mot de passe incorrect.</p>
@@ -6837,8 +6845,8 @@ function buildSTLock() {
   const err   = wrap.querySelector('.st-lock-error');
   const attempt = () => {
     if (input.value === ST_PASSWORD) {
-      stUnlocked = true;
-      renderST();
+      protectedUnlocked = true;
+      onUnlock();
     } else {
       err.hidden = false;
       input.value = '';
@@ -6862,11 +6870,11 @@ function renderST() {
   body.innerHTML = '';
   // Verrou : tant que le mot de passe n'est pas saisi, on masque tout le
   // contenu (sélecteur + groupes) et on affiche l'écran de déverrouillage.
-  if (!stUnlocked) {
+  if (!protectedUnlocked) {
     slider.hidden = true;
     if (empty) empty.hidden = true;
     body.hidden = false;
-    body.appendChild(buildSTLock());
+    body.appendChild(buildProtectedLock('ST', renderST));
     return;
   }
   if (!state.companies.length) {
@@ -7031,6 +7039,357 @@ function buildSTEntry(companyId, groupKey, entry) {
   del.dataset.companyId = companyId;
   del.dataset.groupKey = groupKey;
   del.dataset.entryId = entry.id;
+  del.setAttribute('aria-label', 'Supprimer cette ligne');
+  del.innerHTML = '×';
+  row.appendChild(del);
+  return row;
+}
+
+// ========================================================================
+// DEVIS — onglets colorés par état, encart récap, lignes texte + montant €
+// + entreprise bénéficiaire. Chaque ligne rattachée à une entreprise crée
+// automatiquement une entrée « Devis n°XX : … » dans ST → groupe Conforme.
+// ========================================================================
+const DEVIS_ETATS = [
+  { key: 'brouillon', label: 'Brouillon',    color: '#6b7280' }, // gris
+  { key: 'envoye',    label: 'Envoyé',       color: '#f2691e' }, // orange
+  { key: 'valide',    label: 'Validé',       color: '#16a34a' }, // vert
+  { key: 'os',        label: 'OS reçu',      color: '#14532d' }, // vert foncé
+  { key: 'avenant',   label: 'Avenant reçu', color: '#111827' }  // noir
+];
+function getDevisEtat(key) {
+  return DEVIS_ETATS.find(e => e.key === key) || DEVIS_ETATS[0];
+}
+
+function getDevisList() { return Array.isArray(state.devis) ? state.devis : (state.devis = []); }
+function getDevisById(id) { return getDevisList().find(d => d.id === id) || null; }
+function getSelectedDevis() {
+  const list = getDevisList();
+  if (!list.length) return null;
+  return list.find(d => d.id === state.devisSelectedId) || list[0];
+}
+function setSelectedDevis(id) {
+  state.devisSelectedId = id;
+  save();
+  renderDevis();
+}
+function getNextDevisNumber() {
+  let max = 0;
+  for (const d of getDevisList()) if (Number(d.number) > max) max = Number(d.number);
+  return max + 1;
+}
+function addDevis() {
+  const d = { id: 'dv_' + uid(), number: getNextDevisNumber(), etat: 'brouillon', lines: [] };
+  getDevisList().push(d);
+  state.devisSelectedId = d.id;
+  save();
+  renderDevis();
+}
+function deleteDevis(id) {
+  const d = getDevisById(id);
+  if (!d) return;
+  if (!confirm(`Supprimer le devis n°${d.number} et ses lignes ?\nLes lignes ST liées seront aussi retirées.`)) return;
+  for (const line of (d.lines || [])) removeSTEntryForDevisLine(line.id);
+  state.devis = getDevisList().filter(x => x.id !== id);
+  if (state.devisSelectedId === id) {
+    const list = getDevisList();
+    state.devisSelectedId = list.length ? list[list.length - 1].id : '';
+  }
+  save();
+  renderDevis();
+  renderST();
+}
+function setDevisEtat(id, etat) {
+  const d = getDevisById(id);
+  if (!d) return;
+  d.etat = etat;
+  save();
+  renderDevis(); // recolore l'onglet
+}
+
+// --- Lignes de devis ---
+function addDevisLine(devisId) {
+  const d = getDevisById(devisId);
+  if (!d) return;
+  if (!Array.isArray(d.lines)) d.lines = [];
+  const line = { id: 'dl_' + uid(), text: '', amount: 0, companyId: '' };
+  d.lines.push(line);
+  save();
+  renderDevis();
+  requestAnimationFrame(() => {
+    const last = document.querySelector(`.devis-line[data-line-id="${cssEscape(line.id)}"] .devis-line-text`);
+    if (last) last.focus();
+  });
+}
+function setDevisLineField(devisId, lineId, field, value) {
+  const d = getDevisById(devisId);
+  if (!d) return;
+  const line = (d.lines || []).find(l => l.id === lineId);
+  if (!line) return;
+  if (field === 'text') {
+    line.text = value;
+    syncDevisLineToST(line, d);
+    save();
+  } else if (field === 'amount') {
+    const n = parseFloat(String(value).replace(/[^\d,.-]/g, '').replace(',', '.'));
+    line.amount = Number.isFinite(n) ? n : 0;
+    syncDevisLineToST(line, d);
+    save();
+    refreshDevisRecap(d.id);
+    renderST(); // le montant Conforme change → récap ST à jour
+  } else if (field === 'companyId') {
+    line.companyId = value || '';
+    syncDevisLineToST(line, d);
+    save();
+    renderST();
+  }
+}
+function deleteDevisLine(devisId, lineId) {
+  const d = getDevisById(devisId);
+  if (!d) return;
+  d.lines = (d.lines || []).filter(l => l.id !== lineId);
+  removeSTEntryForDevisLine(lineId);
+  save();
+  renderDevis();
+  renderST();
+}
+
+// --- Pont Devis → ST (groupe Conforme de l'entreprise bénéficiaire) ---
+function findSTEntryForDevisLine(lineId) {
+  for (const cid of Object.keys(state.stEntries || {})) {
+    const arr = state.stEntries[cid] && state.stEntries[cid].conforme;
+    if (!Array.isArray(arr)) continue;
+    const e = arr.find(x => x.sourceDevisLineId === lineId);
+    if (e) return { companyId: cid, entry: e };
+  }
+  return null;
+}
+function removeSTEntryForDevisLine(lineId) {
+  for (const cid of Object.keys(state.stEntries || {})) {
+    const arr = state.stEntries[cid] && state.stEntries[cid].conforme;
+    if (!Array.isArray(arr)) continue;
+    state.stEntries[cid].conforme = arr.filter(x => x.sourceDevisLineId !== lineId);
+  }
+}
+// Crée / met à jour / déplace / retire l'entrée ST liée à une ligne de devis.
+function syncDevisLineToST(line, devis) {
+  const existing = findSTEntryForDevisLine(line.id);
+  if (!line.companyId) {                 // pas d'entreprise → pas d'entrée ST
+    if (existing) removeSTEntryForDevisLine(line.id);
+    return;
+  }
+  const text = `Devis n°${devis.number} : ${line.text || ''}`;
+  const amount = Number(line.amount) || 0;
+  if (existing && existing.companyId === line.companyId) {
+    existing.entry.text = text;
+    existing.entry.amount = amount;
+  } else {
+    if (existing) removeSTEntryForDevisLine(line.id); // entreprise changée → on déplace
+    const bucket = ensureSTBucket(line.companyId, 'conforme');
+    bucket.push({ id: uid(), text, amount, sourceDevisLineId: line.id });
+  }
+}
+
+// --- Récap d'un devis ---
+function computeDevisRecap(devis) {
+  const lines = (devis && devis.lines) || [];
+  const total = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+  return { total, count: lines.length };
+}
+function refreshDevisRecap(devisId) {
+  const d = getDevisById(devisId);
+  if (!d) return;
+  const el = document.querySelector(`.devis-recap[data-devis-id="${cssEscape(devisId)}"]`);
+  if (!el) return;
+  const r = computeDevisRecap(d);
+  const t = el.querySelector('[data-devis-recap="total"]');
+  const c = el.querySelector('[data-devis-recap="count"]');
+  if (t) t.textContent = fmtEur(r.total);
+  if (c) c.textContent = String(r.count);
+}
+
+// --- Rendu ---
+function renderDevis() {
+  const tabs = document.getElementById('devistabs');
+  const body = document.getElementById('devisbody');
+  if (!tabs || !body) return;
+  tabs.innerHTML = '';
+  body.innerHTML = '';
+  // Verrou partagé avec ST
+  if (!protectedUnlocked) {
+    tabs.hidden = true;
+    body.hidden = false;
+    body.appendChild(buildProtectedLock('Devis', renderDevis));
+    return;
+  }
+  tabs.hidden = false; body.hidden = false;
+
+  const list = getDevisList();
+  const selected = getSelectedDevis();
+  for (const d of list) {
+    const et = getDevisEtat(d.etat);
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.className = 'devis-tab' + (selected && d.id === selected.id ? ' is-active' : '');
+    tab.dataset.devisAction = 'select';
+    tab.dataset.devisId = d.id;
+    tab.style.background = et.color;
+    tab.textContent = 'Devis ' + d.number;
+    tabs.appendChild(tab);
+  }
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'devis-tab devis-tab-add';
+  add.dataset.devisAction = 'add';
+  add.setAttribute('aria-label', 'Nouveau devis');
+  add.textContent = '+';
+  tabs.appendChild(add);
+
+  if (!selected) {
+    const empty = document.createElement('p');
+    empty.className = 'st-group-empty';
+    empty.style.padding = '20px 4px';
+    empty.textContent = 'Aucun devis. Touchez + pour en créer un.';
+    body.appendChild(empty);
+    return;
+  }
+  body.appendChild(buildDevisBody(selected));
+}
+
+function buildDevisBody(devis) {
+  const card = document.createElement('div');
+  card.className = 'devis-card';
+
+  // Ligne état + suppression
+  const etatRow = document.createElement('div');
+  etatRow.className = 'devis-etat-row';
+  const sel = document.createElement('select');
+  sel.className = 'devis-etat-select';
+  sel.dataset.devisAction = 'set-etat';
+  sel.dataset.devisId = devis.id;
+  sel.setAttribute('aria-label', 'État du devis');
+  for (const e of DEVIS_ETATS) {
+    const opt = new Option(e.label, e.key);
+    if (e.key === devis.etat) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  const etatLabel = document.createElement('span');
+  etatLabel.className = 'devis-etat-label';
+  etatLabel.textContent = 'État :';
+  etatRow.appendChild(etatLabel);
+  etatRow.appendChild(sel);
+  const delBtn = document.createElement('button');
+  delBtn.type = 'button';
+  delBtn.className = 'devis-delete-btn';
+  delBtn.dataset.devisAction = 'delete';
+  delBtn.dataset.devisId = devis.id;
+  delBtn.textContent = 'Supprimer le devis';
+  etatRow.appendChild(delBtn);
+  card.appendChild(etatRow);
+
+  // Encart récap (orange, comme ST)
+  const r = computeDevisRecap(devis);
+  const recap = document.createElement('div');
+  recap.className = 'st-recap devis-recap';
+  recap.dataset.devisId = devis.id;
+  recap.innerHTML = `
+    <div class="st-recap-cell">
+      <span class="st-recap-label">Montant total</span>
+      <span class="st-recap-val" data-devis-recap="total"></span>
+    </div>
+    <div class="st-recap-cell">
+      <span class="st-recap-label">Nombre de lignes</span>
+      <span class="st-recap-val" data-devis-recap="count"></span>
+    </div>
+  `;
+  recap.querySelector('[data-devis-recap="total"]').textContent = fmtEur(r.total);
+  recap.querySelector('[data-devis-recap="count"]').textContent = String(r.count);
+  card.appendChild(recap);
+
+  // Lignes
+  const lines = document.createElement('div');
+  lines.className = 'devis-lines';
+  if (!devis.lines || devis.lines.length === 0) {
+    const ph = document.createElement('p');
+    ph.className = 'st-group-empty';
+    ph.textContent = 'Aucune ligne. Touchez « + Ajouter une ligne ».';
+    lines.appendChild(ph);
+  } else {
+    for (const line of devis.lines) lines.appendChild(buildDevisLine(devis.id, line));
+  }
+  card.appendChild(lines);
+
+  const addLine = document.createElement('button');
+  addLine.type = 'button';
+  addLine.className = 'cr-add-section devis-add-line';
+  addLine.dataset.devisAction = 'add-line';
+  addLine.dataset.devisId = devis.id;
+  addLine.textContent = '+ Ajouter une ligne';
+  card.appendChild(addLine);
+  return card;
+}
+
+function buildDevisLine(devisId, line) {
+  const row = document.createElement('div');
+  row.className = 'devis-line st-entry';
+  row.dataset.devisId = devisId;
+  row.dataset.lineId = line.id;
+
+  const ta = document.createElement('textarea');
+  ta.className = 'st-entry-text devis-line-text';
+  ta.rows = 1;
+  ta.placeholder = 'Description…';
+  ta.value = line.text || '';
+  ta.dataset.devisAction = 'edit-text';
+  ta.dataset.devisId = devisId;
+  ta.dataset.lineId = line.id;
+  const autoResize = () => { ta.style.height = 'auto'; ta.style.height = (ta.scrollHeight + 2) + 'px'; };
+  ta.addEventListener('input', autoResize);
+  setTimeout(autoResize, 0);
+  row.appendChild(ta);
+
+  // Sélecteur entreprise bénéficiaire
+  const comp = document.createElement('select');
+  comp.className = 'devis-line-company';
+  comp.dataset.devisAction = 'edit-company';
+  comp.dataset.devisId = devisId;
+  comp.dataset.lineId = line.id;
+  comp.setAttribute('aria-label', 'Entreprise bénéficiaire');
+  const none = new Option('— Entreprise —', '');
+  if (!line.companyId) none.selected = true;
+  comp.appendChild(none);
+  for (const c of state.companies) {
+    const opt = new Option(c.name, c.id);
+    if (c.id === line.companyId) opt.selected = true;
+    comp.appendChild(opt);
+  }
+  row.appendChild(comp);
+
+  // Montant €
+  const amtWrap = document.createElement('div');
+  amtWrap.className = 'st-entry-amount-wrap';
+  const amt = document.createElement('input');
+  amt.className = 'st-entry-amount';
+  amt.type = 'text';
+  amt.inputMode = 'decimal';
+  amt.placeholder = '0';
+  amt.value = line.amount ? fmtPriceForInput(line.amount) : '';
+  amt.dataset.devisAction = 'edit-amount';
+  amt.dataset.devisId = devisId;
+  amt.dataset.lineId = line.id;
+  amtWrap.appendChild(amt);
+  const eur = document.createElement('span');
+  eur.className = 'st-entry-eur';
+  eur.textContent = '€';
+  amtWrap.appendChild(eur);
+  row.appendChild(amtWrap);
+
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'st-entry-delete';
+  del.dataset.devisAction = 'delete-line';
+  del.dataset.devisId = devisId;
+  del.dataset.lineId = line.id;
   del.setAttribute('aria-label', 'Supprimer cette ligne');
   del.innerHTML = '×';
   row.appendChild(del);
@@ -8313,6 +8672,7 @@ function switchPage(name) {
   if (name === 'proto') renderProto();
   if (name === 'cr') renderCR();
   if (name === 'st') renderST();
+  if (name === 'devis') renderDevis();
   // Synchro : à chaque changement d'onglet, on tente un pull en arrière-
   // plan pour récupérer les dernières modifs des coéquipiers.
   if (isSupabaseConfigured()) {
@@ -10892,6 +11252,7 @@ const SYNC_EXCLUDED_KEYS = new Set([
   'crSelectedCompanyId',             // entreprise sélectionnée dans le slider CR (UI)
   'crSelectedWeekId',                // semaine CR sélectionnée par entreprise (UI)
   'stSelectedCompanyId',             // entreprise sélectionnée dans le slider ST (UI)
+  'devisSelectedId',                 // devis sélectionné (UI)
   'syncStatus', 'syncTimestamp', 'syncLastPulled', 'syncLastSeenRemoteTs',
   'protoPlan', 'protoPlanW', 'protoPlanH' // champs hérités migrés
 ]);
@@ -11059,7 +11420,7 @@ const SYNC_UNION_DICT_KEYS = new Set([
   'adminDocs', 'workerDocs', 'heuresData', 'crEntries', 'stEntries'
 ]);
 const SYNC_UNION_ARRAY_KEYS = new Set([
-  'stockEntries', 'consommableEntries', 'protoShapes'
+  'stockEntries', 'consommableEntries', 'protoShapes', 'devis'
 ]);
 
 function _isPlainObject(v) { return v && typeof v === 'object' && !Array.isArray(v); }
@@ -11709,6 +12070,35 @@ function init() {
       } else if (el.dataset.stAction === 'edit-amount') {
         setSTEntryField(el.dataset.companyId, el.dataset.groupKey, el.dataset.entryId, 'amount', el.value);
       }
+    });
+  }
+
+  // ----- Devis : délégation d'événements sur la page entière -----
+  const devisPage = document.getElementById('page-devis');
+  if (devisPage) {
+    devisPage.addEventListener('click', (e) => {
+      const t = e.target.closest('[data-devis-action]');
+      if (!t) return;
+      const { devisAction, devisId, lineId } = t.dataset;
+      if (devisAction === 'select') setSelectedDevis(devisId);
+      else if (devisAction === 'add') addDevis();
+      else if (devisAction === 'delete') deleteDevis(devisId);
+      else if (devisAction === 'add-line') addDevisLine(devisId);
+      else if (devisAction === 'delete-line') {
+        if (confirm('Supprimer cette ligne ? La ligne ST liée sera aussi retirée.')) deleteDevisLine(devisId, lineId);
+      }
+    });
+    devisPage.addEventListener('change', (e) => {
+      const t = e.target.closest('[data-devis-action]');
+      if (!t) return;
+      if (t.dataset.devisAction === 'set-etat') setDevisEtat(t.dataset.devisId, t.value);
+      else if (t.dataset.devisAction === 'edit-company') setDevisLineField(t.dataset.devisId, t.dataset.lineId, 'companyId', t.value);
+    });
+    devisPage.addEventListener('input', (e) => {
+      const t = e.target.closest('[data-devis-action]');
+      if (!t) return;
+      if (t.dataset.devisAction === 'edit-text') setDevisLineField(t.dataset.devisId, t.dataset.lineId, 'text', t.value);
+      else if (t.dataset.devisAction === 'edit-amount') setDevisLineField(t.dataset.devisId, t.dataset.lineId, 'amount', t.value);
     });
   }
 

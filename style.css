@@ -232,6 +232,88 @@ option {
   font-variant-numeric: tabular-nums;
 }
 
+/* ============ ONGLET DEVIS ============ */
+/* Onglets de devis (colorés par état) */
+.devis-tabs {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin: 6px 0 14px;
+}
+.devis-tab {
+  flex: 0 0 auto;
+  border: 2px solid transparent;
+  background: #6b7280;
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 13px; font-weight: 700;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  white-space: nowrap;
+  opacity: 0.75;
+  transition: opacity 0.15s, box-shadow 0.15s;
+}
+.devis-tab.is-active {
+  opacity: 1;
+  border-color: #fff;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.devis-tab-add {
+  background: transparent;
+  color: var(--text-3);
+  border: 1px dashed var(--border-strong);
+  font-size: 16px; font-weight: 700;
+  opacity: 1;
+}
+.devis-tab-add:hover { color: var(--accent); border-color: var(--accent); }
+
+.devis-card { display: flex; flex-direction: column; gap: 14px; }
+
+/* Ligne état + suppression */
+.devis-etat-row {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+}
+.devis-etat-label { font-size: 13px; font-weight: 700; color: var(--text-2); }
+.devis-etat-select {
+  flex: 0 1 220px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 14px; font-weight: 600;
+}
+.devis-etat-select:focus { outline: none; border-color: var(--accent); }
+.devis-delete-btn {
+  margin-left: auto;
+  border: 1px solid var(--danger);
+  background: transparent; color: var(--danger);
+  font-size: 12px; font-weight: 600;
+  padding: 7px 12px; border-radius: 999px;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.devis-delete-btn:active { background: var(--danger-soft); }
+
+/* Lignes de devis (réutilise .st-entry pour texte/montant/suppression) */
+.devis-lines { display: flex; flex-direction: column; gap: 8px; }
+.devis-line { align-items: stretch; }
+.devis-line-company {
+  flex: 0 1 150px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 8px 8px;
+  font-size: 13px;
+}
+.devis-line-company:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+.devis-add-line { margin-top: 4px; }
+
+@media (max-width: 560px) {
+  .devis-line { flex-wrap: wrap; }
+  .devis-line .st-entry-text { flex: 1 1 100%; }
+  .devis-line-company { flex: 1 1 auto; }
+}
+
 /* ============ HEADER ============ */
 .app-header {
   position: sticky; top: 0; z-index: 10;

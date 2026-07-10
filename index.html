@@ -464,6 +464,14 @@
       <div class="st-body" id="stbody"></div>
       <p class="empty-state" id="stempty" hidden>Aucune entreprise. Ajoutez-en depuis l'onglet Données → Entreprises.</p>
     </section>
+
+    <!-- ============== ONGLET : DEVIS ============== -->
+    <section class="page" id="page-devis">
+      <h2 class="section-title">Devis</h2>
+      <p class="section-help">Ajoutez des devis (+), choisissez leur état, puis renseignez les lignes. Une ligne rattachée à une entreprise alimente automatiquement l'onglet ST (groupe Conforme).</p>
+      <div class="devis-tabs" id="devistabs" role="tablist" aria-label="Choisir un devis"></div>
+      <div class="devis-body" id="devisbody"></div>
+    </section>
   </main>
 
   <!-- ============== TAB BAR ============== -->
@@ -507,6 +515,10 @@
     <button class="tab-btn" data-page="st" role="tab">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6h-4V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2Zm-6 0h-4V4h4v2Z"/></svg>
       <span>ST</span>
+    </button>
+    <button class="tab-btn" data-page="devis" role="tab">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6Zm2 16H8v-2h8v2Zm0-4H8v-2h8v2Zm-3-5V3.5L18.5 9H13Z"/></svg>
+      <span>Devis</span>
     </button>
     <button class="tab-btn" data-page="donnees" role="tab">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94a7.07 7.07 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.14.55-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.65 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.39 1.04.7 1.63.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54c.59-.24 1.14-.55 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z"/></svg>
