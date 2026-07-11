@@ -337,6 +337,24 @@ option {
 }
 .devis-date-input:focus { outline: none; border-color: var(--accent); }
 
+/* Taux horaire (Données → Admin) */
+.taux-horaire-row {
+  display: flex; align-items: center; gap: 8px;
+}
+.taux-horaire-input {
+  width: 140px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: 15px; font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.taux-horaire-input:focus { outline: none; border-color: var(--accent); }
+.taux-horaire-unit { font-size: 14px; font-weight: 600; color: var(--text-2); }
+
 .devis-card { display: flex; flex-direction: column; gap: 14px; }
 
 /* Ligne état + suppression */
@@ -377,6 +395,32 @@ option {
 }
 .devis-line-row { display: flex; align-items: center; gap: 8px; }
 .devis-line-toprow { align-items: flex-start; }
+/* Libellé fixe au-dessus de chaque champ (le placeholder disparaît à la
+   saisie ; le libellé, lui, reste). */
+.devis-field-group { display: flex; flex-direction: column; gap: 3px; }
+.devis-field-label {
+  font-size: 10.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-3);
+  padding-left: 2px;
+}
+/* Total du bloc : sous-traitant + heures × taux + matériel + matériaux */
+.devis-line-total {
+  display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.devis-line-total-label {
+  font-size: 10.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-3);
+}
+.devis-line-total-val {
+  font-size: 15px; font-weight: 800;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
 .devis-line-text {
   flex: 1; min-width: 0;
   border: none; background: transparent;

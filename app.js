@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.39';
+const APP_VERSION = '1.40';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -85,6 +85,7 @@ const state = {
   stockCBMode: 'product',    // 'product' | 'eotp' : axe de regroupement du récap CB Stock
   projectStart: '',          // date ISO YYYY-MM-DD : début prévu du chantier
   projectEnd: '',            // date ISO YYYY-MM-DD : fin prévue du chantier
+  tauxHoraire: 0,            // €/h — valorisation de la main d'œuvre (devis)
   workBatches: [],           // Proto : lots de travaux [{ id, name, color }]
   // Proto : plans organisés en dossiers (multi-plans).
   // Les anciens champs protoPlan/W/H sont migrés au 1er load.
@@ -198,6 +199,7 @@ function load() {
     if (data.stockCBMode === 'product' || data.stockCBMode === 'eotp') state.stockCBMode = data.stockCBMode;
     if (typeof data.projectStart === 'string') state.projectStart = data.projectStart;
     if (typeof data.projectEnd === 'string') state.projectEnd = data.projectEnd;
+    if (typeof data.tauxHoraire === 'number') state.tauxHoraire = data.tauxHoraire;
     if (Array.isArray(data.workBatches)) state.workBatches = data.workBatches;
     if (Array.isArray(data.protoFolders)) state.protoFolders = data.protoFolders;
     if (Array.isArray(data.protoPlans))   state.protoPlans   = data.protoPlans;
@@ -291,6 +293,7 @@ function buildPersistedData() {
     stockCBMode: state.stockCBMode,
     projectStart: state.projectStart,
     projectEnd: state.projectEnd,
+    tauxHoraire: state.tauxHoraire,
     workBatches: state.workBatches,
     protoFolders: state.protoFolders,
     protoPlans: state.protoPlans,
@@ -556,6 +559,7 @@ function renderAll() {
   renderDocLabelsConfig();
   renderEOTPsConfig();
   renderProjectDates();
+  renderTauxHoraire();
   renderWorkBatchesConfig();
   renderProto();
   renderStock();
@@ -3600,6 +3604,19 @@ function renderProjectDates() {
   if (state.projectEnd && remaining === 0) parts.push('chantier terminé');
   info.innerHTML = parts.join(' · ');
 }
+// Taux horaire (€/h) — Données → Admin. Utilisé par les totaux de devis.
+function renderTauxHoraire() {
+  const inp = document.getElementById('tauxhoraire');
+  if (!inp || document.activeElement === inp) return;
+  inp.value = state.tauxHoraire ? fmtPriceForInput(state.tauxHoraire) : '';
+}
+function setTauxHoraire(value) {
+  const n = parseFloat(String(value).replace(/[^\d,.-]/g, '').replace(',', '.'));
+  state.tauxHoraire = Number.isFinite(n) && n >= 0 ? n : 0;
+  save();
+  renderDevis(); // les totaux de lignes/devis dépendent du taux
+}
+
 function setProjectStart(value) {
   state.projectStart = value || '';
   save();
@@ -7174,6 +7191,7 @@ function setDevisLineField(devisId, lineId, field, value) {
     line.amount = Number.isFinite(n) ? n : 0;
     syncDevisLineToST(line, d);
     save();
+    refreshDevisLineTotal(d.id, lineId);
     refreshDevisRecap(d.id);
     renderST(); // le montant Conforme change → récap ST à jour
   } else if (field === 'companyId') {
@@ -7188,6 +7206,9 @@ function setDevisLineField(devisId, lineId, field, value) {
     const n = parseFloat(String(value).replace(/[^\d,.-]/g, '').replace(',', '.'));
     line[field] = Number.isFinite(n) ? n : 0;
     save();
+    // Heures / matériel / matériaux entrent dans le total de la ligne
+    refreshDevisLineTotal(d.id, lineId);
+    refreshDevisRecap(d.id);
   }
 }
 function deleteDevisLine(devisId, lineId) {
@@ -7236,10 +7257,28 @@ function syncDevisLineToST(line, devis) {
   }
 }
 
+// --- Totaux ---
+// Taux horaire global (Données → Admin), pour valoriser la main d'œuvre.
+function getTauxHoraire() { return Number(state.tauxHoraire) || 0; }
+// Total d'une ligne de devis = montant sous-traitant + heures × taux
+// horaire + matériel + matériaux.
+function computeDevisLineTotal(line) {
+  return (Number(line.amount) || 0)
+    + (Number(line.hours) || 0) * getTauxHoraire()
+    + (Number(line.materielAmount) || 0)
+    + (Number(line.materiauxAmount) || 0);
+}
+function refreshDevisLineTotal(devisId, lineId) {
+  const d = getDevisById(devisId);
+  const line = d && (d.lines || []).find(l => l.id === lineId);
+  if (!line) return;
+  const el = document.querySelector(`.devis-line[data-line-id="${cssEscape(lineId)}"] .devis-line-total-val`);
+  if (el) el.textContent = fmtEur(computeDevisLineTotal(line));
+}
 // --- Récap d'un devis ---
 function computeDevisRecap(devis) {
   const lines = (devis && devis.lines) || [];
-  const total = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+  const total = lines.reduce((s, l) => s + computeDevisLineTotal(l), 0);
   return { total, count: lines.length };
 }
 function refreshDevisRecap(devisId) {
@@ -7519,7 +7558,14 @@ function buildDevisLine(devisId, line) {
   top.appendChild(del);
   card.appendChild(top);
 
-  // Ligne 2 : entreprise affectée + montant € (celui repris dans ST)
+  // Ligne 2 : sous-traitant + montant € (celui repris dans ST), avec un
+  // libellé fixe au-dessus (les placeholders disparaissent à la saisie).
+  const compGroup = document.createElement('div');
+  compGroup.className = 'devis-field-group';
+  const compLabel = document.createElement('span');
+  compLabel.className = 'devis-field-label';
+  compLabel.textContent = 'Sous-traitant';
+  compGroup.appendChild(compLabel);
   const compRow = document.createElement('div');
   compRow.className = 'devis-line-row';
   const comp = document.createElement('select');
@@ -7527,7 +7573,7 @@ function buildDevisLine(devisId, line) {
   comp.dataset.devisAction = 'edit-company';
   comp.dataset.devisId = devisId;
   comp.dataset.lineId = line.id;
-  comp.setAttribute('aria-label', 'Entreprise bénéficiaire');
+  comp.setAttribute('aria-label', 'Entreprise sous-traitante');
   const none = new Option('— Entreprise —', '');
   if (!line.companyId) none.selected = true;
   comp.appendChild(none);
@@ -7538,15 +7584,23 @@ function buildDevisLine(devisId, line) {
   }
   compRow.appendChild(comp);
   compRow.appendChild(buildDevisAmountWrap(devisId, line.id, 'amount', line.amount, '€'));
-  card.appendChild(compRow);
+  compGroup.appendChild(compRow);
+  card.appendChild(compGroup);
 
-  // Lignes 3-5 : main d'œuvre (heures), matériel (€), matériaux (€)
+  // Lignes 3-5 : main d'œuvre (heures), matériel (€), matériaux (€) —
+  // chacune avec son libellé fixe au-dessus du champ.
   const subRows = [
-    { textField: 'hoursText',     placeholder: 'Main d\'œuvre…', amountField: 'hours',          suffix: 'h' },
-    { textField: 'materielText',  placeholder: 'Matériel…',      amountField: 'materielAmount', suffix: '€' },
-    { textField: 'materiauxText', placeholder: 'Matériaux…',     amountField: 'materiauxAmount', suffix: '€' },
+    { label: 'Main d\'œuvre', textField: 'hoursText',     placeholder: 'Détail (optionnel)…', amountField: 'hours',           suffix: 'h' },
+    { label: 'Matériel',      textField: 'materielText',  placeholder: 'Détail (optionnel)…', amountField: 'materielAmount',  suffix: '€' },
+    { label: 'Matériaux',     textField: 'materiauxText', placeholder: 'Détail (optionnel)…', amountField: 'materiauxAmount', suffix: '€' },
   ];
   for (const sub of subRows) {
+    const group = document.createElement('div');
+    group.className = 'devis-field-group';
+    const lbl = document.createElement('span');
+    lbl.className = 'devis-field-label';
+    lbl.textContent = sub.label;
+    group.appendChild(lbl);
     const row = document.createElement('div');
     row.className = 'devis-line-row';
     const inp = document.createElement('input');
@@ -7560,8 +7614,16 @@ function buildDevisLine(devisId, line) {
     inp.dataset.field = sub.textField;
     row.appendChild(inp);
     row.appendChild(buildDevisAmountWrap(devisId, line.id, sub.amountField, line[sub.amountField], sub.suffix));
-    card.appendChild(row);
+    group.appendChild(row);
+    card.appendChild(group);
   }
+
+  // Total du bloc : sous-traitant + heures × taux horaire + matériel + matériaux
+  const totalRow = document.createElement('div');
+  totalRow.className = 'devis-line-total';
+  totalRow.innerHTML = `<span class="devis-line-total-label">Total ligne</span><span class="devis-line-total-val"></span>`;
+  totalRow.querySelector('.devis-line-total-val').textContent = fmtEur(computeDevisLineTotal(line));
+  card.appendChild(totalRow);
   return card;
 }
 
@@ -11953,6 +12015,8 @@ function init() {
   const projEnd   = document.getElementById('projectend');
   if (projStart) projStart.addEventListener('change', () => setProjectStart(projStart.value));
   if (projEnd)   projEnd.addEventListener('change',   () => setProjectEnd(projEnd.value));
+  const tauxInp = document.getElementById('tauxhoraire');
+  if (tauxInp) tauxInp.addEventListener('input', () => setTauxHoraire(tauxInp.value));
 
   // ----- Consommable → Récap : bascule produit / eOTP -----
   document.querySelectorAll('.recap-mode-btn[data-recap-mode]').forEach(btn => {
