@@ -204,6 +204,14 @@ option {
 .st-entry-amount:focus { outline: none; }
 .st-entry-amount::placeholder { color: var(--text-3); }
 .st-entry-eur { font-size: 13px; font-weight: 600; color: var(--text-2); }
+/* Montant issu d'un devis non validé : fond gris, exclu du total */
+.st-entry-amount-wrap.is-pending {
+  background: #6b7280;
+  border-color: #6b7280;
+}
+.st-entry-amount-wrap.is-pending .st-entry-amount,
+.st-entry-amount-wrap.is-pending .st-entry-eur { color: #fff; }
+.st-entry-amount-wrap.is-pending .st-entry-amount::placeholder { color: rgba(255,255,255,0.7); }
 .st-entry-delete {
   flex-shrink: 0;
   width: 32px; height: 38px;
@@ -265,6 +273,64 @@ option {
   opacity: 1;
 }
 .devis-tab-add:hover { color: var(--accent); border-color: var(--accent); }
+/* Onglet Récapitulatif (neutre, se distingue des devis colorés) */
+.devis-tab-recap {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  opacity: 1;
+}
+.devis-tab-recap.is-active {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* Lignes du récap par état */
+.devis-recap-rows {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.devis-recap-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.devis-recap-row:last-child { border-bottom: none; }
+.devis-recap-dot {
+  flex-shrink: 0;
+  width: 13px; height: 13px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+.devis-recap-label {
+  flex: 1; min-width: 0;
+  font-size: 14px; font-weight: 600;
+  color: var(--text);
+}
+.devis-recap-count {
+  flex-shrink: 0;
+  font-size: 12px; color: var(--text-3);
+}
+.devis-recap-sum {
+  flex-shrink: 0;
+  font-size: 15px; font-weight: 800;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Date de rédaction */
+.devis-date-input {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 14px; font-weight: 600;
+  font-family: inherit;
+}
+.devis-date-input:focus { outline: none; border-color: var(--accent); }
 
 .devis-card { display: flex; flex-direction: column; gap: 14px; }
 

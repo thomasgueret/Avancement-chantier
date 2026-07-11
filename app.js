@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.36';
+const APP_VERSION = '1.37';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -6779,8 +6779,17 @@ function ensureSTBucket(companyId, groupKey) {
   if (!Array.isArray(state.stEntries[companyId][groupKey])) state.stEntries[companyId][groupKey] = [];
   return state.stEntries[companyId][groupKey];
 }
+// Une entrée ST issue d'un devis encore Brouillon/Envoyé est « en
+// attente » : affichée sur fond gris et EXCLUE des totaux (groupe
+// Conforme + bandeau récap) tant que le devis n'est pas validé ou plus.
+function isSTEntryPendingDevis(entry) {
+  if (!entry || !entry.sourceDevisLineId) return false;
+  const d = getDevisByLineId(entry.sourceDevisLineId);
+  return !!d && !isDevisValidated(d);
+}
 function getSTGroupTotal(companyId, groupKey) {
-  return getSTEntries(companyId, groupKey).reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  return getSTEntries(companyId, groupKey).reduce((s, e) =>
+    s + (isSTEntryPendingDevis(e) ? 0 : (Number(e.amount) || 0)), 0);
 }
 function addSTEntry(companyId, groupKey) {
   const list = ensureSTBucket(companyId, groupKey);
@@ -7015,6 +7024,11 @@ function buildSTEntry(companyId, groupKey, entry) {
 
   const amtWrap = document.createElement('div');
   amtWrap.className = 'st-entry-amount-wrap';
+  // Devis pas encore validé : montant grisé, exclu du total du groupe.
+  if (isSTEntryPendingDevis(entry)) {
+    amtWrap.classList.add('is-pending');
+    amtWrap.title = 'Devis non validé : montant non compté dans le total';
+  }
   const amt = document.createElement('input');
   amt.className = 'st-entry-amount';
   amt.type = 'text';
@@ -7060,6 +7074,17 @@ const DEVIS_ETATS = [
 function getDevisEtat(key) {
   return DEVIS_ETATS.find(e => e.key === key) || DEVIS_ETATS[0];
 }
+// « Validé ou plus » : le devis compte dans les budgets ST à partir de
+// Validé (Validé, OS reçu, Avenant reçu). Brouillon/Envoyé = en attente.
+function isDevisValidated(d) {
+  return !!d && ['valide', 'os', 'avenant'].includes(d.etat);
+}
+function getDevisByLineId(lineId) {
+  for (const d of getDevisList()) {
+    if ((d.lines || []).some(l => l.id === lineId)) return d;
+  }
+  return null;
+}
 
 function getDevisList() { return Array.isArray(state.devis) ? state.devis : (state.devis = []); }
 function getDevisById(id) { return getDevisList().find(d => d.id === id) || null; }
@@ -7079,7 +7104,7 @@ function getNextDevisNumber() {
   return max + 1;
 }
 function addDevis() {
-  const d = { id: 'dv_' + uid(), number: getNextDevisNumber(), etat: 'brouillon', lines: [] };
+  const d = { id: 'dv_' + uid(), number: getNextDevisNumber(), etat: 'brouillon', date: todayISO(), lines: [] };
   getDevisList().push(d);
   state.devisSelectedId = d.id;
   save();
@@ -7105,6 +7130,14 @@ function setDevisEtat(id, etat) {
   d.etat = etat;
   save();
   renderDevis(); // recolore l'onglet
+  renderST();    // les montants liés entrent/sortent du total Conforme
+}
+function setDevisDate(id, value) {
+  const d = getDevisById(id);
+  if (!d) return;
+  d.date = value || '';
+  save();
+  renderDevis(); // met à jour la date affichée dans l'onglet
 }
 
 // --- Lignes de devis ---
@@ -7225,7 +7258,18 @@ function renderDevis() {
   tabs.hidden = false; body.hidden = false;
 
   const list = getDevisList();
-  const selected = getSelectedDevis();
+  const isRecap = state.devisSelectedId === '__recap__';
+  const selected = isRecap ? null : getSelectedDevis();
+
+  // Onglet Récapitulatif (sommes par état, tous devis confondus)
+  const recapTab = document.createElement('button');
+  recapTab.type = 'button';
+  recapTab.className = 'devis-tab devis-tab-recap' + (isRecap ? ' is-active' : '');
+  recapTab.dataset.devisAction = 'select';
+  recapTab.dataset.devisId = '__recap__';
+  recapTab.textContent = 'Récap';
+  tabs.appendChild(recapTab);
+
   for (const d of list) {
     const et = getDevisEtat(d.etat);
     const tab = document.createElement('button');
@@ -7234,7 +7278,7 @@ function renderDevis() {
     tab.dataset.devisAction = 'select';
     tab.dataset.devisId = d.id;
     tab.style.background = et.color;
-    tab.textContent = 'Devis ' + d.number;
+    tab.textContent = 'Devis ' + d.number + (d.date ? ' · ' + shortDateFR(d.date) : '');
     tabs.appendChild(tab);
   }
   const add = document.createElement('button');
@@ -7245,6 +7289,10 @@ function renderDevis() {
   add.textContent = '+';
   tabs.appendChild(add);
 
+  if (isRecap) {
+    body.appendChild(buildDevisRecapBody());
+    return;
+  }
   if (!selected) {
     const empty = document.createElement('p');
     empty.className = 'st-group-empty';
@@ -7254,6 +7302,58 @@ function renderDevis() {
     return;
   }
   body.appendChild(buildDevisBody(selected));
+}
+
+// Onglet Récap : pour chaque état, nombre de devis et somme de leurs
+// montants ; bandeau orange avec le total général en tête.
+function buildDevisRecapBody() {
+  const list = getDevisList();
+  const card = document.createElement('div');
+  card.className = 'devis-card';
+
+  let grandTotal = 0, grandCount = 0;
+  const perEtat = DEVIS_ETATS.map(e => {
+    const items = list.filter(d => d.etat === e.key);
+    const sum = items.reduce((s, d) => s + computeDevisRecap(d).total, 0);
+    grandTotal += sum; grandCount += items.length;
+    return { etat: e, count: items.length, sum };
+  });
+
+  const banner = document.createElement('div');
+  banner.className = 'st-recap';
+  banner.innerHTML = `
+    <div class="st-recap-cell">
+      <span class="st-recap-label">Total tous devis</span>
+      <span class="st-recap-val"></span>
+    </div>
+    <div class="st-recap-cell">
+      <span class="st-recap-label">Nombre de devis</span>
+      <span class="st-recap-val"></span>
+    </div>
+  `;
+  banner.querySelectorAll('.st-recap-val')[0].textContent = fmtEur(grandTotal);
+  banner.querySelectorAll('.st-recap-val')[1].textContent = String(grandCount);
+  card.appendChild(banner);
+
+  const rows = document.createElement('div');
+  rows.className = 'devis-recap-rows';
+  for (const { etat, count, sum } of perEtat) {
+    const row = document.createElement('div');
+    row.className = 'devis-recap-row';
+    row.innerHTML = `
+      <span class="devis-recap-dot"></span>
+      <span class="devis-recap-label"></span>
+      <span class="devis-recap-count"></span>
+      <span class="devis-recap-sum"></span>
+    `;
+    row.querySelector('.devis-recap-dot').style.background = etat.color;
+    row.querySelector('.devis-recap-label').textContent = etat.label;
+    row.querySelector('.devis-recap-count').textContent = count === 0 ? '—' : (count + (count > 1 ? ' devis' : ' devis'));
+    row.querySelector('.devis-recap-sum').textContent = fmtEur(sum);
+    rows.appendChild(row);
+  }
+  card.appendChild(rows);
+  return card;
 }
 
 function buildDevisBody(devis) {
@@ -7278,6 +7378,19 @@ function buildDevisBody(devis) {
   etatLabel.textContent = 'État :';
   etatRow.appendChild(etatLabel);
   etatRow.appendChild(sel);
+  // Date de rédaction du devis
+  const dateLabel = document.createElement('span');
+  dateLabel.className = 'devis-etat-label';
+  dateLabel.textContent = 'Rédigé le :';
+  etatRow.appendChild(dateLabel);
+  const dateInp = document.createElement('input');
+  dateInp.type = 'date';
+  dateInp.className = 'devis-date-input';
+  dateInp.value = devis.date || '';
+  dateInp.dataset.devisAction = 'set-date';
+  dateInp.dataset.devisId = devis.id;
+  dateInp.setAttribute('aria-label', 'Date de rédaction du devis');
+  etatRow.appendChild(dateInp);
   const delBtn = document.createElement('button');
   delBtn.type = 'button';
   delBtn.className = 'devis-delete-btn';
@@ -12092,6 +12205,7 @@ function init() {
       const t = e.target.closest('[data-devis-action]');
       if (!t) return;
       if (t.dataset.devisAction === 'set-etat') setDevisEtat(t.dataset.devisId, t.value);
+      else if (t.dataset.devisAction === 'set-date') setDevisDate(t.dataset.devisId, t.value);
       else if (t.dataset.devisAction === 'edit-company') setDevisLineField(t.dataset.devisId, t.dataset.lineId, 'companyId', t.value);
     });
     devisPage.addEventListener('input', (e) => {
