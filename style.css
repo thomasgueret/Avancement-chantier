@@ -204,10 +204,15 @@ option {
 .st-entry-amount:focus { outline: none; }
 .st-entry-amount::placeholder { color: var(--text-3); }
 .st-entry-eur { font-size: 13px; font-weight: 600; color: var(--text-2); }
-/* Montant issu d'un devis non validé : fond gris, exclu du total */
+/* Montant issu d'un devis non validé : exclu du total, fond selon
+   l'état du devis — gris (Brouillon) ou orange (Envoyé) */
 .st-entry-amount-wrap.is-pending {
   background: #6b7280;
   border-color: #6b7280;
+}
+.st-entry-amount-wrap.is-pending.is-pending-envoye {
+  background: var(--accent);
+  border-color: var(--accent);
 }
 .st-entry-amount-wrap.is-pending .st-entry-amount,
 .st-entry-amount-wrap.is-pending .st-entry-eur { color: #fff; }

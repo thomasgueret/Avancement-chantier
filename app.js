@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.37';
+const APP_VERSION = '1.38';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -7024,9 +7024,12 @@ function buildSTEntry(companyId, groupKey, entry) {
 
   const amtWrap = document.createElement('div');
   amtWrap.className = 'st-entry-amount-wrap';
-  // Devis pas encore validé : montant grisé, exclu du total du groupe.
+  // Devis pas encore validé : montant exclu du total du groupe, avec un
+  // fond qui suit l'état du devis (gris = Brouillon, orange = Envoyé).
   if (isSTEntryPendingDevis(entry)) {
     amtWrap.classList.add('is-pending');
+    const srcDevis = getDevisByLineId(entry.sourceDevisLineId);
+    if (srcDevis && srcDevis.etat === 'envoye') amtWrap.classList.add('is-pending-envoye');
     amtWrap.title = 'Devis non validé : montant non compté dans le total';
   }
   const amt = document.createElement('input');
@@ -7278,7 +7281,7 @@ function renderDevis() {
     tab.dataset.devisAction = 'select';
     tab.dataset.devisId = d.id;
     tab.style.background = et.color;
-    tab.textContent = 'Devis ' + d.number + (d.date ? ' · ' + shortDateFR(d.date) : '');
+    tab.textContent = 'Devis ' + d.number;
     tabs.appendChild(tab);
   }
   const add = document.createElement('button');
