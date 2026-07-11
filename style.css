@@ -364,11 +364,44 @@ option {
 }
 .devis-delete-btn:active { background: var(--danger-soft); }
 
-/* Lignes de devis (réutilise .st-entry pour texte/montant/suppression) */
-.devis-lines { display: flex; flex-direction: column; gap: 8px; }
-.devis-line { align-items: stretch; }
+/* Blocs de devis : une carte par « tâche » (comme les cartes CR), avec
+   description puis sous-lignes entreprise/€, main d'œuvre/h, matériel/€,
+   matériaux/€. */
+.devis-lines { display: flex; flex-direction: column; gap: 10px; }
+.devis-line {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.devis-line-row { display: flex; align-items: center; gap: 8px; }
+.devis-line-toprow { align-items: flex-start; }
+.devis-line-text {
+  flex: 1; min-width: 0;
+  border: none; background: transparent;
+  font-family: inherit; font-size: 14px; font-weight: 600;
+  color: var(--text);
+  resize: none; padding: 4px 2px;
+  min-height: 24px; max-height: 200px;
+  line-height: 1.35; overflow: hidden;
+  border-bottom: 1px solid transparent;
+}
+.devis-line-text:focus { outline: none; border-bottom-color: var(--accent); }
+.devis-line-text::placeholder { color: var(--text-3); font-style: italic; }
+.devis-line-sub {
+  flex: 1; min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-family: inherit; font-size: 13px;
+}
+.devis-line-sub:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+.devis-line-sub::placeholder { color: var(--text-3); font-style: italic; }
 .devis-line-company {
-  flex: 0 1 150px;
+  flex: 1; min-width: 0;
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text);
@@ -378,12 +411,6 @@ option {
 }
 .devis-line-company:focus { outline: none; border-color: var(--accent); background: var(--surface); }
 .devis-add-line { margin-top: 4px; }
-
-@media (max-width: 560px) {
-  .devis-line { flex-wrap: wrap; }
-  .devis-line .st-entry-text { flex: 1 1 100%; }
-  .devis-line-company { flex: 1 1 auto; }
-}
 
 /* ============ HEADER ============ */
 .app-header {

@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.38';
+const APP_VERSION = '1.39';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -7157,6 +7157,9 @@ function addDevisLine(devisId) {
     if (last) last.focus();
   });
 }
+const DEVIS_LINE_TEXT_FIELDS = new Set(['hoursText', 'materielText', 'materiauxText']);
+const DEVIS_LINE_NUM_FIELDS = new Set(['hours', 'materielAmount', 'materiauxAmount']);
+
 function setDevisLineField(devisId, lineId, field, value) {
   const d = getDevisById(devisId);
   if (!d) return;
@@ -7178,6 +7181,13 @@ function setDevisLineField(devisId, lineId, field, value) {
     syncDevisLineToST(line, d);
     save();
     renderST();
+  } else if (DEVIS_LINE_TEXT_FIELDS.has(field)) {
+    line[field] = value;
+    save();
+  } else if (DEVIS_LINE_NUM_FIELDS.has(field)) {
+    const n = parseFloat(String(value).replace(/[^\d,.-]/g, '').replace(',', '.'));
+    line[field] = Number.isFinite(n) ? n : 0;
+    save();
   }
 }
 function deleteDevisLine(devisId, lineId) {
@@ -7381,19 +7391,6 @@ function buildDevisBody(devis) {
   etatLabel.textContent = 'État :';
   etatRow.appendChild(etatLabel);
   etatRow.appendChild(sel);
-  // Date de rédaction du devis
-  const dateLabel = document.createElement('span');
-  dateLabel.className = 'devis-etat-label';
-  dateLabel.textContent = 'Rédigé le :';
-  etatRow.appendChild(dateLabel);
-  const dateInp = document.createElement('input');
-  dateInp.type = 'date';
-  dateInp.className = 'devis-date-input';
-  dateInp.value = devis.date || '';
-  dateInp.dataset.devisAction = 'set-date';
-  dateInp.dataset.devisId = devis.id;
-  dateInp.setAttribute('aria-label', 'Date de rédaction du devis');
-  etatRow.appendChild(dateInp);
   const delBtn = document.createElement('button');
   delBtn.type = 'button';
   delBtn.className = 'devis-delete-btn';
@@ -7402,6 +7399,23 @@ function buildDevisBody(devis) {
   delBtn.textContent = 'Supprimer le devis';
   etatRow.appendChild(delBtn);
   card.appendChild(etatRow);
+
+  // Date de rédaction — sur sa propre ligne, sous l'état.
+  const dateRow = document.createElement('div');
+  dateRow.className = 'devis-etat-row devis-date-row';
+  const dateLabel = document.createElement('span');
+  dateLabel.className = 'devis-etat-label';
+  dateLabel.textContent = 'Rédigé le :';
+  dateRow.appendChild(dateLabel);
+  const dateInp = document.createElement('input');
+  dateInp.type = 'date';
+  dateInp.className = 'devis-date-input';
+  dateInp.value = devis.date || '';
+  dateInp.dataset.devisAction = 'set-date';
+  dateInp.dataset.devisId = devis.id;
+  dateInp.setAttribute('aria-label', 'Date de rédaction du devis');
+  dateRow.appendChild(dateInp);
+  card.appendChild(dateRow);
 
   // Encart récap (orange, comme ST)
   const r = computeDevisRecap(devis);
@@ -7445,16 +7459,47 @@ function buildDevisBody(devis) {
   return card;
 }
 
-function buildDevisLine(devisId, line) {
-  const row = document.createElement('div');
-  row.className = 'devis-line st-entry';
-  row.dataset.devisId = devisId;
-  row.dataset.lineId = line.id;
+// Champ montant (droite d'une sous-ligne) : input décimal + suffixe (€/h).
+function buildDevisAmountWrap(devisId, lineId, field, value, suffix) {
+  const wrap = document.createElement('div');
+  wrap.className = 'st-entry-amount-wrap';
+  const inp = document.createElement('input');
+  inp.className = 'st-entry-amount';
+  inp.type = 'text';
+  inp.inputMode = 'decimal';
+  inp.placeholder = '0';
+  inp.value = value ? fmtPriceForInput(value) : '';
+  inp.dataset.devisAction = 'edit-line-field';
+  inp.dataset.devisId = devisId;
+  inp.dataset.lineId = lineId;
+  inp.dataset.field = field;
+  wrap.appendChild(inp);
+  const suf = document.createElement('span');
+  suf.className = 'st-entry-eur';
+  suf.textContent = suffix;
+  wrap.appendChild(suf);
+  return wrap;
+}
 
+// Bloc de devis (une « tâche », comme les cartes de l'onglet CR) :
+//   description
+//   entreprise affectée      | montant €   (→ alimente ST → Conforme)
+//   main d'œuvre             | heures h
+//   matériel                 | montant €
+//   matériaux                | montant €
+function buildDevisLine(devisId, line) {
+  const card = document.createElement('div');
+  card.className = 'devis-line';
+  card.dataset.devisId = devisId;
+  card.dataset.lineId = line.id;
+
+  // Ligne 1 : description + suppression du bloc
+  const top = document.createElement('div');
+  top.className = 'devis-line-row devis-line-toprow';
   const ta = document.createElement('textarea');
-  ta.className = 'st-entry-text devis-line-text';
+  ta.className = 'devis-line-text';
   ta.rows = 1;
-  ta.placeholder = 'Description…';
+  ta.placeholder = 'Description du devis…';
   ta.value = line.text || '';
   ta.dataset.devisAction = 'edit-text';
   ta.dataset.devisId = devisId;
@@ -7462,9 +7507,21 @@ function buildDevisLine(devisId, line) {
   const autoResize = () => { ta.style.height = 'auto'; ta.style.height = (ta.scrollHeight + 2) + 'px'; };
   ta.addEventListener('input', autoResize);
   setTimeout(autoResize, 0);
-  row.appendChild(ta);
+  top.appendChild(ta);
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'st-entry-delete';
+  del.dataset.devisAction = 'delete-line';
+  del.dataset.devisId = devisId;
+  del.dataset.lineId = line.id;
+  del.setAttribute('aria-label', 'Supprimer ce bloc');
+  del.innerHTML = '×';
+  top.appendChild(del);
+  card.appendChild(top);
 
-  // Sélecteur entreprise bénéficiaire
+  // Ligne 2 : entreprise affectée + montant € (celui repris dans ST)
+  const compRow = document.createElement('div');
+  compRow.className = 'devis-line-row';
   const comp = document.createElement('select');
   comp.className = 'devis-line-company';
   comp.dataset.devisAction = 'edit-company';
@@ -7479,37 +7536,33 @@ function buildDevisLine(devisId, line) {
     if (c.id === line.companyId) opt.selected = true;
     comp.appendChild(opt);
   }
-  row.appendChild(comp);
+  compRow.appendChild(comp);
+  compRow.appendChild(buildDevisAmountWrap(devisId, line.id, 'amount', line.amount, '€'));
+  card.appendChild(compRow);
 
-  // Montant €
-  const amtWrap = document.createElement('div');
-  amtWrap.className = 'st-entry-amount-wrap';
-  const amt = document.createElement('input');
-  amt.className = 'st-entry-amount';
-  amt.type = 'text';
-  amt.inputMode = 'decimal';
-  amt.placeholder = '0';
-  amt.value = line.amount ? fmtPriceForInput(line.amount) : '';
-  amt.dataset.devisAction = 'edit-amount';
-  amt.dataset.devisId = devisId;
-  amt.dataset.lineId = line.id;
-  amtWrap.appendChild(amt);
-  const eur = document.createElement('span');
-  eur.className = 'st-entry-eur';
-  eur.textContent = '€';
-  amtWrap.appendChild(eur);
-  row.appendChild(amtWrap);
-
-  const del = document.createElement('button');
-  del.type = 'button';
-  del.className = 'st-entry-delete';
-  del.dataset.devisAction = 'delete-line';
-  del.dataset.devisId = devisId;
-  del.dataset.lineId = line.id;
-  del.setAttribute('aria-label', 'Supprimer cette ligne');
-  del.innerHTML = '×';
-  row.appendChild(del);
-  return row;
+  // Lignes 3-5 : main d'œuvre (heures), matériel (€), matériaux (€)
+  const subRows = [
+    { textField: 'hoursText',     placeholder: 'Main d\'œuvre…', amountField: 'hours',          suffix: 'h' },
+    { textField: 'materielText',  placeholder: 'Matériel…',      amountField: 'materielAmount', suffix: '€' },
+    { textField: 'materiauxText', placeholder: 'Matériaux…',     amountField: 'materiauxAmount', suffix: '€' },
+  ];
+  for (const sub of subRows) {
+    const row = document.createElement('div');
+    row.className = 'devis-line-row';
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.className = 'devis-line-sub';
+    inp.placeholder = sub.placeholder;
+    inp.value = line[sub.textField] || '';
+    inp.dataset.devisAction = 'edit-line-field';
+    inp.dataset.devisId = devisId;
+    inp.dataset.lineId = line.id;
+    inp.dataset.field = sub.textField;
+    row.appendChild(inp);
+    row.appendChild(buildDevisAmountWrap(devisId, line.id, sub.amountField, line[sub.amountField], sub.suffix));
+    card.appendChild(row);
+  }
+  return card;
 }
 
 // Unité la plus récemment utilisée pour un produit (pour pré-remplir
@@ -12215,7 +12268,7 @@ function init() {
       const t = e.target.closest('[data-devis-action]');
       if (!t) return;
       if (t.dataset.devisAction === 'edit-text') setDevisLineField(t.dataset.devisId, t.dataset.lineId, 'text', t.value);
-      else if (t.dataset.devisAction === 'edit-amount') setDevisLineField(t.dataset.devisId, t.dataset.lineId, 'amount', t.value);
+      else if (t.dataset.devisAction === 'edit-line-field') setDevisLineField(t.dataset.devisId, t.dataset.lineId, t.dataset.field, t.value);
     });
   }
 
