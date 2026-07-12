@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.40';
+const APP_VERSION = '1.41';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -569,7 +569,8 @@ function renderAll() {
   renderDevis();
   renderHeures();
   renderDashboard();
-  renderBackupsList(); // async, best-effort
+  renderBackupsList();     // async, best-effort
+  renderPlanSyncStatus();  // async, best-effort
 }
 
 function renderDate() {
@@ -11230,8 +11231,12 @@ async function loadPlanImage(planId) {
 // d'une erreur TRANSITOIRE (image d'un autre appareil pas encore
 // uploadée = « Object not found » ; réseau). Un objet manquant NE doit
 // PAS désactiver la synchro : il suffit de réessayer un peu plus tard.
+// Dernière erreur Storage rencontrée (affichée dans Données → Admin).
+let _planLastStorageError = null; // { msg, ts }
+
 function classifyPlanStorageError(err) {
   const msg = String((err && err.message) || err || '');
+  _planLastStorageError = { msg, ts: Date.now() };
   if (/bucket not found|bucket.*does not exist|no such bucket/i.test(msg)) {
     _planBucketMissing = true;
     if (!_planBucketToastShown && typeof showToast === 'function') {
@@ -11239,10 +11244,26 @@ function classifyPlanStorageError(err) {
       showToast('Synchro des plans inactive : bucket « plans » absent côté Supabase (exécutez supabase-plans.sql).', 'error');
     }
     console.warn('[Plans] bucket Storage indisponible :', msg);
+    renderPlanSyncStatus();
     return 'bucket-missing';
   }
-  // Object not found / 404 / réseau → transitoire, on réessaiera.
+  // Erreur de DROITS (politiques RLS absentes/incomplètes, clé invalide) :
+  // ce n'est PAS transitoire — réessayer en boucle ne sert à rien et
+  // laissait l'utilisateur sans aucun signal (bucket vide, autres
+  // appareils sans images). On latche + on informe clairement.
+  if (/row-level security|violates.*policy|unauthorized|not.*authorized|permission|access denied|invalid.*(signature|jwt|key)|403/i.test(msg)) {
+    _planBucketMissing = true;
+    if (!_planBucketToastShown && typeof showToast === 'function') {
+      _planBucketToastShown = true;
+      showToast('Envoi des plans REFUSÉ par Supabase (règles d\'accès manquantes ?). Ré-exécutez supabase-plans.sql en entier, puis Données → Admin → Relancer.', 'error');
+    }
+    console.warn('[Plans] accès Storage refusé :', msg);
+    renderPlanSyncStatus();
+    return 'config';
+  }
+  // Object not found / réseau → transitoire, on réessaiera.
   console.info('[Plans] image indisponible pour l\'instant (transitoire) :', msg);
+  renderPlanSyncStatus();
   return 'transient';
 }
 
@@ -11250,7 +11271,7 @@ function classifyPlanStorageError(err) {
 // d'être uploadée par un autre appareil et n'est pas encore disponible
 // (fenêtre de quelques secondes le temps de l'upload). S'arrête si le
 // plan n'est plus actif ou si le bucket est absent.
-const PLAN_IMG_RETRY_DELAYS = [2000, 4000, 8000, 15000];
+const PLAN_IMG_RETRY_DELAYS = [2000, 4000, 8000, 15000, 30000, 60000];
 async function ensurePlanImageDisplayed(planId, imgEl) {
   for (let attempt = 0; attempt <= PLAN_IMG_RETRY_DELAYS.length; attempt++) {
     if (state.protoActivePlanId !== planId) return;      // l'utilisateur a changé de plan
@@ -11285,25 +11306,72 @@ async function processPlanUploadQueue() {
   const supa = await loadSupabase();
   if (!supa || !supa.storage) return;
   _planUploadRunning = true;
+  let hadError = false;
   try {
-    let q = getPlanUploadQueue();
-    while (q.length > 0) {
+    // IMPORTANT : relire la file à CHAQUE itération et retirer par id.
+    // L'ancienne version travaillait sur une copie prise au départ et la
+    // réécrivait après chaque envoi : les pages d'un PDF multi-pages
+    // ajoutées PENDANT l'envoi de la première étaient écrasées de la
+    // file — jamais uploadées, sans erreur (cause de plans absents sur
+    // les autres appareils).
+    const dequeue = (planId) => setPlanUploadQueue(getPlanUploadQueue().filter(id => id !== planId));
+    while (true) {
+      const q = getPlanUploadQueue();
+      if (q.length === 0) break;
       const planId = q[0];
       // Plan supprimé entre-temps : on retire de la file sans uploader
-      if (!getProtoPlans().some(p => p.id === planId)) {
-        q.shift(); setPlanUploadQueue(q); continue;
-      }
+      if (!getProtoPlans().some(p => p.id === planId)) { dequeue(planId); continue; }
       const dataUrl = planImageCache.get(planId) || await mediaGetPlanImage(planId);
-      if (!dataUrl) { q.shift(); setPlanUploadQueue(q); continue; }
+      if (!dataUrl) { dequeue(planId); continue; }
       const blob = await (await fetch(dataUrl)).blob();
       const { error } = await supa.storage.from(PLANS_BUCKET)
         .upload(planId + '.jpg', blob, { upsert: true, contentType: 'image/jpeg' });
-      if (error) { classifyPlanStorageError(error); break; } // bucket absent ou réseau → on retentera
-      q.shift(); setPlanUploadQueue(q);
+      if (error) { classifyPlanStorageError(error); hadError = true; break; }
+      dequeue(planId);
     }
+    if (getPlanUploadQueue().length === 0) _planLastStorageError = null; // tout est parti
   } catch (e) {
     console.warn('[Plans] upload KO (retentera)', e);
-  } finally { _planUploadRunning = false; }
+    _planLastStorageError = { msg: String(e && e.message || e), ts: Date.now() };
+    hadError = true;
+  } finally {
+    _planUploadRunning = false;
+    renderPlanSyncStatus();
+    // Des images ont pu être mises en file juste après la sortie de
+    // boucle (course bénigne) : on repart une fois, sauf en erreur.
+    if (!hadError && !_planBucketMissing && getPlanUploadQueue().length > 0) {
+      setTimeout(() => processPlanUploadQueue(), 100);
+    }
+  }
+}
+
+// Panneau « Plans (synchronisation) » dans Données → Admin : rend visible
+// ce qui était invisible — images locales, envois en attente, dernière
+// erreur Storage — pour diagnostiquer un plan qui n'arrive pas sur un
+// autre appareil.
+async function renderPlanSyncStatus() {
+  const el = document.getElementById('plansyncstatus');
+  if (!el) return;
+  const nbPlans = getProtoPlans().length;
+  const queue = getPlanUploadQueue().filter(id => getProtoPlans().some(p => p.id === id));
+  let nbLocal = 0;
+  try {
+    const ids = await mediaListPlanIds();
+    const known = new Set(getProtoPlans().map(p => p.id));
+    nbLocal = ids.filter(id => known.has(id)).length;
+  } catch (_) {}
+  const parts = [];
+  parts.push(`<span>${nbPlans} plan${nbPlans > 1 ? 's' : ''} · ${nbLocal} image${nbLocal > 1 ? 's' : ''} sur cet appareil · <strong>${queue.length}</strong> en attente d'envoi</span>`);
+  if (_planBucketMissing) {
+    parts.push('<span class="plansync-err">⚠️ Envoi bloqué : bucket absent ou accès refusé côté Supabase (supabase-plans.sql), puis « Relancer ».</span>');
+  } else if (_planLastStorageError) {
+    parts.push('<span class="plansync-err">⚠️ Dernière erreur : ' + escapeHtml(_planLastStorageError.msg).slice(0, 140) + '</span>');
+  } else if (queue.length === 0 && nbPlans > 0) {
+    parts.push('<span class="plansync-ok">✓ Aucun envoi en attente</span>');
+  } else if (queue.length > 0) {
+    parts.push('<span class="plansync-warn">Gardez l\'app ouverte : les images partent en arrière-plan.</span>');
+  }
+  el.innerHTML = parts.join('');
 }
 
 // Suppression distante (best-effort : une image orpheline dans le bucket
@@ -11896,6 +11964,32 @@ function init() {
   document.getElementById('zoneaddroot').addEventListener('click', () => addZone(null));
   const zoneBatchClear = document.getElementById('zonebatchclear');
   if (zoneBatchClear) zoneBatchClear.addEventListener('click', clearZoneSelection);
+
+  // Plans : bouton « Relancer l'envoi » (Données → Admin). Réarme la
+  // synchro Storage après correction côté Supabase (bucket/policies).
+  const planRetryBtn = document.getElementById('plansyncretry');
+  if (planRetryBtn) planRetryBtn.addEventListener('click', async () => {
+    planRetryBtn.disabled = true;
+    try {
+      _planBucketMissing = false;
+      _planBucketToastShown = false;
+      _planLastStorageError = null;
+      // Ré-enfile TOUTES les images présentes sur cet appareil (upsert :
+      // renvoyer une image déjà au bucket est inoffensif). Récupère les
+      // envois perdus par les anciennes versions (file écrasée).
+      try {
+        const known = new Set(getProtoPlans().map(p => p.id));
+        const localIds = (await mediaListPlanIds()).filter(id => known.has(id));
+        const q = getPlanUploadQueue();
+        for (const id of localIds) if (!q.includes(id)) q.push(id);
+        setPlanUploadQueue(q);
+      } catch (e) { console.warn('Ré-enfilage plans KO', e); }
+      await processPlanUploadQueue();
+      await renderPlanSyncStatus();
+      const q = getPlanUploadQueue().length;
+      showToast(q === 0 ? 'Tous les plans de cet appareil sont envoyés ✓' : `${q} envoi(s) encore en attente — voir l'état ci-dessus`, q === 0 ? '' : 'error');
+    } finally { planRetryBtn.disabled = false; }
+  });
 
   // Sauvegardes de secours (Données → Admin)
   const backupCreateBtn = document.getElementById('backupcreate');

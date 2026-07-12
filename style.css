@@ -5061,6 +5061,22 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   text-align: left;
 }
 
+/* ============ PLANS : ÉTAT DE SYNCHRO (Données → Admin) ============ */
+.plansync-status {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text-2);
+}
+.plansync-status .plansync-err { color: var(--danger); font-weight: 600; }
+.plansync-status .plansync-warn { color: var(--warning); }
+.plansync-status .plansync-ok { color: var(--success-2); font-weight: 600; }
+.plansync-retry { width: 100%; }
+
 /* ============ SAUVEGARDES DE SECOURS (Données → Admin) ============ */
 .backup-list {
   list-style: none; margin: 0 0 10px; padding: 0;
