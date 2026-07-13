@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.41';
+const APP_VERSION = '1.42';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -122,9 +122,14 @@ const state = {
   // { [companyId]: { [groupKey]: [{ id, text, amount, sourceDevisLineId? }] } }
   stEntries: {},
   stSelectedCompanyId: null, // entreprise affichée dans le slider ST (UI per-device)
-  // Devis : [{ id, number, etat, lines: [{ id, text, amount, companyId }] }]
+  // Devis : [{ id, number, etat, avenantNum,
+  //   versions: [{ id, indice: '0'|'A'|'B'…, date, lines: [{ id, text,
+  //     amount, companyId, hoursText, hours, materielText, materielAmount,
+  //     materiauxText, materiauxAmount }] }] }]
+  // Le DERNIER indice est la version courante (celle qui alimente ST).
   devis: [],
   devisSelectedId: '',       // devis affiché (UI per-device)
+  devisSelectedVersion: {},  // { [devisId]: versionId } — indice affiché (UI per-device)
   // Synchronisation (modèle simplifié : un seul jeu partagé via Supabase)
   syncStatus: 'idle',        // 'idle' | 'syncing' | 'error' | 'offline'
   syncTimestamp: 0,          // ms epoch — dernier changement local connu
@@ -225,6 +230,7 @@ function load() {
     if (data.stSelectedCompanyId) state.stSelectedCompanyId = data.stSelectedCompanyId;
     if (Array.isArray(data.devis)) state.devis = data.devis;
     if (typeof data.devisSelectedId === 'string') state.devisSelectedId = data.devisSelectedId;
+    if (data.devisSelectedVersion && typeof data.devisSelectedVersion === 'object') state.devisSelectedVersion = data.devisSelectedVersion;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
     if (typeof data.syncTimestamp === 'number') state.syncTimestamp = data.syncTimestamp;
@@ -256,6 +262,7 @@ function runPostLoadMigrations() {
   migrateHeuresWeeks();
   migratePresences();
   migrateSetups();
+  migrateDevisVersions();
   initSyncStamps();
 }
 
@@ -316,6 +323,7 @@ function buildPersistedData() {
     stSelectedCompanyId: state.stSelectedCompanyId,
     devis: state.devis,
     devisSelectedId: state.devisSelectedId,
+    devisSelectedVersion: state.devisSelectedVersion,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange,
     syncTimestamp: state.syncTimestamp,
@@ -7102,13 +7110,121 @@ function isDevisValidated(d) {
 }
 function getDevisByLineId(lineId) {
   for (const d of getDevisList()) {
-    if ((d.lines || []).some(l => l.id === lineId)) return d;
+    for (const v of getDevisVersions(d)) {
+      if ((v.lines || []).some(l => l.id === lineId)) return d;
+    }
   }
   return null;
+}
+// Localise une ligne dans les versions d'un devis.
+function findDevisLine(d, lineId) {
+  for (const v of getDevisVersions(d)) {
+    const line = (v.lines || []).find(l => l.id === lineId);
+    if (line) return { version: v, line };
+  }
+  return null;
+}
+// Une ligne n'alimente ST que si elle appartient à la version COURANTE
+// (dernier indice) — les indices précédents sont un historique.
+function isDevisLineCurrent(d, lineId) {
+  const cur = getDevisCurrentVersion(d);
+  return (cur.lines || []).some(l => l.id === lineId);
 }
 
 function getDevisList() { return Array.isArray(state.devis) ? state.devis : (state.devis = []); }
 function getDevisById(id) { return getDevisList().find(d => d.id === id) || null; }
+
+// --- Indices (versions) d'un devis : 0 puis A, B, C… ---
+function devisIndiceLabel(idx) {
+  if (idx === 0) return '0';
+  let n = idx, s = '';
+  while (n > 0) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); }
+  return s;
+}
+// Migration : les devis pré-versions ({ lines, date } à plat) deviennent
+// un indice « 0 ». Idempotente ; s'exécute au boot et défensivement à
+// l'accès (un payload d'ancien client peut réintroduire l'ancien format).
+function ensureDevisVersions(d) {
+  if (!d) return d;
+  if (!Array.isArray(d.versions) || d.versions.length === 0) {
+    d.versions = [{
+      id: 'dvv_' + uid(),
+      indice: '0',
+      date: d.date || '',
+      lines: Array.isArray(d.lines) ? d.lines : []
+    }];
+    delete d.lines;
+  }
+  return d;
+}
+function migrateDevisVersions() {
+  for (const d of getDevisList()) ensureDevisVersions(d);
+}
+function getDevisVersions(d) { return ensureDevisVersions(d).versions; }
+// La version COURANTE (dernier indice) : celle qui alimente ST.
+function getDevisCurrentVersion(d) {
+  const v = getDevisVersions(d);
+  return v[v.length - 1];
+}
+function getSelectedDevisVersion(d) {
+  const versions = getDevisVersions(d);
+  const wanted = (state.devisSelectedVersion || {})[d.id];
+  return versions.find(v => v.id === wanted) || versions[versions.length - 1];
+}
+function setSelectedDevisVersion(devisId, versionId) {
+  if (!state.devisSelectedVersion) state.devisSelectedVersion = {};
+  state.devisSelectedVersion[devisId] = versionId;
+  save();
+  renderDevis();
+}
+// Nouvel indice = copie de la version courante (lignes dupliquées avec de
+// nouveaux ids). Le pont ST bascule sur les nouvelles lignes : l'ancien
+// indice devient un historique qui n'alimente plus ST.
+function addDevisVersion(devisId) {
+  const d = getDevisById(devisId);
+  if (!d) return;
+  const versions = getDevisVersions(d);
+  const prev = versions[versions.length - 1];
+  const copy = {
+    id: 'dvv_' + uid(),
+    indice: devisIndiceLabel(versions.length),
+    date: todayISO(),
+    lines: (prev.lines || []).map(l => ({ ...l, id: 'dl_' + uid() }))
+  };
+  // Bascule ST : retire les entrées des anciennes lignes, crée celles des copies.
+  for (const l of (prev.lines || [])) removeSTEntryForDevisLine(l.id);
+  versions.push(copy);
+  for (const l of copy.lines) syncDevisLineToST(l, d);
+  if (!state.devisSelectedVersion) state.devisSelectedVersion = {};
+  state.devisSelectedVersion[devisId] = copy.id;
+  save();
+  renderDevis();
+  renderST();
+}
+function deleteDevisVersion(devisId, versionId) {
+  const d = getDevisById(devisId);
+  if (!d) return;
+  const versions = getDevisVersions(d);
+  if (versions.length <= 1) return;
+  const idx = versions.findIndex(v => v.id === versionId);
+  if (idx < 0) return;
+  const wasCurrent = idx === versions.length - 1;
+  const v = versions[idx];
+  if (!confirm(`Supprimer l'indice ${v.indice} de ce devis ?`)) return;
+  if (wasCurrent) {
+    // La version précédente redevient courante → re-bascule du pont ST.
+    for (const l of (v.lines || [])) removeSTEntryForDevisLine(l.id);
+    versions.splice(idx, 1);
+    const cur = versions[versions.length - 1];
+    for (const l of (cur.lines || [])) syncDevisLineToST(l, d);
+  } else {
+    versions.splice(idx, 1);
+  }
+  if (state.devisSelectedVersion) delete state.devisSelectedVersion[devisId];
+  save();
+  renderDevis();
+  renderST();
+}
 function getSelectedDevis() {
   const list = getDevisList();
   if (!list.length) return null;
@@ -7125,7 +7241,10 @@ function getNextDevisNumber() {
   return max + 1;
 }
 function addDevis() {
-  const d = { id: 'dv_' + uid(), number: getNextDevisNumber(), etat: 'brouillon', date: todayISO(), lines: [] };
+  const d = {
+    id: 'dv_' + uid(), number: getNextDevisNumber(), etat: 'brouillon', avenantNum: '',
+    versions: [{ id: 'dvv_' + uid(), indice: '0', date: todayISO(), lines: [] }]
+  };
   getDevisList().push(d);
   state.devisSelectedId = d.id;
   save();
@@ -7135,7 +7254,9 @@ function deleteDevis(id) {
   const d = getDevisById(id);
   if (!d) return;
   if (!confirm(`Supprimer le devis n°${d.number} et ses lignes ?\nLes lignes ST liées seront aussi retirées.`)) return;
-  for (const line of (d.lines || [])) removeSTEntryForDevisLine(line.id);
+  for (const v of getDevisVersions(d)) {
+    for (const line of (v.lines || [])) removeSTEntryForDevisLine(line.id);
+  }
   state.devis = getDevisList().filter(x => x.id !== id);
   if (state.devisSelectedId === id) {
     const list = getDevisList();
@@ -7156,18 +7277,26 @@ function setDevisEtat(id, etat) {
 function setDevisDate(id, value) {
   const d = getDevisById(id);
   if (!d) return;
-  d.date = value || '';
+  // La date de rédaction est propre à l'indice affiché.
+  const v = getSelectedDevisVersion(d);
+  if (v) v.date = value || '';
   save();
-  renderDevis(); // met à jour la date affichée dans l'onglet
+}
+function setDevisAvenantNum(id, value) {
+  const d = getDevisById(id);
+  if (!d) return;
+  d.avenantNum = String(value || '');
+  save();
 }
 
-// --- Lignes de devis ---
+// --- Lignes de devis (opèrent sur l'indice AFFICHÉ) ---
 function addDevisLine(devisId) {
   const d = getDevisById(devisId);
   if (!d) return;
-  if (!Array.isArray(d.lines)) d.lines = [];
+  const v = getSelectedDevisVersion(d);
+  if (!Array.isArray(v.lines)) v.lines = [];
   const line = { id: 'dl_' + uid(), text: '', amount: 0, companyId: '' };
-  d.lines.push(line);
+  v.lines.push(line);
   save();
   renderDevis();
   requestAnimationFrame(() => {
@@ -7181,25 +7310,27 @@ const DEVIS_LINE_NUM_FIELDS = new Set(['hours', 'materielAmount', 'materiauxAmou
 function setDevisLineField(devisId, lineId, field, value) {
   const d = getDevisById(devisId);
   if (!d) return;
-  const line = (d.lines || []).find(l => l.id === lineId);
-  if (!line) return;
+  const found = findDevisLine(d, lineId);
+  if (!found) return;
+  const line = found.line;
+  // Seule la version courante alimente ST (les autres = historique).
+  const bridgeST = isDevisLineCurrent(d, lineId);
   if (field === 'text') {
     line.text = value;
-    syncDevisLineToST(line, d);
+    if (bridgeST) syncDevisLineToST(line, d);
     save();
   } else if (field === 'amount') {
     const n = parseFloat(String(value).replace(/[^\d,.-]/g, '').replace(',', '.'));
     line.amount = Number.isFinite(n) ? n : 0;
-    syncDevisLineToST(line, d);
+    if (bridgeST) syncDevisLineToST(line, d);
     save();
     refreshDevisLineTotal(d.id, lineId);
     refreshDevisRecap(d.id);
-    renderST(); // le montant Conforme change → récap ST à jour
+    if (bridgeST) renderST(); // le montant Conforme change → récap ST à jour
   } else if (field === 'companyId') {
     line.companyId = value || '';
-    syncDevisLineToST(line, d);
+    if (bridgeST) { syncDevisLineToST(line, d); renderST(); }
     save();
-    renderST();
   } else if (DEVIS_LINE_TEXT_FIELDS.has(field)) {
     line[field] = value;
     save();
@@ -7215,7 +7346,9 @@ function setDevisLineField(devisId, lineId, field, value) {
 function deleteDevisLine(devisId, lineId) {
   const d = getDevisById(devisId);
   if (!d) return;
-  d.lines = (d.lines || []).filter(l => l.id !== lineId);
+  const found = findDevisLine(d, lineId);
+  if (!found) return;
+  found.version.lines = (found.version.lines || []).filter(l => l.id !== lineId);
   removeSTEntryForDevisLine(lineId);
   save();
   renderDevis();
@@ -7271,23 +7404,29 @@ function computeDevisLineTotal(line) {
 }
 function refreshDevisLineTotal(devisId, lineId) {
   const d = getDevisById(devisId);
-  const line = d && (d.lines || []).find(l => l.id === lineId);
-  if (!line) return;
+  const found = d && findDevisLine(d, lineId);
+  if (!found) return;
   const el = document.querySelector(`.devis-line[data-line-id="${cssEscape(lineId)}"] .devis-line-total-val`);
-  if (el) el.textContent = fmtEur(computeDevisLineTotal(line));
+  if (el) el.textContent = fmtEur(computeDevisLineTotal(found.line));
 }
-// --- Récap d'un devis ---
-function computeDevisRecap(devis) {
-  const lines = (devis && devis.lines) || [];
+// --- Récaps ---
+// Récap d'une VERSION (bandeau du corps : l'indice affiché).
+function computeDevisVersionRecap(version) {
+  const lines = (version && version.lines) || [];
   const total = lines.reduce((s, l) => s + computeDevisLineTotal(l), 0);
   return { total, count: lines.length };
+}
+// Récap d'un DEVIS = sa version courante (dernier indice). Utilisé par
+// l'onglet Récap (sommes par état).
+function computeDevisRecap(devis) {
+  return computeDevisVersionRecap(getDevisCurrentVersion(devis));
 }
 function refreshDevisRecap(devisId) {
   const d = getDevisById(devisId);
   if (!d) return;
   const el = document.querySelector(`.devis-recap[data-devis-id="${cssEscape(devisId)}"]`);
   if (!el) return;
-  const r = computeDevisRecap(d);
+  const r = computeDevisVersionRecap(getSelectedDevisVersion(d));
   const t = el.querySelector('[data-devis-recap="total"]');
   const c = el.querySelector('[data-devis-recap="count"]');
   if (t) t.textContent = fmtEur(r.total);
@@ -7412,6 +7551,50 @@ function buildDevisRecapBody() {
 function buildDevisBody(devis) {
   const card = document.createElement('div');
   card.className = 'devis-card';
+  const version = getSelectedDevisVersion(devis);
+  const isCurrent = version.id === getDevisCurrentVersion(devis).id;
+
+  // Slider des indices (versions) : 0, A, B, C… + « + » pour un nouvel
+  // indice (copie de la version courante).
+  const verBar = document.createElement('div');
+  verBar.className = 'devis-versions';
+  for (const v of getDevisVersions(devis)) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'devis-version-chip' + (v.id === version.id ? ' is-active' : '');
+    chip.dataset.devisAction = 'select-version';
+    chip.dataset.devisId = devis.id;
+    chip.dataset.versionId = v.id;
+    chip.textContent = 'Indice ' + v.indice;
+    verBar.appendChild(chip);
+  }
+  if (getDevisVersions(devis).length > 1) {
+    const delVer = document.createElement('button');
+    delVer.type = 'button';
+    delVer.className = 'devis-version-chip devis-version-del';
+    delVer.dataset.devisAction = 'delete-version';
+    delVer.dataset.devisId = devis.id;
+    delVer.dataset.versionId = version.id;
+    delVer.title = 'Supprimer l\'indice affiché';
+    delVer.textContent = '×';
+    verBar.appendChild(delVer);
+  }
+  const addVer = document.createElement('button');
+  addVer.type = 'button';
+  addVer.className = 'devis-version-chip devis-version-add';
+  addVer.dataset.devisAction = 'add-version';
+  addVer.dataset.devisId = devis.id;
+  addVer.title = 'Nouvel indice (copie de la version courante)';
+  addVer.textContent = '+';
+  verBar.appendChild(addVer);
+  card.appendChild(verBar);
+
+  if (!isCurrent) {
+    const note = document.createElement('p');
+    note.className = 'devis-version-note';
+    note.textContent = `Indice ${version.indice} — version archivée : ses montants n'alimentent pas l'onglet ST (seul le dernier indice compte).`;
+    card.appendChild(note);
+  }
 
   // Ligne état + suppression
   const etatRow = document.createElement('div');
@@ -7440,7 +7623,28 @@ function buildDevisBody(devis) {
   etatRow.appendChild(delBtn);
   card.appendChild(etatRow);
 
-  // Date de rédaction — sur sa propre ligne, sous l'état.
+  // N° d'avenant — visible uniquement quand l'état est « Avenant reçu ».
+  if (devis.etat === 'avenant') {
+    const avRow = document.createElement('div');
+    avRow.className = 'devis-etat-row devis-avenant-row';
+    const avLabel = document.createElement('span');
+    avLabel.className = 'devis-etat-label';
+    avLabel.textContent = 'N° d\'avenant :';
+    avRow.appendChild(avLabel);
+    const avInp = document.createElement('input');
+    avInp.type = 'text';
+    avInp.className = 'devis-avenant-input';
+    avInp.maxLength = 20;
+    avInp.placeholder = 'ex. AV-03';
+    avInp.value = devis.avenantNum || '';
+    avInp.dataset.devisAction = 'set-avenant';
+    avInp.dataset.devisId = devis.id;
+    avInp.setAttribute('aria-label', 'Numéro de l\'avenant');
+    avRow.appendChild(avInp);
+    card.appendChild(avRow);
+  }
+
+  // Date de rédaction — sur sa propre ligne, sous l'état (par indice).
   const dateRow = document.createElement('div');
   dateRow.className = 'devis-etat-row devis-date-row';
   const dateLabel = document.createElement('span');
@@ -7450,15 +7654,15 @@ function buildDevisBody(devis) {
   const dateInp = document.createElement('input');
   dateInp.type = 'date';
   dateInp.className = 'devis-date-input';
-  dateInp.value = devis.date || '';
+  dateInp.value = version.date || '';
   dateInp.dataset.devisAction = 'set-date';
   dateInp.dataset.devisId = devis.id;
-  dateInp.setAttribute('aria-label', 'Date de rédaction du devis');
+  dateInp.setAttribute('aria-label', 'Date de rédaction de cet indice');
   dateRow.appendChild(dateInp);
   card.appendChild(dateRow);
 
-  // Encart récap (orange, comme ST)
-  const r = computeDevisRecap(devis);
+  // Encart récap (orange, comme ST) — totaux de l'indice affiché
+  const r = computeDevisVersionRecap(version);
   const recap = document.createElement('div');
   recap.className = 'st-recap devis-recap';
   recap.dataset.devisId = devis.id;
@@ -7476,16 +7680,16 @@ function buildDevisBody(devis) {
   recap.querySelector('[data-devis-recap="count"]').textContent = String(r.count);
   card.appendChild(recap);
 
-  // Lignes
+  // Lignes de l'indice affiché
   const lines = document.createElement('div');
   lines.className = 'devis-lines';
-  if (!devis.lines || devis.lines.length === 0) {
+  if (!version.lines || version.lines.length === 0) {
     const ph = document.createElement('p');
     ph.className = 'st-group-empty';
     ph.textContent = 'Aucune ligne. Touchez « + Ajouter une ligne ».';
     lines.appendChild(ph);
   } else {
-    for (const line of devis.lines) lines.appendChild(buildDevisLine(devis.id, line));
+    for (const line of version.lines) lines.appendChild(buildDevisLine(devis.id, line));
   }
   card.appendChild(lines);
 
@@ -11552,6 +11756,7 @@ const SYNC_EXCLUDED_KEYS = new Set([
   'crSelectedWeekId',                // semaine CR sélectionnée par entreprise (UI)
   'stSelectedCompanyId',             // entreprise sélectionnée dans le slider ST (UI)
   'devisSelectedId',                 // devis sélectionné (UI)
+  'devisSelectedVersion',            // indice sélectionné par devis (UI)
   'syncStatus', 'syncTimestamp', 'syncLastPulled', 'syncLastSeenRemoteTs',
   'protoPlan', 'protoPlanW', 'protoPlanH' // champs hérités migrés
 ]);
@@ -12406,10 +12611,13 @@ function init() {
     devisPage.addEventListener('click', (e) => {
       const t = e.target.closest('[data-devis-action]');
       if (!t) return;
-      const { devisAction, devisId, lineId } = t.dataset;
+      const { devisAction, devisId, lineId, versionId } = t.dataset;
       if (devisAction === 'select') setSelectedDevis(devisId);
       else if (devisAction === 'add') addDevis();
       else if (devisAction === 'delete') deleteDevis(devisId);
+      else if (devisAction === 'select-version') setSelectedDevisVersion(devisId, versionId);
+      else if (devisAction === 'add-version') addDevisVersion(devisId);
+      else if (devisAction === 'delete-version') deleteDevisVersion(devisId, versionId);
       else if (devisAction === 'add-line') addDevisLine(devisId);
       else if (devisAction === 'delete-line') {
         if (confirm('Supprimer cette ligne ? La ligne ST liée sera aussi retirée.')) deleteDevisLine(devisId, lineId);
@@ -12427,6 +12635,7 @@ function init() {
       if (!t) return;
       if (t.dataset.devisAction === 'edit-text') setDevisLineField(t.dataset.devisId, t.dataset.lineId, 'text', t.value);
       else if (t.dataset.devisAction === 'edit-line-field') setDevisLineField(t.dataset.devisId, t.dataset.lineId, t.dataset.field, t.value);
+      else if (t.dataset.devisAction === 'set-avenant') setDevisAvenantNum(t.dataset.devisId, t.value);
     });
   }
 

@@ -246,11 +246,19 @@ option {
 }
 
 /* ============ ONGLET DEVIS ============ */
-/* Onglets de devis (colorés par état) */
+/* Onglets de devis (colorés par état) : UNE seule ligne qui déborde et
+   glisse horizontalement sur petit écran (pas de retour à la ligne). */
 .devis-tabs {
-  display: flex; flex-wrap: wrap; gap: 6px;
+  display: flex; flex-wrap: nowrap; gap: 6px;
   margin: 6px 0 14px;
+  overflow-x: auto; overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x mandatory;
+  padding: 2px;
+  scrollbar-width: none;
 }
+.devis-tabs::-webkit-scrollbar { display: none; }
+.devis-tabs .devis-tab { scroll-snap-align: start; flex: 0 0 auto; }
 .devis-tab {
   flex: 0 0 auto;
   border: 2px solid transparent;
@@ -356,6 +364,59 @@ option {
 .taux-horaire-unit { font-size: 14px; font-weight: 600; color: var(--text-2); }
 
 .devis-card { display: flex; flex-direction: column; gap: 14px; }
+
+/* Slider des indices (versions) du devis : 0, A, B, C… — même principe
+   qu'au-dessus : une ligne, défilement horizontal si besoin. */
+.devis-versions {
+  display: flex; flex-wrap: nowrap; gap: 6px;
+  overflow-x: auto; overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding: 2px;
+  scrollbar-width: none;
+}
+.devis-versions::-webkit-scrollbar { display: none; }
+.devis-version-chip {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-2);
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px; font-weight: 700;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  white-space: nowrap;
+}
+.devis-version-chip.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.devis-version-add, .devis-version-del {
+  background: transparent;
+  border-style: dashed;
+  color: var(--text-3);
+  font-size: 14px;
+}
+.devis-version-add:hover { color: var(--accent); border-color: var(--accent); }
+.devis-version-del:hover { color: var(--danger); border-color: var(--danger); }
+.devis-version-note {
+  margin: 0;
+  font-size: 12px; font-style: italic;
+  color: var(--warning);
+}
+
+/* Champ N° d'avenant (visible en état « Avenant reçu ») */
+.devis-avenant-input {
+  flex: 0 1 160px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 14px; font-weight: 600;
+}
+.devis-avenant-input:focus { outline: none; border-color: var(--accent); }
 
 /* Ligne état + suppression */
 .devis-etat-row {
