@@ -486,12 +486,24 @@
     <section class="page" id="page-travaux">
       <h2 class="section-title">Travaux</h2>
       <p class="section-help">
-        Récapitulatif du scope chantier : cochez les localisations concernées
-        par chaque prestation. Renseignez le produit validé sous l'intitulé.
+        Scope chantier par zone : les lots (Données → Lots) en lignes, vos
+        localisations en colonnes, et dans chaque case la description de
+        l'ouvrage à réaliser.
       </p>
-      <div class="travaux-actions">
-        <button class="btn-primary" id="travauxadditem" type="button">+ Prestation</button>
-        <button class="btn-secondary" id="travauxaddloc" type="button">+ Localisation</button>
+      <div class="travaux-filters">
+        <label class="travaux-filter">
+          <span class="travaux-filter-label">Niveau</span>
+          <select id="travauxlevel" class="travaux-filter-select"></select>
+        </label>
+        <label class="travaux-filter">
+          <span class="travaux-filter-label">Zone</span>
+          <select id="travauxzone" class="travaux-filter-select"></select>
+        </label>
+        <label class="travaux-filter">
+          <span class="travaux-filter-label">Lot</span>
+          <select id="travauxlot" class="travaux-filter-select"></select>
+        </label>
+        <button class="btn-secondary travaux-addloc" id="travauxaddloc" type="button">+ Localisation</button>
       </div>
       <div class="travaux-table-wrap" id="travauxtablewrap"></div>
     </section>

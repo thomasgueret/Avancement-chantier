@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.47';
+const APP_VERSION = '1.48';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -130,10 +130,15 @@ const state = {
   devis: [],
   devisSelectedId: '',       // devis affiché (UI per-device)
   devisSelectedVersion: {},  // { [devisId]: versionId } — indice affiché (UI per-device)
-  // Travaux : matrice du scope chantier — prestations × localisations.
-  // travauxItems[i].cells = { [locationId]: true } (case cochée = concerné)
+  // Travaux : matrice du scope chantier — lots (lignes, depuis Données →
+  // Lots) × localisations (colonnes), une matrice PAR ZONE sélectionnée.
+  // travauxCells[zoneId][lotId][locationId] = description de l'ouvrage.
   travauxLocations: [],      // [{ id, name }]
-  travauxItems: [],          // [{ id, task, product, cells: {} }]
+  travauxItems: [],          // hérité v1.47 (prestations libres) — conservé, plus affiché
+  travauxCells: {},          // { [zoneId]: { [lotId]: { [locId]: string } } }
+  travauxSelectedLevel: 1,   // niveau de zones affiché (UI per-device)
+  travauxSelectedZoneId: '', // zone affichée (UI per-device)
+  travauxLotFilter: '',      // '' = tous les lots (UI per-device)
   // Synchronisation (modèle simplifié : un seul jeu partagé via Supabase)
   syncStatus: 'idle',        // 'idle' | 'syncing' | 'error' | 'offline'
   syncTimestamp: 0,          // ms epoch — dernier changement local connu
@@ -237,6 +242,10 @@ function load() {
     if (data.devisSelectedVersion && typeof data.devisSelectedVersion === 'object') state.devisSelectedVersion = data.devisSelectedVersion;
     if (Array.isArray(data.travauxLocations)) state.travauxLocations = data.travauxLocations;
     if (Array.isArray(data.travauxItems)) state.travauxItems = data.travauxItems;
+    if (data.travauxCells && typeof data.travauxCells === 'object') state.travauxCells = data.travauxCells;
+    if (Number.isFinite(data.travauxSelectedLevel)) state.travauxSelectedLevel = data.travauxSelectedLevel;
+    if (typeof data.travauxSelectedZoneId === 'string') state.travauxSelectedZoneId = data.travauxSelectedZoneId;
+    if (typeof data.travauxLotFilter === 'string') state.travauxLotFilter = data.travauxLotFilter;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
     if (typeof data.syncTimestamp === 'number') state.syncTimestamp = data.syncTimestamp;
@@ -332,6 +341,10 @@ function buildPersistedData() {
     devisSelectedVersion: state.devisSelectedVersion,
     travauxLocations: state.travauxLocations,
     travauxItems: state.travauxItems,
+    travauxCells: state.travauxCells,
+    travauxSelectedLevel: state.travauxSelectedLevel,
+    travauxSelectedZoneId: state.travauxSelectedZoneId,
+    travauxLotFilter: state.travauxLotFilter,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange,
     syncTimestamp: state.syncTimestamp,
@@ -8119,51 +8132,117 @@ function deleteTravauxLocation(id) {
   save();
   renderTravaux();
 }
-function addTravauxItem() {
-  getTravauxItems().push({ id: 'ti_' + uid(), task: '', product: '', cells: {} });
-  save();
-  renderTravaux();
-  requestAnimationFrame(() => {
-    const inputs = document.querySelectorAll('.travaux-task-input');
-    const last = inputs[inputs.length - 1];
-    if (last) last.focus();
-  });
+// --- Zones par niveau (1 = racines, 2 = leurs enfants, etc.) ---
+function getZoneDepth(zone) {
+  let d = 1, cur = zone;
+  const byId = new Map(state.zones.map(z => [z.id, z]));
+  while (cur && cur.parentId) { d++; cur = byId.get(cur.parentId); if (d > 20) break; }
+  return d;
 }
-function setTravauxItemField(id, field, value) {
-  const item = getTravauxItems().find(i => i.id === id);
-  if (!item) return;
-  if (field === 'task') item.task = value;
-  else if (field === 'product') item.product = value;
+function getTravauxLevels() {
+  let max = 0;
+  for (const z of state.zones) max = Math.max(max, getZoneDepth(z));
+  return max;
+}
+function getZonesAtLevel(level) {
+  return state.zones.filter(z => getZoneDepth(z) === level);
+}
+function getTravauxSelectedZone() {
+  const level = Math.max(1, Number(state.travauxSelectedLevel) || 1);
+  const zones = getZonesAtLevel(level);
+  if (zones.length === 0) return null;
+  return zones.find(z => z.id === state.travauxSelectedZoneId) || zones[0];
+}
+
+// --- Cellules : description de l'ouvrage par (zone, lot, localisation) ---
+function getTravauxCell(zoneId, lotId, locId) {
+  const z = state.travauxCells && state.travauxCells[zoneId];
+  const l = z && z[lotId];
+  return (l && typeof l[locId] === 'string') ? l[locId] : '';
+}
+function setTravauxCell(zoneId, lotId, locId, text) {
+  if (!state.travauxCells || typeof state.travauxCells !== 'object') state.travauxCells = {};
+  if (!state.travauxCells[zoneId]) state.travauxCells[zoneId] = {};
+  if (!state.travauxCells[zoneId][lotId]) state.travauxCells[zoneId][lotId] = {};
+  const t = String(text || '');
+  if (t) state.travauxCells[zoneId][lotId][locId] = t;
+  else {
+    delete state.travauxCells[zoneId][lotId][locId];
+    if (Object.keys(state.travauxCells[zoneId][lotId]).length === 0) delete state.travauxCells[zoneId][lotId];
+    if (Object.keys(state.travauxCells[zoneId]).length === 0) delete state.travauxCells[zoneId];
+  }
   save(); // pas de re-render : frappe en cours
-}
-function deleteTravauxItem(id) {
-  const item = getTravauxItems().find(i => i.id === id);
-  if (!item) return;
-  if (!confirm(`Supprimer la prestation « ${(item.task || 'sans intitulé').slice(0, 60)} » ?`)) return;
-  state.travauxItems = getTravauxItems().filter(i => i.id !== id);
-  save();
-  renderTravaux();
-}
-function toggleTravauxCell(itemId, locId, checked) {
-  const item = getTravauxItems().find(i => i.id === itemId);
-  if (!item) return;
-  if (!item.cells || typeof item.cells !== 'object') item.cells = {};
-  if (checked) item.cells[locId] = true;
-  else delete item.cells[locId];
-  save(); // la checkbox reflète déjà l'état : pas de re-render
 }
 
 function renderTravaux() {
+  renderTravauxFilters();
+  renderTravauxTable();
+}
+
+// Sélecteurs Niveau / Zone / Lot
+function renderTravauxFilters() {
+  const levelSel = document.getElementById('travauxlevel');
+  const zoneSel = document.getElementById('travauxzone');
+  const lotSel = document.getElementById('travauxlot');
+  if (!levelSel || !zoneSel || !lotSel) return;
+  const maxLevel = getTravauxLevels();
+  const level = Math.min(Math.max(1, Number(state.travauxSelectedLevel) || 1), Math.max(1, maxLevel));
+  state.travauxSelectedLevel = level;
+  levelSel.innerHTML = '';
+  for (let i = 1; i <= Math.max(1, maxLevel); i++) {
+    const opt = new Option('Niveau ' + i, String(i));
+    if (i === level) opt.selected = true;
+    levelSel.appendChild(opt);
+  }
+  zoneSel.innerHTML = '';
+  const zones = getZonesAtLevel(level);
+  if (zones.length === 0) {
+    zoneSel.appendChild(new Option('(aucune zone)', ''));
+  } else {
+    const selected = getTravauxSelectedZone();
+    for (const z of zones) {
+      const opt = new Option(z.name || '(zone sans nom)', z.id);
+      if (selected && z.id === selected.id) opt.selected = true;
+      zoneSel.appendChild(opt);
+    }
+  }
+  lotSel.innerHTML = '';
+  const all = new Option('Tous les lots', '');
+  if (!state.travauxLotFilter) all.selected = true;
+  lotSel.appendChild(all);
+  for (const lot of (state.workBatches || [])) {
+    const opt = new Option(lot.name || '(lot sans nom)', lot.id);
+    if (lot.id === state.travauxLotFilter) opt.selected = true;
+    lotSel.appendChild(opt);
+  }
+}
+
+function renderTravauxTable() {
   const wrap = document.getElementById('travauxtablewrap');
   if (!wrap) return;
   wrap.innerHTML = '';
   const locations = getTravauxLocations();
-  const items = getTravauxItems();
+  const lots = (state.workBatches || []).filter(l => !state.travauxLotFilter || l.id === state.travauxLotFilter);
+  const zone = getTravauxSelectedZone();
 
-  if (locations.length === 0 && items.length === 0) {
+  if (!zone) {
     const p = document.createElement('p');
     p.className = 'heures-empty';
-    p.textContent = 'Commencez par « + Localisation » (ex. Circulations Bât A) puis « + Prestation » (ex. Peinture portes intérieures).';
+    p.textContent = 'Aucune zone. Créez votre arborescence dans Données → Zones.';
+    wrap.appendChild(p);
+    return;
+  }
+  if ((state.workBatches || []).length === 0) {
+    const p = document.createElement('p');
+    p.className = 'heures-empty';
+    p.textContent = 'Aucun lot. Créez vos lots dans Données → Lots.';
+    wrap.appendChild(p);
+    return;
+  }
+  if (locations.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'heures-empty';
+    p.textContent = 'Ajoutez une localisation (ex. Circulations, Halls, Façades…) avec « + Localisation ».';
     wrap.appendChild(p);
     return;
   }
@@ -8171,12 +8250,12 @@ function renderTravaux() {
   const table = document.createElement('table');
   table.className = 'travaux-table';
 
-  // THEAD : coin + une colonne par localisation
+  // THEAD : coin (zone affichée) + une colonne par localisation
   const thead = document.createElement('thead');
   const hr = document.createElement('tr');
   const corner = document.createElement('th');
   corner.className = 'travaux-corner';
-  corner.textContent = 'Prestation';
+  corner.textContent = 'Lot — ' + (zone.name || 'zone');
   hr.appendChild(corner);
   for (const loc of locations) {
     const th = document.createElement('th');
@@ -8201,69 +8280,40 @@ function renderTravaux() {
   thead.appendChild(hr);
   table.appendChild(thead);
 
-  // TBODY : une ligne par prestation
+  // TBODY : une ligne par lot ; cellule = description libre de l'ouvrage
   const tbody = document.createElement('tbody');
-  for (const item of items) {
+  for (const lot of lots) {
     const tr = document.createElement('tr');
     const th = document.createElement('th');
-    th.className = 'travaux-item';
-    const task = document.createElement('textarea');
-    task.className = 'travaux-task-input';
-    task.rows = 1;
-    task.placeholder = 'Prestation (ex. Peinture portes intérieures)…';
-    task.value = item.task || '';
-    const autoResize = () => { task.style.height = 'auto'; task.style.height = (task.scrollHeight + 2) + 'px'; };
-    task.addEventListener('input', () => { autoResize(); setTravauxItemField(item.id, 'task', task.value); });
-    setTimeout(autoResize, 0);
-    th.appendChild(task);
-    const prodRow = document.createElement('div');
-    prodRow.className = 'travaux-product-row';
-    const prodLbl = document.createElement('span');
-    prodLbl.className = 'travaux-product-label';
-    prodLbl.textContent = 'Produit :';
-    prodRow.appendChild(prodLbl);
-    const prod = document.createElement('input');
-    prod.type = 'text';
-    prod.className = 'travaux-product-input';
-    prod.placeholder = 'ex. RAL 9007, poignées neuves…';
-    prod.maxLength = 80;
-    prod.value = item.product || '';
-    prod.addEventListener('input', () => setTravauxItemField(item.id, 'product', prod.value));
-    prodRow.appendChild(prod);
-    th.appendChild(prodRow);
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.className = 'travaux-item-del';
-    del.setAttribute('aria-label', 'Supprimer cette prestation');
-    del.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z"/></svg>';
-    del.addEventListener('click', () => deleteTravauxItem(item.id));
-    th.appendChild(del);
+    th.className = 'travaux-item travaux-lot';
+    const dot = document.createElement('span');
+    dot.className = 'travaux-lot-dot';
+    dot.style.background = lot.color || '#888';
+    th.appendChild(dot);
+    const nm = document.createElement('span');
+    nm.className = 'travaux-lot-name';
+    nm.textContent = lot.name || '(lot sans nom)';
+    th.appendChild(nm);
     tr.appendChild(th);
     for (const loc of locations) {
       const td = document.createElement('td');
       td.className = 'travaux-cell';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.className = 'travaux-check';
-      cb.checked = !!(item.cells && item.cells[loc.id]);
-      cb.setAttribute('aria-label', 'Concerné');
-      cb.addEventListener('change', () => {
-        toggleTravauxCell(item.id, loc.id, cb.checked);
-        td.classList.toggle('is-checked', cb.checked);
+      const ta = document.createElement('textarea');
+      ta.className = 'travaux-cell-text';
+      ta.rows = 2;
+      ta.placeholder = '—';
+      ta.value = getTravauxCell(zone.id, lot.id, loc.id);
+      const autoResize = () => { ta.style.height = 'auto'; ta.style.height = Math.max(44, ta.scrollHeight + 2) + 'px'; };
+      ta.addEventListener('input', () => {
+        autoResize();
+        setTravauxCell(zone.id, lot.id, loc.id, ta.value);
+        td.classList.toggle('is-filled', !!ta.value.trim());
       });
-      if (cb.checked) td.classList.add('is-checked');
-      td.appendChild(cb);
+      setTimeout(autoResize, 0);
+      if (ta.value.trim()) td.classList.add('is-filled');
+      td.appendChild(ta);
       tr.appendChild(td);
     }
-    tbody.appendChild(tr);
-  }
-  if (items.length === 0) {
-    const tr = document.createElement('tr');
-    const td = document.createElement('td');
-    td.colSpan = 1 + locations.length;
-    td.className = 'travaux-empty-row';
-    td.textContent = 'Aucune prestation. Touchez « + Prestation ».';
-    tr.appendChild(td);
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
@@ -12196,6 +12246,9 @@ const SYNC_EXCLUDED_KEYS = new Set([
   'stSelectedCompanyId',             // entreprise sélectionnée dans le slider ST (UI)
   'devisSelectedId',                 // devis sélectionné (UI)
   'devisSelectedVersion',            // indice sélectionné par devis (UI)
+  'travauxSelectedLevel',            // niveau de zones affiché dans Travaux (UI)
+  'travauxSelectedZoneId',           // zone affichée dans Travaux (UI)
+  'travauxLotFilter',                // filtre de lots dans Travaux (UI)
   'syncStatus', 'syncTimestamp', 'syncLastPulled', 'syncLastSeenRemoteTs',
   'protoPlan', 'protoPlanW', 'protoPlanH' // champs hérités migrés
 ]);
@@ -12360,7 +12413,8 @@ async function doSyncPull(initial = false, opts = {}) {
 // catastrophique).
 const SYNC_UNION_DICT_KEYS = new Set([
   'presences', 'weather', 'taskProgress', 'zoneUpdated',
-  'adminDocs', 'workerDocs', 'heuresData', 'crEntries', 'stEntries'
+  'adminDocs', 'workerDocs', 'heuresData', 'crEntries', 'stEntries',
+  'travauxCells'
 ]);
 const SYNC_UNION_ARRAY_KEYS = new Set([
   'stockEntries', 'consommableEntries', 'protoShapes', 'devis',
@@ -13045,11 +13099,28 @@ function init() {
     });
   }
 
-  // ----- Travaux : boutons d'ajout -----
-  const travauxAddItemBtn = document.getElementById('travauxadditem');
+  // ----- Travaux : sélecteurs Niveau / Zone / Lot + ajout de localisation -----
   const travauxAddLocBtn = document.getElementById('travauxaddloc');
-  if (travauxAddItemBtn) travauxAddItemBtn.addEventListener('click', addTravauxItem);
   if (travauxAddLocBtn) travauxAddLocBtn.addEventListener('click', addTravauxLocation);
+  const travauxLevelSel = document.getElementById('travauxlevel');
+  if (travauxLevelSel) travauxLevelSel.addEventListener('change', () => {
+    state.travauxSelectedLevel = parseInt(travauxLevelSel.value, 10) || 1;
+    state.travauxSelectedZoneId = ''; // repart sur la 1re zone du niveau
+    save();
+    renderTravaux();
+  });
+  const travauxZoneSel = document.getElementById('travauxzone');
+  if (travauxZoneSel) travauxZoneSel.addEventListener('change', () => {
+    state.travauxSelectedZoneId = travauxZoneSel.value;
+    save();
+    renderTravaux();
+  });
+  const travauxLotSel = document.getElementById('travauxlot');
+  if (travauxLotSel) travauxLotSel.addEventListener('change', () => {
+    state.travauxLotFilter = travauxLotSel.value;
+    save();
+    renderTravaux();
+  });
 
   // ----- Devis : barre de défilement des onglets + délégation -----
   setupDevisTabsScrollbar();
