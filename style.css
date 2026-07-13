@@ -418,6 +418,21 @@ option {
 }
 .devis-avenant-input:focus { outline: none; border-color: var(--accent); }
 
+/* Taux horaire propre au devis */
+.devis-taux-input {
+  flex: 0 1 150px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 14px; font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.devis-taux-input:focus { outline: none; border-color: var(--accent); }
+.devis-taux-input::placeholder { color: var(--text-3); font-weight: 400; }
+
 /* Ligne état + suppression */
 .devis-etat-row {
   display: flex; align-items: center; flex-wrap: wrap; gap: 10px;

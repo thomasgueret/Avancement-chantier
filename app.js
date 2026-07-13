@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.42';
+const APP_VERSION = '1.43';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -7288,6 +7288,18 @@ function setDevisAvenantNum(id, value) {
   d.avenantNum = String(value || '');
   save();
 }
+// Taux horaire propre au devis (vide/0 = taux global de Données).
+// Rafraîchit les totaux affichés sans re-render (préserve le focus).
+function setDevisTauxHoraire(id, value) {
+  const d = getDevisById(id);
+  if (!d) return;
+  const n = parseFloat(String(value).replace(/[^\d,.-]/g, '').replace(',', '.'));
+  d.tauxHoraire = Number.isFinite(n) && n >= 0 ? n : 0;
+  save();
+  const v = getSelectedDevisVersion(d);
+  for (const line of (v.lines || [])) refreshDevisLineTotal(d.id, line.id);
+  refreshDevisRecap(d.id);
+}
 
 // --- Lignes de devis (opèrent sur l'indice AFFICHÉ) ---
 function addDevisLine(devisId) {
@@ -7392,13 +7404,19 @@ function syncDevisLineToST(line, devis) {
 }
 
 // --- Totaux ---
-// Taux horaire global (Données → Admin), pour valoriser la main d'œuvre.
+// Taux horaire global (Données → Admin) : valeur PAR DÉFAUT.
 function getTauxHoraire() { return Number(state.tauxHoraire) || 0; }
+// Taux horaire effectif d'un devis : le sien s'il est renseigné (> 0),
+// sinon le taux global de Données. Les taux varient selon les devis.
+function getDevisTauxHoraire(devis) {
+  const own = Number(devis && devis.tauxHoraire) || 0;
+  return own > 0 ? own : getTauxHoraire();
+}
 // Total d'une ligne de devis = montant sous-traitant + heures × taux
-// horaire + matériel + matériaux.
-function computeDevisLineTotal(line) {
+// horaire (celui du devis) + matériel + matériaux.
+function computeDevisLineTotal(line, taux) {
   return (Number(line.amount) || 0)
-    + (Number(line.hours) || 0) * getTauxHoraire()
+    + (Number(line.hours) || 0) * (Number(taux) || 0)
     + (Number(line.materielAmount) || 0)
     + (Number(line.materiauxAmount) || 0);
 }
@@ -7407,26 +7425,26 @@ function refreshDevisLineTotal(devisId, lineId) {
   const found = d && findDevisLine(d, lineId);
   if (!found) return;
   const el = document.querySelector(`.devis-line[data-line-id="${cssEscape(lineId)}"] .devis-line-total-val`);
-  if (el) el.textContent = fmtEur(computeDevisLineTotal(found.line));
+  if (el) el.textContent = fmtEur(computeDevisLineTotal(found.line, getDevisTauxHoraire(d)));
 }
 // --- Récaps ---
 // Récap d'une VERSION (bandeau du corps : l'indice affiché).
-function computeDevisVersionRecap(version) {
+function computeDevisVersionRecap(version, taux) {
   const lines = (version && version.lines) || [];
-  const total = lines.reduce((s, l) => s + computeDevisLineTotal(l), 0);
+  const total = lines.reduce((s, l) => s + computeDevisLineTotal(l, taux), 0);
   return { total, count: lines.length };
 }
-// Récap d'un DEVIS = sa version courante (dernier indice). Utilisé par
-// l'onglet Récap (sommes par état).
+// Récap d'un DEVIS = sa version courante (dernier indice), à son taux.
+// Utilisé par l'onglet Récap (sommes par état).
 function computeDevisRecap(devis) {
-  return computeDevisVersionRecap(getDevisCurrentVersion(devis));
+  return computeDevisVersionRecap(getDevisCurrentVersion(devis), getDevisTauxHoraire(devis));
 }
 function refreshDevisRecap(devisId) {
   const d = getDevisById(devisId);
   if (!d) return;
   const el = document.querySelector(`.devis-recap[data-devis-id="${cssEscape(devisId)}"]`);
   if (!el) return;
-  const r = computeDevisVersionRecap(getSelectedDevisVersion(d));
+  const r = computeDevisVersionRecap(getSelectedDevisVersion(d), getDevisTauxHoraire(d));
   const t = el.querySelector('[data-devis-recap="total"]');
   const c = el.querySelector('[data-devis-recap="count"]');
   if (t) t.textContent = fmtEur(r.total);
@@ -7644,6 +7662,30 @@ function buildDevisBody(devis) {
     card.appendChild(avRow);
   }
 
+  // Taux horaire propre au devis (les taux varient selon les devis).
+  // Vide = taux global de Données (affiché en placeholder).
+  const tauxRow = document.createElement('div');
+  tauxRow.className = 'devis-etat-row devis-taux-row';
+  const tauxLabel = document.createElement('span');
+  tauxLabel.className = 'devis-etat-label';
+  tauxLabel.textContent = 'Taux horaire :';
+  tauxRow.appendChild(tauxLabel);
+  const tauxInp = document.createElement('input');
+  tauxInp.type = 'text';
+  tauxInp.inputMode = 'decimal';
+  tauxInp.className = 'devis-taux-input';
+  tauxInp.placeholder = getTauxHoraire() > 0 ? fmtPriceForInput(getTauxHoraire()) + ' (défaut)' : '0';
+  tauxInp.value = (Number(devis.tauxHoraire) || 0) > 0 ? fmtPriceForInput(devis.tauxHoraire) : '';
+  tauxInp.dataset.devisAction = 'set-taux';
+  tauxInp.dataset.devisId = devis.id;
+  tauxInp.setAttribute('aria-label', 'Taux horaire de ce devis');
+  tauxRow.appendChild(tauxInp);
+  const tauxUnit = document.createElement('span');
+  tauxUnit.className = 'devis-etat-label';
+  tauxUnit.textContent = '€ / h';
+  tauxRow.appendChild(tauxUnit);
+  card.appendChild(tauxRow);
+
   // Date de rédaction — sur sa propre ligne, sous l'état (par indice).
   const dateRow = document.createElement('div');
   dateRow.className = 'devis-etat-row devis-date-row';
@@ -7662,7 +7704,7 @@ function buildDevisBody(devis) {
   card.appendChild(dateRow);
 
   // Encart récap (orange, comme ST) — totaux de l'indice affiché
-  const r = computeDevisVersionRecap(version);
+  const r = computeDevisVersionRecap(version, getDevisTauxHoraire(devis));
   const recap = document.createElement('div');
   recap.className = 'st-recap devis-recap';
   recap.dataset.devisId = devis.id;
@@ -7823,11 +7865,12 @@ function buildDevisLine(devisId, line) {
     card.appendChild(group);
   }
 
-  // Total du bloc : sous-traitant + heures × taux horaire + matériel + matériaux
+  // Total du bloc : sous-traitant + heures × taux horaire (du devis) + matériel + matériaux
   const totalRow = document.createElement('div');
   totalRow.className = 'devis-line-total';
   totalRow.innerHTML = `<span class="devis-line-total-label">Total ligne</span><span class="devis-line-total-val"></span>`;
-  totalRow.querySelector('.devis-line-total-val').textContent = fmtEur(computeDevisLineTotal(line));
+  totalRow.querySelector('.devis-line-total-val').textContent =
+    fmtEur(computeDevisLineTotal(line, getDevisTauxHoraire(getDevisById(devisId))));
   card.appendChild(totalRow);
   return card;
 }
@@ -12636,6 +12679,7 @@ function init() {
       if (t.dataset.devisAction === 'edit-text') setDevisLineField(t.dataset.devisId, t.dataset.lineId, 'text', t.value);
       else if (t.dataset.devisAction === 'edit-line-field') setDevisLineField(t.dataset.devisId, t.dataset.lineId, t.dataset.field, t.value);
       else if (t.dataset.devisAction === 'set-avenant') setDevisAvenantNum(t.dataset.devisId, t.value);
+      else if (t.dataset.devisAction === 'set-taux') setDevisTauxHoraire(t.dataset.devisId, t.value);
     });
   }
 
