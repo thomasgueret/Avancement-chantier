@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.44';
+const APP_VERSION = '1.45';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -7460,8 +7460,10 @@ function renderDevis() {
   tabs.innerHTML = '';
   body.innerHTML = '';
   // Verrou partagé avec ST
+  const scrollbarEl = document.getElementById('devistabsscrollbar');
   if (!protectedUnlocked) {
     tabs.hidden = true;
+    if (scrollbarEl) scrollbarEl.hidden = true;
     body.hidden = false;
     body.appendChild(buildProtectedLock('Devis', renderDevis));
     return;
@@ -7499,6 +7501,7 @@ function renderDevis() {
   add.setAttribute('aria-label', 'Nouveau devis');
   add.textContent = '+';
   tabs.appendChild(add);
+  requestAnimationFrame(updateDevisTabsScrollbar);
 
   if (isRecap) {
     body.appendChild(buildDevisRecapBody());
@@ -7513,6 +7516,60 @@ function renderDevis() {
     return;
   }
   body.appendChild(buildDevisBody(selected));
+}
+
+// --- Barre de défilement personnalisée sous les onglets de devis ---
+// Les barres natives « overlay » n'apparaissent qu'en cours de geste
+// (voire jamais sur iOS) : celle-ci est toujours visible dès que les
+// onglets débordent, et elle est draggable.
+function updateDevisTabsScrollbar() {
+  const tabs = document.getElementById('devistabs');
+  const bar = document.getElementById('devistabsscrollbar');
+  const thumb = document.getElementById('devistabsscrollthumb');
+  if (!tabs || !bar || !thumb) return;
+  const overflow = tabs.scrollWidth - tabs.clientWidth;
+  if (overflow <= 1) { bar.hidden = true; return; }
+  bar.hidden = false;
+  const trackW = bar.clientWidth;
+  const thumbW = Math.max(28, (tabs.clientWidth / tabs.scrollWidth) * trackW);
+  const maxX = trackW - thumbW;
+  const x = (tabs.scrollLeft / overflow) * maxX;
+  thumb.style.width = thumbW + 'px';
+  thumb.style.transform = `translateX(${x}px)`;
+}
+function setupDevisTabsScrollbar() {
+  const tabs = document.getElementById('devistabs');
+  const bar = document.getElementById('devistabsscrollbar');
+  const thumb = document.getElementById('devistabsscrollthumb');
+  if (!tabs || !bar || !thumb) return;
+  tabs.addEventListener('scroll', updateDevisTabsScrollbar, { passive: true });
+  window.addEventListener('resize', updateDevisTabsScrollbar);
+  // Drag du curseur (pointer events : souris + tactile)
+  let dragging = false, startX = 0, startScroll = 0;
+  thumb.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    startX = e.clientX;
+    startScroll = tabs.scrollLeft;
+    thumb.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  thumb.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const overflow = tabs.scrollWidth - tabs.clientWidth;
+    const maxX = bar.clientWidth - thumb.offsetWidth;
+    if (maxX <= 0) return;
+    tabs.scrollLeft = startScroll + (e.clientX - startX) * (overflow / maxX);
+  });
+  const endDrag = () => { dragging = false; };
+  thumb.addEventListener('pointerup', endDrag);
+  thumb.addEventListener('pointercancel', endDrag);
+  // Clic sur la piste : saute à la position correspondante
+  bar.addEventListener('pointerdown', (e) => {
+    if (e.target === thumb) return;
+    const rect = bar.getBoundingClientRect();
+    const ratio = (e.clientX - rect.left - thumb.offsetWidth / 2) / Math.max(1, bar.clientWidth - thumb.offsetWidth);
+    tabs.scrollLeft = Math.max(0, Math.min(1, ratio)) * (tabs.scrollWidth - tabs.clientWidth);
+  });
 }
 
 // Onglet Récap : pour chaque état, nombre de devis et somme de leurs
@@ -12649,7 +12706,8 @@ function init() {
     });
   }
 
-  // ----- Devis : délégation d'événements sur la page entière -----
+  // ----- Devis : barre de défilement des onglets + délégation -----
+  setupDevisTabsScrollbar();
   const devisPage = document.getElementById('page-devis');
   if (devisPage) {
     devisPage.addEventListener('click', (e) => {

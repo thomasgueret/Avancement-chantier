@@ -250,15 +250,40 @@ option {
    glisse horizontalement sur petit écran (pas de retour à la ligne). */
 .devis-tabs {
   display: flex; flex-wrap: nowrap; gap: 6px;
-  margin: 6px 0 14px;
+  margin: 6px 0 8px;
   overflow-x: auto; overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
   scroll-snap-type: x mandatory;
   padding: 2px;
+  /* La barre native est masquée : on affiche à la place une barre
+     personnalisée (.devis-tabs-scrollbar), fiable sur TOUS les
+     navigateurs (les barres natives overlay n'apparaissent qu'en cours
+     de défilement, voire jamais sur iOS). */
   scrollbar-width: none;
 }
 .devis-tabs::-webkit-scrollbar { display: none; }
 .devis-tabs .devis-tab { scroll-snap-align: start; flex: 0 0 auto; }
+
+/* Barre de défilement personnalisée sous les onglets de devis */
+.devis-tabs-scrollbar {
+  position: relative;
+  height: 8px;
+  margin: 0 2px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  touch-action: none;
+}
+.devis-tabs-scrollbar[hidden] { display: none; }
+.devis-tabs-scrollbar-thumb {
+  position: absolute;
+  top: 0; left: 0;
+  height: 100%;
+  min-width: 28px;
+  background: var(--accent);
+  border-radius: 999px;
+}
 .devis-tab {
   flex: 0 0 auto;
   border: 2px solid transparent;
