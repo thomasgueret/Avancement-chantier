@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.45';
+const APP_VERSION = '1.46';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -7271,9 +7271,14 @@ function setDevisEtat(id, etat) {
   const d = getDevisById(id);
   if (!d) return;
   d.etat = etat;
+  // Re-synchronise les lignes de la version courante : un passage en
+  // « Refusé » les retire de ST → Conforme ; en sortir les recrée.
+  for (const line of (getDevisCurrentVersion(d).lines || [])) {
+    syncDevisLineToST(line, d);
+  }
   save();
   renderDevis(); // recolore l'onglet
-  renderST();    // les montants liés entrent/sortent du total Conforme
+  renderST();    // les montants liés entrent/sortent du groupe Conforme
 }
 function setDevisDate(id, value) {
   const d = getDevisById(id);
@@ -7388,6 +7393,13 @@ function removeSTEntryForDevisLine(lineId) {
 // Crée / met à jour / déplace / retire l'entrée ST liée à une ligne de devis.
 function syncDevisLineToST(line, devis) {
   const existing = findSTEntryForDevisLine(line.id);
+  // Devis REFUSÉ : ses lignes n'apparaissent pas du tout dans ST →
+  // Conforme (retirées si présentes). Elles reviennent automatiquement
+  // si le devis change d'état.
+  if (devis && devis.etat === 'refuse') {
+    if (existing) removeSTEntryForDevisLine(line.id);
+    return;
+  }
   if (!line.companyId) {                 // pas d'entreprise → pas d'entrée ST
     if (existing) removeSTEntryForDevisLine(line.id);
     return;
