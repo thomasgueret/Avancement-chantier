@@ -4938,6 +4938,161 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   font-variant-numeric: tabular-nums;
 }
 
+/* ============ ONGLET TRAVAUX (matrice prestations × localisations) ============ */
+#page-travaux { max-width: 1320px; }
+.travaux-actions { display: flex; gap: 8px; margin-bottom: 14px; }
+.travaux-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.travaux-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 100%;
+}
+.travaux-table th, .travaux-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 10px;
+  vertical-align: top;
+}
+.travaux-table thead th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-strong);
+}
+.travaux-corner {
+  position: sticky; left: 0; z-index: 3 !important;
+  background: var(--surface-2);
+  text-align: left;
+  font-size: 12px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-2);
+  min-width: 220px;
+}
+.travaux-loc { min-width: 130px; }
+.travaux-loc { position: relative; }
+.travaux-loc-name {
+  width: 100%;
+  border: none; background: transparent;
+  font-size: 13px; font-weight: 700;
+  color: var(--text);
+  text-align: center;
+  padding: 4px 18px 4px 4px;
+  border-bottom: 1px solid transparent;
+}
+.travaux-loc-name:focus { outline: none; border-bottom-color: var(--accent); }
+.travaux-loc-name::placeholder { color: var(--text-3); font-style: italic; font-weight: 400; }
+.travaux-loc-del {
+  position: absolute; top: 6px; right: 6px;
+  border: none; background: transparent;
+  color: var(--text-3);
+  font-size: 14px; line-height: 1;
+  cursor: pointer; padding: 2px;
+}
+.travaux-loc-del:hover { color: var(--danger); }
+.travaux-item {
+  position: sticky; left: 0; z-index: 1;
+  background: var(--surface);
+  text-align: left;
+  min-width: 220px; max-width: 340px;
+  border-right: 1px solid var(--border);
+}
+.travaux-task-input {
+  width: 100%;
+  border: none; background: transparent;
+  font-family: inherit; font-size: 14px; font-weight: 600;
+  color: var(--text);
+  resize: none; overflow: hidden;
+  min-height: 22px;
+  line-height: 1.35;
+  padding: 2px;
+  border-bottom: 1px solid transparent;
+}
+.travaux-task-input:focus { outline: none; border-bottom-color: var(--accent); }
+.travaux-task-input::placeholder { color: var(--text-3); font-style: italic; font-weight: 400; }
+.travaux-product-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.travaux-product-label {
+  flex-shrink: 0;
+  font-size: 10.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+.travaux-product-input {
+  flex: 1; min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--accent-2);
+  border-radius: 6px;
+  font-size: 12px; font-weight: 600;
+  padding: 4px 8px;
+}
+.travaux-product-input:focus { outline: none; border-color: var(--accent); }
+.travaux-product-input::placeholder { color: var(--text-3); font-style: italic; font-weight: 400; }
+.travaux-item-del {
+  margin-top: 6px;
+  border: none; background: transparent;
+  color: var(--text-3);
+  cursor: pointer; padding: 2px;
+}
+.travaux-item-del svg { width: 15px; height: 15px; fill: currentColor; }
+.travaux-item-del:hover { color: var(--danger); }
+.travaux-cell {
+  text-align: center;
+  vertical-align: middle;
+}
+.travaux-cell.is-checked { background: var(--accent-soft); }
+.travaux-check {
+  width: 20px; height: 20px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.travaux-empty-row {
+  padding: 16px !important;
+  font-size: 13px; font-style: italic;
+  color: var(--text-3);
+  text-align: center;
+}
+
+/* ============ DASHBOARD : cartes Heures / Devis / ST ============ */
+.dash-locked {
+  flex: 1;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 8px;
+  padding: 18px 8px;
+  text-align: center;
+}
+.dash-locked-icon { font-size: 26px; }
+.dash-heures { flex: 1; display: flex; flex-direction: column; gap: 10px; }
+.dash-heures-main { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.dash-heures-pct {
+  font-size: 34px; font-weight: 800;
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+}
+.dash-heures-detail { font-size: 12px; color: #9a9085; }
+.dash-heures-ecart {
+  font-size: 13px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.dash-heures-ecart.is-positive { color: #3fce8e; }
+.dash-heures-ecart.is-negative { color: #f0594b; }
+.dash-devis-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.dash-devis-row { display: flex; align-items: center; gap: 10px; }
+.dash-devis-dot { flex-shrink: 0; width: 11px; height: 11px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.25); }
+.dash-devis-label { flex: 1; min-width: 0; font-size: 13px; color: #cfc6ba; }
+.dash-devis-count { font-size: 12px; color: #7d7368; }
+.dash-devis-sum { font-size: 13px; font-weight: 700; color: #f3efe9; font-variant-numeric: tabular-nums; }
+.dash-st { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.dash-st-row { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; color: #cfc6ba; }
+.dash-st-val { font-weight: 700; color: #f3efe9; font-variant-numeric: tabular-nums; }
+.dash-st-ecart.is-positive .dash-st-val { color: #3fce8e; }
+.dash-st-ecart.is-negative .dash-st-val { color: #f0594b; }
+.dash-st-foot { margin-top: auto; padding-top: 8px; font-size: 11px; color: #7d7368; }
+
 /* ============ SUIVI DES HEURES (onglet dédié, optimisé PC) ============ */
 /* La page s'élargit en desktop pour afficher le maximum de colonnes sans
    défilement horizontal (tableau de 13 colonnes pensé pour le PC). */

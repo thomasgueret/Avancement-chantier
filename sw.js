@@ -1,7 +1,7 @@
 /* Service worker — « réseau d'abord » en ligne, repli sur le cache hors-ligne */
 /* Convention de version : le suffixe vN du cache suit APP_VERSION dans
    app.js (ex. '1.00' → 'chantier-v100'). Bumper les deux ensemble. */
-const CACHE = 'chantier-v146';
+const CACHE = 'chantier-v147';
 const ASSETS = [
   './',
   './index.html',

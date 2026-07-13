@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.46';
+const APP_VERSION = '1.47';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -130,6 +130,10 @@ const state = {
   devis: [],
   devisSelectedId: '',       // devis affiché (UI per-device)
   devisSelectedVersion: {},  // { [devisId]: versionId } — indice affiché (UI per-device)
+  // Travaux : matrice du scope chantier — prestations × localisations.
+  // travauxItems[i].cells = { [locationId]: true } (case cochée = concerné)
+  travauxLocations: [],      // [{ id, name }]
+  travauxItems: [],          // [{ id, task, product, cells: {} }]
   // Synchronisation (modèle simplifié : un seul jeu partagé via Supabase)
   syncStatus: 'idle',        // 'idle' | 'syncing' | 'error' | 'offline'
   syncTimestamp: 0,          // ms epoch — dernier changement local connu
@@ -231,6 +235,8 @@ function load() {
     if (Array.isArray(data.devis)) state.devis = data.devis;
     if (typeof data.devisSelectedId === 'string') state.devisSelectedId = data.devisSelectedId;
     if (data.devisSelectedVersion && typeof data.devisSelectedVersion === 'object') state.devisSelectedVersion = data.devisSelectedVersion;
+    if (Array.isArray(data.travauxLocations)) state.travauxLocations = data.travauxLocations;
+    if (Array.isArray(data.travauxItems)) state.travauxItems = data.travauxItems;
     if (data.chartHidden) state.chartHidden = data.chartHidden;
     if (data.chartRange) state.chartRange = data.chartRange;
     if (typeof data.syncTimestamp === 'number') state.syncTimestamp = data.syncTimestamp;
@@ -324,6 +330,8 @@ function buildPersistedData() {
     devis: state.devis,
     devisSelectedId: state.devisSelectedId,
     devisSelectedVersion: state.devisSelectedVersion,
+    travauxLocations: state.travauxLocations,
+    travauxItems: state.travauxItems,
     chartHidden: state.chartHidden,
     chartRange: state.chartRange,
     syncTimestamp: state.syncTimestamp,
@@ -575,6 +583,7 @@ function renderAll() {
   renderCR();
   renderST();
   renderDevis();
+  renderTravaux();
   renderHeures();
   renderDashboard();
   renderBackupsList();     // async, best-effort
@@ -839,8 +848,134 @@ function renderDashboard() {
   renderDashboardStockAlerts();
   renderDashboardConsommable();
   renderDashboardEOTPAlerts();
+  renderDashboardHeures();
+  renderDashboardDevis();
+  renderDashboardST();
   renderDashboardCompaniesPresence();
   renderDashboardBuildings();
+}
+
+// Carte verrouillée (Devis / ST) : ces onglets sont protégés par mot de
+// passe — leurs chiffres ne s'affichent sur le tableau de bord qu'une
+// fois le déverrouillage fait dans la session.
+function dashboardLockedBody(tabLabel) {
+  const body = document.createElement('div');
+  body.className = 'dash-locked';
+  body.innerHTML = `<span class="dash-locked-icon">🔒</span><p class="dash-empty-text">Contenu protégé. Ouvrez l'onglet ${tabLabel} et saisissez le mot de passe pour afficher ces chiffres.</p>`;
+  return body;
+}
+
+// --- Widget « Suivi des heures » (semaine active) ---
+function renderDashboardHeures() {
+  const el = document.getElementById('dashheures');
+  if (!el) return;
+  el.innerHTML = '';
+  el.appendChild(dashboardCardHeader('Suivi des heures', 'heures'));
+  const body = document.createElement('div');
+  body.className = 'dash-heures';
+  const week = getHeuresActiveWeek();
+  const selected = getEOTPs().filter(e => getHeuresRow(e.id).selected);
+  if (selected.length === 0) {
+    body.innerHTML = '<p class="dash-empty-text">Aucun eOTP suivi. Cochez-en dans l\'onglet Heures.</p>';
+    el.appendChild(body);
+    return;
+  }
+  let sumBudget = 0, sumDroit = 0, sumEcart = 0;
+  for (const e of selected) {
+    const row = getHeuresRow(e.id);
+    const comp = computeHeuresRow(row);
+    sumBudget += Number(row.budgetHeures) || 0;
+    sumDroit += comp.droit;
+    sumEcart += comp.ecart;
+  }
+  const pct = sumBudget > 0 ? Math.round((sumDroit / sumBudget) * 100) : null;
+  body.innerHTML = `
+    <div class="dash-heures-main">
+      <span class="dash-heures-pct"></span>
+      <span class="dash-heures-detail"></span>
+    </div>
+    <div class="dash-heures-ecart"></div>
+  `;
+  body.querySelector('.dash-heures-pct').textContent = pct != null ? pct + ' %' : '—';
+  body.querySelector('.dash-heures-detail').textContent =
+    `${fmtHeures(sumDroit)} h acquises / ${fmtHeures(sumBudget)} h budget · ${week ? week.name : ''}`;
+  const ec = body.querySelector('.dash-heures-ecart');
+  ec.textContent = `Écart au stade : ${sumEcart >= 0 ? '+' : ''}${fmtHeures(sumEcart)} h`;
+  ec.classList.add(sumEcart >= 0 ? 'is-positive' : 'is-negative');
+  el.appendChild(body);
+}
+
+// --- Widget « Devis » (sommes par état, version courante de chaque devis) ---
+function renderDashboardDevis() {
+  const el = document.getElementById('dashdevis');
+  if (!el) return;
+  el.innerHTML = '';
+  el.appendChild(dashboardCardHeader('Devis', 'devis'));
+  if (!protectedUnlocked) { el.appendChild(dashboardLockedBody('Devis')); return; }
+  const body = document.createElement('div');
+  body.className = 'dash-devis';
+  const list = getDevisList();
+  if (list.length === 0) {
+    body.innerHTML = '<p class="dash-empty-text">Aucun devis.</p>';
+    el.appendChild(body);
+    return;
+  }
+  const ul = document.createElement('ul');
+  ul.className = 'dash-devis-list';
+  for (const e of DEVIS_ETATS) {
+    const items = list.filter(d => d.etat === e.key);
+    if (items.length === 0) continue;
+    const sum = items.reduce((s, d) => s + computeDevisRecap(d).total, 0);
+    const li = document.createElement('li');
+    li.className = 'dash-devis-row';
+    li.innerHTML = `<span class="dash-devis-dot"></span><span class="dash-devis-label"></span><span class="dash-devis-count"></span><span class="dash-devis-sum"></span>`;
+    li.querySelector('.dash-devis-dot').style.background = e.color;
+    li.querySelector('.dash-devis-label').textContent = e.label;
+    li.querySelector('.dash-devis-count').textContent = items.length;
+    li.querySelector('.dash-devis-sum').textContent = fmtEur(sum);
+    ul.appendChild(li);
+  }
+  body.appendChild(ul);
+  el.appendChild(body);
+}
+
+// --- Widget « ST » (budget / dépenses / écart cumulés, toutes entreprises) ---
+function renderDashboardST() {
+  const el = document.getElementById('dashst');
+  if (!el) return;
+  el.innerHTML = '';
+  el.appendChild(dashboardCardHeader('Sous-traitants', 'st'));
+  if (!protectedUnlocked) { el.appendChild(dashboardLockedBody('ST')); return; }
+  const body = document.createElement('div');
+  body.className = 'dash-st';
+  const companies = state.companies.filter(c =>
+    ST_GROUPS.some(g => getSTEntries(c.id, g.key).length > 0));
+  if (companies.length === 0) {
+    body.innerHTML = '<p class="dash-empty-text">Aucune donnée ST saisie.</p>';
+    el.appendChild(body);
+    return;
+  }
+  let budget = 0, depenses = 0;
+  for (const c of companies) {
+    const r = computeSTRecap(c.id);
+    budget += r.budget;
+    depenses += r.depenses;
+  }
+  const ecart = budget - depenses;
+  const pct = budget !== 0 ? Math.round((ecart / budget) * 1000) / 10 : null;
+  body.innerHTML = `
+    <div class="dash-st-row"><span class="dash-st-lbl">Total budget</span><span class="dash-st-val"></span></div>
+    <div class="dash-st-row"><span class="dash-st-lbl">Total dépenses</span><span class="dash-st-val"></span></div>
+    <div class="dash-st-row dash-st-ecart"><span class="dash-st-lbl">Écart</span><span class="dash-st-val"></span></div>
+    <div class="dash-st-foot"></div>
+  `;
+  const vals = body.querySelectorAll('.dash-st-val');
+  vals[0].textContent = fmtEur(budget);
+  vals[1].textContent = fmtEur(depenses);
+  vals[2].textContent = pct != null ? `${fmtEur(ecart)} (${formatPct(pct)} %)` : fmtEur(ecart);
+  body.querySelector('.dash-st-ecart').classList.add(ecart >= 0 ? 'is-positive' : 'is-negative');
+  body.querySelector('.dash-st-foot').textContent = `${companies.length} sous-traitant${companies.length > 1 ? 's' : ''} suivi${companies.length > 1 ? 's' : ''}`;
+  el.appendChild(body);
 }
 
 function dashboardCardHeader(title, gotoPage) {
@@ -2667,10 +2802,13 @@ function renderRecap() {
         tag.textContent = 'hors ratio — ne compte pas dans l\'avancement physique';
         main.appendChild(tag);
       } else if (phys.total > 0 && w > 0) {
+        // Format « réalisés / total » par tâche, comme dans le volet
+        // Saisie. Les deux valeurs sont PONDÉRÉES par le poids de la
+        // tâche (ratio / Σ ratios) : Σ des lignes = bandeau de l'ouvrage.
         const sub = document.createElement('span');
         sub.className = 'recap-task-sub';
-        sub.title = `Poids : ${formatPct(Math.round(w * 1000) / 10)} % de l'ouvrage — max ${formatQty(physMax)} ${phys.unit}`;
-        sub.textContent = `${formatQty(physContribution)} ${phys.unit} réalisés`;
+        sub.title = `Poids : ${formatPct(Math.round(w * 1000) / 10)} % de l'ouvrage`;
+        sub.textContent = `${formatQty(physContribution)} / ${formatQty(physMax)} ${phys.unit} réalisés`;
         main.appendChild(sub);
       }
       li.append(main);
@@ -7945,6 +8083,193 @@ function buildDevisLine(devisId, line) {
   return card;
 }
 
+// ========================================================================
+// TRAVAUX — matrice du scope chantier : prestations (lignes) ×
+// localisations (colonnes), avec produit validé par prestation.
+// Ex. : « Peinture portes intérieures » / produit « RAL 9007 », coché sur
+// les circulations de chaque bâtiment.
+// ========================================================================
+function getTravauxLocations() { return Array.isArray(state.travauxLocations) ? state.travauxLocations : (state.travauxLocations = []); }
+function getTravauxItems() { return Array.isArray(state.travauxItems) ? state.travauxItems : (state.travauxItems = []); }
+
+function addTravauxLocation() {
+  getTravauxLocations().push({ id: 'tl_' + uid(), name: '' });
+  save();
+  renderTravaux();
+  requestAnimationFrame(() => {
+    const inputs = document.querySelectorAll('.travaux-loc-name');
+    const last = inputs[inputs.length - 1];
+    if (last) last.focus();
+  });
+}
+function renameTravauxLocation(id, name) {
+  const loc = getTravauxLocations().find(l => l.id === id);
+  if (!loc) return;
+  loc.name = name;
+  save(); // pas de re-render : frappe en cours
+}
+function deleteTravauxLocation(id) {
+  const loc = getTravauxLocations().find(l => l.id === id);
+  if (!loc) return;
+  if (!confirm(`Supprimer la localisation « ${loc.name || 'sans nom'} » ?\nLes coches de cette colonne seront perdues.`)) return;
+  state.travauxLocations = getTravauxLocations().filter(l => l.id !== id);
+  for (const item of getTravauxItems()) {
+    if (item.cells) delete item.cells[id];
+  }
+  save();
+  renderTravaux();
+}
+function addTravauxItem() {
+  getTravauxItems().push({ id: 'ti_' + uid(), task: '', product: '', cells: {} });
+  save();
+  renderTravaux();
+  requestAnimationFrame(() => {
+    const inputs = document.querySelectorAll('.travaux-task-input');
+    const last = inputs[inputs.length - 1];
+    if (last) last.focus();
+  });
+}
+function setTravauxItemField(id, field, value) {
+  const item = getTravauxItems().find(i => i.id === id);
+  if (!item) return;
+  if (field === 'task') item.task = value;
+  else if (field === 'product') item.product = value;
+  save(); // pas de re-render : frappe en cours
+}
+function deleteTravauxItem(id) {
+  const item = getTravauxItems().find(i => i.id === id);
+  if (!item) return;
+  if (!confirm(`Supprimer la prestation « ${(item.task || 'sans intitulé').slice(0, 60)} » ?`)) return;
+  state.travauxItems = getTravauxItems().filter(i => i.id !== id);
+  save();
+  renderTravaux();
+}
+function toggleTravauxCell(itemId, locId, checked) {
+  const item = getTravauxItems().find(i => i.id === itemId);
+  if (!item) return;
+  if (!item.cells || typeof item.cells !== 'object') item.cells = {};
+  if (checked) item.cells[locId] = true;
+  else delete item.cells[locId];
+  save(); // la checkbox reflète déjà l'état : pas de re-render
+}
+
+function renderTravaux() {
+  const wrap = document.getElementById('travauxtablewrap');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  const locations = getTravauxLocations();
+  const items = getTravauxItems();
+
+  if (locations.length === 0 && items.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'heures-empty';
+    p.textContent = 'Commencez par « + Localisation » (ex. Circulations Bât A) puis « + Prestation » (ex. Peinture portes intérieures).';
+    wrap.appendChild(p);
+    return;
+  }
+
+  const table = document.createElement('table');
+  table.className = 'travaux-table';
+
+  // THEAD : coin + une colonne par localisation
+  const thead = document.createElement('thead');
+  const hr = document.createElement('tr');
+  const corner = document.createElement('th');
+  corner.className = 'travaux-corner';
+  corner.textContent = 'Prestation';
+  hr.appendChild(corner);
+  for (const loc of locations) {
+    const th = document.createElement('th');
+    th.className = 'travaux-loc';
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.className = 'travaux-loc-name';
+    inp.placeholder = 'Localisation…';
+    inp.maxLength = 40;
+    inp.value = loc.name || '';
+    inp.addEventListener('input', () => renameTravauxLocation(loc.id, inp.value));
+    th.appendChild(inp);
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'travaux-loc-del';
+    del.setAttribute('aria-label', 'Supprimer cette localisation');
+    del.textContent = '×';
+    del.addEventListener('click', () => deleteTravauxLocation(loc.id));
+    th.appendChild(del);
+    hr.appendChild(th);
+  }
+  thead.appendChild(hr);
+  table.appendChild(thead);
+
+  // TBODY : une ligne par prestation
+  const tbody = document.createElement('tbody');
+  for (const item of items) {
+    const tr = document.createElement('tr');
+    const th = document.createElement('th');
+    th.className = 'travaux-item';
+    const task = document.createElement('textarea');
+    task.className = 'travaux-task-input';
+    task.rows = 1;
+    task.placeholder = 'Prestation (ex. Peinture portes intérieures)…';
+    task.value = item.task || '';
+    const autoResize = () => { task.style.height = 'auto'; task.style.height = (task.scrollHeight + 2) + 'px'; };
+    task.addEventListener('input', () => { autoResize(); setTravauxItemField(item.id, 'task', task.value); });
+    setTimeout(autoResize, 0);
+    th.appendChild(task);
+    const prodRow = document.createElement('div');
+    prodRow.className = 'travaux-product-row';
+    const prodLbl = document.createElement('span');
+    prodLbl.className = 'travaux-product-label';
+    prodLbl.textContent = 'Produit :';
+    prodRow.appendChild(prodLbl);
+    const prod = document.createElement('input');
+    prod.type = 'text';
+    prod.className = 'travaux-product-input';
+    prod.placeholder = 'ex. RAL 9007, poignées neuves…';
+    prod.maxLength = 80;
+    prod.value = item.product || '';
+    prod.addEventListener('input', () => setTravauxItemField(item.id, 'product', prod.value));
+    prodRow.appendChild(prod);
+    th.appendChild(prodRow);
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'travaux-item-del';
+    del.setAttribute('aria-label', 'Supprimer cette prestation');
+    del.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z"/></svg>';
+    del.addEventListener('click', () => deleteTravauxItem(item.id));
+    th.appendChild(del);
+    tr.appendChild(th);
+    for (const loc of locations) {
+      const td = document.createElement('td');
+      td.className = 'travaux-cell';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'travaux-check';
+      cb.checked = !!(item.cells && item.cells[loc.id]);
+      cb.setAttribute('aria-label', 'Concerné');
+      cb.addEventListener('change', () => {
+        toggleTravauxCell(item.id, loc.id, cb.checked);
+        td.classList.toggle('is-checked', cb.checked);
+      });
+      if (cb.checked) td.classList.add('is-checked');
+      td.appendChild(cb);
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  if (items.length === 0) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 1 + locations.length;
+    td.className = 'travaux-empty-row';
+    td.textContent = 'Aucune prestation. Touchez « + Prestation ».';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+}
+
 // Unité la plus récemment utilisée pour un produit (pour pré-remplir
 // le sélecteur unité quand on choisit un produit existant).
 function getMostRecentUnitForProduct(name) {
@@ -9222,6 +9547,7 @@ function switchPage(name) {
   if (name === 'cr') renderCR();
   if (name === 'st') renderST();
   if (name === 'devis') renderDevis();
+  if (name === 'travaux') renderTravaux();
   // Synchro : à chaque changement d'onglet, on tente un pull en arrière-
   // plan pour récupérer les dernières modifs des coéquipiers.
   if (isSupabaseConfigured()) {
@@ -12037,7 +12363,8 @@ const SYNC_UNION_DICT_KEYS = new Set([
   'adminDocs', 'workerDocs', 'heuresData', 'crEntries', 'stEntries'
 ]);
 const SYNC_UNION_ARRAY_KEYS = new Set([
-  'stockEntries', 'consommableEntries', 'protoShapes', 'devis'
+  'stockEntries', 'consommableEntries', 'protoShapes', 'devis',
+  'travauxLocations', 'travauxItems'
 ]);
 
 function _isPlainObject(v) { return v && typeof v === 'object' && !Array.isArray(v); }
@@ -12717,6 +13044,12 @@ function init() {
       }
     });
   }
+
+  // ----- Travaux : boutons d'ajout -----
+  const travauxAddItemBtn = document.getElementById('travauxadditem');
+  const travauxAddLocBtn = document.getElementById('travauxaddloc');
+  if (travauxAddItemBtn) travauxAddItemBtn.addEventListener('click', addTravauxItem);
+  if (travauxAddLocBtn) travauxAddLocBtn.addEventListener('click', addTravauxLocation);
 
   // ----- Devis : barre de défilement des onglets + délégation -----
   setupDevisTabsScrollbar();
