@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.43';
+const APP_VERSION = '1.44';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -7098,7 +7098,8 @@ const DEVIS_ETATS = [
   { key: 'envoye',    label: 'Envoyé',       color: '#f2691e' }, // orange
   { key: 'valide',    label: 'Validé',       color: '#16a34a' }, // vert
   { key: 'os',        label: 'OS reçu',      color: '#14532d' }, // vert foncé
-  { key: 'avenant',   label: 'Avenant reçu', color: '#111827' }  // noir
+  { key: 'avenant',   label: 'Avenant reçu', color: '#111827' }, // noir
+  { key: 'refuse',    label: 'Refusé',       color: '#dc2626' }  // rouge
 ];
 function getDevisEtat(key) {
   return DEVIS_ETATS.find(e => e.key === key) || DEVIS_ETATS[0];
