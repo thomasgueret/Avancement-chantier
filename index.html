@@ -484,28 +484,27 @@
 
     <!-- ============== ONGLET : TRAVAUX ============== -->
     <section class="page" id="page-travaux">
-      <h2 class="section-title">Travaux</h2>
-      <p class="section-help">
-        Scope chantier par zone : les lots (Données → Lots) en lignes, vos
-        localisations en colonnes, et dans chaque case la description de
-        l'ouvrage à réaliser.
-      </p>
-      <div class="travaux-filters">
-        <label class="travaux-filter">
-          <span class="travaux-filter-label">Niveau</span>
-          <select id="travauxlevel" class="travaux-filter-select"></select>
-        </label>
-        <label class="travaux-filter">
-          <span class="travaux-filter-label">Zone</span>
-          <select id="travauxzone" class="travaux-filter-select"></select>
-        </label>
-        <label class="travaux-filter">
-          <span class="travaux-filter-label">Lot</span>
-          <select id="travauxlot" class="travaux-filter-select"></select>
-        </label>
-        <button class="btn-secondary travaux-addloc" id="travauxaddloc" type="button">+ Localisation</button>
+      <div class="segmented" role="tablist" data-group="travaux">
+        <div class="segmented-thumb"></div>
+        <button class="seg-btn active" data-group="travaux" data-sub="visite" role="tab">Visite</button>
+        <button class="seg-btn" data-group="travaux" data-sub="carnet" role="tab">Carnet</button>
       </div>
-      <div class="travaux-table-wrap" id="travauxtablewrap"></div>
+
+      <!-- Sous-page : Visite (fiche de lieu) -->
+      <div class="sub-page active" id="sub-visite" data-group="travaux">
+        <p class="section-help">Sélectionnez un lieu pour voir tout ce qui y est dû (couleurs, quincailleries, remplacements).</p>
+        <div class="travaux-loc-picker" id="travauxvisitepicker"></div>
+        <div id="travauxvisitebody"></div>
+      </div>
+
+      <!-- Sous-page : Carnet (prescriptions par ouvrage) -->
+      <div class="sub-page" id="sub-carnet" data-group="travaux">
+        <p class="section-help">Une fiche de prescription par type d'ouvrage : le niveau de prestation dû, les détails (couleur, quincaillerie…) et les lieux concernés.</p>
+        <div class="travaux-carnet-actions">
+          <button class="btn-primary" id="travauxaddouvrage" type="button">+ Type d'ouvrage</button>
+        </div>
+        <div id="travauxcarnetbody"></div>
+      </div>
     </section>
 
     <!-- ============== ONGLET : DEVIS ============== -->

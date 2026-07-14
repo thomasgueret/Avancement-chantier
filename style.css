@@ -4938,172 +4938,183 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   font-variant-numeric: tabular-nums;
 }
 
-/* ============ ONGLET TRAVAUX (matrice lots × localisations) ============ */
-#page-travaux { max-width: 1320px; }
-.travaux-filters {
-  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px;
-  margin-bottom: 14px;
-}
-.travaux-filter { display: flex; flex-direction: column; gap: 3px; }
-.travaux-filter-label {
-  font-size: 10.5px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.05em;
-  color: var(--text-3);
-}
-.travaux-filter-select {
-  min-width: 120px; max-width: 220px;
-  border: 1px solid var(--border-strong);
+/* ============ ONGLET TRAVAUX (mémo de visite : Visite + Carnet) ============ */
+#page-travaux { max-width: 1000px; }
+.travaux-carnet-actions { margin: 2px 0 12px; }
+
+/* ----- Vue Carnet (saisie par ouvrage) ----- */
+.travaux-ouvrage {
   background: var(--surface);
-  color: var(--text);
-  border-radius: var(--radius-sm);
-  padding: 8px 10px;
-  font-size: 14px; font-weight: 600;
-}
-.travaux-filter-select:focus { outline: none; border-color: var(--accent); }
-.travaux-addloc { margin-left: auto; }
-.travaux-table-wrap {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
+  border-radius: 14px;
+  margin-bottom: 12px;
+  overflow: hidden;
 }
-.travaux-table {
-  border-collapse: separate;
-  border-spacing: 0;
-  min-width: 100%;
-}
-.travaux-table th, .travaux-table td {
+.travaux-ouvrage-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px;
+  background: var(--surface-2);
   border-bottom: 1px solid var(--border);
-  padding: 8px 10px;
-  vertical-align: top;
 }
-.travaux-table thead th {
-  position: sticky; top: 0; z-index: 2;
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border-strong);
-}
-.travaux-corner {
-  position: sticky; left: 0; z-index: 3 !important;
-  background: var(--surface-2);
-  text-align: left;
-  font-size: 12px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.04em;
-  color: var(--text-2);
-  min-width: 220px;
-}
-.travaux-loc { min-width: 130px; }
-.travaux-loc { position: relative; }
-.travaux-loc-name {
-  width: 100%;
+.travaux-ouvrage-name {
+  flex: 1; min-width: 0;
   border: none; background: transparent;
-  font-size: 13px; font-weight: 700;
+  font-size: 15px; font-weight: 800;
   color: var(--text);
-  text-align: center;
-  padding: 4px 18px 4px 4px;
+  padding: 4px 2px;
   border-bottom: 1px solid transparent;
 }
-.travaux-loc-name:focus { outline: none; border-bottom-color: var(--accent); }
-.travaux-loc-name::placeholder { color: var(--text-3); font-style: italic; font-weight: 400; }
-.travaux-loc-del {
-  position: absolute; top: 6px; right: 6px;
-  border: none; background: transparent;
-  color: var(--text-3);
-  font-size: 14px; line-height: 1;
-  cursor: pointer; padding: 2px;
+.travaux-ouvrage-name:focus { outline: none; border-bottom-color: var(--accent); }
+.travaux-ouvrage-name::placeholder { color: var(--text-3); font-style: italic; font-weight: 500; }
+.travaux-ouvrage-del { border: none; background: transparent; color: var(--text-3); cursor: pointer; padding: 4px; }
+.travaux-ouvrage-del svg { width: 16px; height: 16px; fill: currentColor; }
+.travaux-ouvrage-del:hover { color: var(--danger); }
+.travaux-presc-list { display: flex; flex-direction: column; }
+.travaux-add-presc { margin: 10px 14px 14px; width: calc(100% - 28px); }
+
+.travaux-presc {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 10px;
 }
-.travaux-loc-del:hover { color: var(--danger); }
-.travaux-item {
-  position: sticky; left: 0; z-index: 1;
-  background: var(--surface);
-  text-align: left;
-  min-width: 220px; max-width: 340px;
-  border-right: 1px solid var(--border);
-}
-.travaux-task-input {
-  width: 100%;
-  border: none; background: transparent;
-  font-family: inherit; font-size: 14px; font-weight: 600;
-  color: var(--text);
-  resize: none; overflow: hidden;
-  min-height: 22px;
-  line-height: 1.35;
-  padding: 2px;
-  border-bottom: 1px solid transparent;
-}
-.travaux-task-input:focus { outline: none; border-bottom-color: var(--accent); }
-.travaux-task-input::placeholder { color: var(--text-3); font-style: italic; font-weight: 400; }
-.travaux-product-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
-.travaux-product-label {
-  flex-shrink: 0;
-  font-size: 10.5px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.04em;
-  color: var(--text-3);
-}
-.travaux-product-input {
+.travaux-presc:last-of-type { border-bottom: none; }
+.travaux-presc-top { display: flex; align-items: flex-start; gap: 8px; }
+.travaux-presc-text {
   flex: 1; min-width: 0;
   border: 1px solid var(--border);
   background: var(--surface-2);
-  color: var(--accent-2);
-  border-radius: 6px;
-  font-size: 12px; font-weight: 600;
-  padding: 4px 8px;
-}
-.travaux-product-input:focus { outline: none; border-color: var(--accent); }
-.travaux-product-input::placeholder { color: var(--text-3); font-style: italic; font-weight: 400; }
-.travaux-item-del {
-  margin-top: 6px;
-  border: none; background: transparent;
-  color: var(--text-3);
-  cursor: pointer; padding: 2px;
-}
-.travaux-item-del svg { width: 15px; height: 15px; fill: currentColor; }
-.travaux-item-del:hover { color: var(--danger); }
-/* Ligne de lot (pastille couleur + nom, colonne figée) */
-.travaux-lot { white-space: nowrap; }
-.travaux-lot-dot {
-  display: inline-block;
-  width: 12px; height: 12px;
-  border-radius: 50%;
-  border: 1px solid rgba(255,255,255,0.25);
-  margin-right: 8px;
-  vertical-align: middle;
-}
-.travaux-lot-name {
-  font-size: 14px; font-weight: 700;
   color: var(--text);
-  vertical-align: middle;
-}
-/* Cellule = description libre de l'ouvrage à réaliser */
-.travaux-cell {
-  vertical-align: top;
-  min-width: 170px;
-  padding: 6px !important;
-}
-.travaux-cell.is-filled { background: var(--accent-soft); }
-.travaux-cell-text {
-  width: 100%;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--text);
-  font-family: inherit; font-size: 13px;
-  line-height: 1.35;
   border-radius: var(--radius-sm);
-  padding: 6px 8px;
+  font-family: inherit; font-size: 14px; font-weight: 600;
+  padding: 8px 10px;
   resize: none; overflow: hidden;
-  min-height: 44px;
+  min-height: 40px; line-height: 1.35;
 }
-.travaux-cell-text::placeholder { color: var(--text-3); }
-.travaux-cell-text:focus {
-  outline: none;
-  border-color: var(--accent);
+.travaux-presc-text:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+.travaux-presc-text::placeholder { color: var(--text-3); font-style: italic; font-weight: 400; }
+
+.travaux-rempl-toggle {
+  display: inline-flex; align-items: center; gap: 8px;
+  align-self: flex-start;
+  font-size: 12.5px; font-weight: 600; color: var(--text-2);
+  cursor: pointer;
+  padding: 5px 11px; border-radius: 999px;
+  border: 1px solid var(--border-strong); background: var(--surface-2);
+}
+.travaux-rempl-toggle input { accent-color: var(--warning); width: 16px; height: 16px; margin: 0; }
+.travaux-rempl-toggle.is-on { background: #3a1d15; border-color: #5a4a1e; color: var(--warning); }
+
+.travaux-specs-edit { display: flex; flex-direction: column; gap: 6px; }
+.travaux-spec-row { display: flex; align-items: center; gap: 6px; }
+.travaux-spec-label, .travaux-spec-value {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: 6px;
+  font-size: 13px;
+  padding: 6px 9px;
+}
+.travaux-spec-label { flex: 0 1 130px; font-weight: 700; }
+.travaux-spec-value { flex: 1; min-width: 0; color: var(--accent-2); font-weight: 600; }
+.travaux-spec-label:focus, .travaux-spec-value:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+.travaux-spec-label::placeholder, .travaux-spec-value::placeholder { color: var(--text-3); font-style: italic; font-weight: 400; }
+.travaux-spec-del { border: none; background: transparent; color: var(--text-3); font-size: 16px; cursor: pointer; padding: 0 4px; }
+.travaux-spec-del:hover { color: var(--danger); }
+.travaux-add-spec {
+  align-self: flex-start;
+  border: 1px dashed var(--border-strong); background: transparent;
+  color: var(--text-3); font-size: 12px; font-weight: 600;
+  padding: 5px 11px; border-radius: 999px; cursor: pointer;
+}
+.travaux-add-spec:hover { color: var(--accent); border-color: var(--accent); }
+
+.travaux-zones {
+  border-top: 1px dashed var(--border-strong);
+  padding-top: 10px;
+}
+.travaux-zones-head {
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-3); margin-bottom: 7px;
+}
+.travaux-zone-grid { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.travaux-zone-chk {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600; color: var(--text-2);
+  cursor: pointer; padding: 4px 2px; width: fit-content;
+}
+.travaux-zone-chk input { accent-color: var(--accent); width: 17px; height: 17px; margin: 0; }
+.travaux-zone-chk.is-on { color: var(--accent); }
+.travaux-zone-every { font-weight: 700; }
+.travaux-zone-note { margin: 7px 0 0; font-size: 11px; font-style: italic; color: var(--text-3); }
+.travaux-zone-hint { font-size: 13px; color: var(--text-3); font-style: italic; }
+
+/* ----- Vue Visite (fiche de lieu) ----- */
+.travaux-loc-picker { margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px; }
+.travaux-loc-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.travaux-loc-btn {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-strong);
   background: var(--surface);
+  color: var(--text-2);
+  border-radius: 12px;
+  padding: 11px 16px;
+  font-size: 14.5px; font-weight: 700;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
 }
-.travaux-empty-row {
-  padding: 16px !important;
-  font-size: 13px; font-style: italic;
-  color: var(--text-3);
-  text-align: center;
+.travaux-loc-btn.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.travaux-loc-btn-etage { padding: 8px 14px; font-size: 13.5px; }
+.travaux-loc-row-etage .travaux-loc-btn { border-radius: 999px; }
+
+.travaux-visite-crumb {
+  font-size: 13px; font-weight: 700; color: var(--text-2);
+  margin: 4px 0 12px;
+}
+.travaux-sheet {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+.travaux-sheet-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 15px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.travaux-sheet-name { flex: 1; font-size: 15px; font-weight: 800; color: var(--text); }
+.travaux-rempl-badge {
+  flex-shrink: 0;
+  background: #3a1d15; color: var(--warning);
+  border-radius: 999px; padding: 3px 10px;
+  font-size: 11px; font-weight: 800;
+}
+.travaux-sheet-line {
+  padding: 11px 15px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px; line-height: 1.5; color: var(--text-2);
+}
+.travaux-sheet-line:last-child { border-bottom: none; }
+.travaux-rempl-tag {
+  display: inline-block;
+  background: #3a1d15; color: var(--warning);
+  border-radius: 6px; padding: 2px 7px;
+  font-size: 10px; font-weight: 800; text-transform: uppercase;
+  margin-right: 8px; vertical-align: middle;
+}
+.travaux-sheet-text { color: var(--text); font-weight: 600; }
+.travaux-sheet-specs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.travaux-spec-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--accent-soft);
+  border: 1px solid #4a2c18;
+  border-radius: 8px;
+  padding: 3px 9px;
+  font-size: 12px; font-weight: 700; color: var(--accent-2);
+}
+.travaux-spec-chip .k {
+  color: var(--text-3); font-weight: 700;
+  text-transform: uppercase; font-size: 9.5px; letter-spacing: 0.04em;
 }
 
 /* ============ DASHBOARD : cartes Heures / Devis / ST ============ */
