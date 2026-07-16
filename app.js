@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.49';
+const APP_VERSION = '1.50';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -12767,14 +12767,29 @@ async function applyRemoteStateMerge(remoteState, remoteTs) {
     const rStamp = Number(remoteStamps[k]) || remoteTs || 0;
     const lStamp = Number(localStamps[k]) || 0;
 
-    // Collections journal : fusion union (jamais de perte d'enregistrement).
-    if (SYNC_UNION_DICT_KEYS.has(k) || SYNC_UNION_ARRAY_KEYS.has(k)) {
+    // Collections DICT « journal » (présences, avancement, docs…) : fusion
+    // union — on ne perd jamais une entrée datée/nommée. Les suppressions
+    // internes (valeur d'une clé) se propagent via « le plus récent gagne »
+    // sur la feuille ; supprimer une clé entière est rare et non bloquant.
+    if (SYNC_UNION_DICT_KEYS.has(k)) {
       const remoteNewer = rStamp >= lStamp;
-      const merged = SYNC_UNION_ARRAY_KEYS.has(k)
-        ? unionMergeById(state[k], remoteState[k], remoteNewer)
-        : unionMergeDeep(_isPlainObject(state[k]) ? state[k] : {}, _isPlainObject(remoteState[k]) ? remoteState[k] : {}, remoteNewer);
+      const merged = unionMergeDeep(_isPlainObject(state[k]) ? state[k] : {}, _isPlainObject(remoteState[k]) ? remoteState[k] : {}, remoteNewer);
       if (!_jsonEq(merged, state[k])) toApply.push({ k, value: merged, stamp: Math.max(rStamp, lStamp) });
-      if (!_jsonEq(merged, remoteState[k])) localWins++; // le serveur ignore une partie de nos données
+      if (!_jsonEq(merged, remoteState[k])) localWins++;
+      continue;
+    }
+    // Collections ARRAY supprimables (formes Proto, devis, travaux, stock,
+    // conso…) : union ARBITRÉE PAR HORODATAGE. Le côté le plus récent gagne
+    // le tableau entier → les SUPPRESSIONS se propagent (bug corrigé). On
+    // n'unionne (anti-perte) que sur égalité stricte de stamp = vraie
+    // édition concurrente hors-ligne.
+    if (SYNC_UNION_ARRAY_KEYS.has(k)) {
+      let merged;
+      if (rStamp > lStamp) merged = remoteState[k];
+      else if (lStamp > rStamp) merged = state[k];
+      else merged = unionMergeById(state[k], remoteState[k], true);
+      if (!_jsonEq(merged, state[k])) toApply.push({ k, value: merged, stamp: Math.max(rStamp, lStamp) });
+      if (!_jsonEq(merged, remoteState[k])) localWins++;
       continue;
     }
 
