@@ -4938,169 +4938,35 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   font-variant-numeric: tabular-nums;
 }
 
-/* ============ ONGLET TRAVAUX (mémo de visite : Visite + Carnet) ============ */
-#page-travaux { max-width: 1000px; }
-.travaux-carnet-actions { margin: 2px 0 12px; }
+/* ============ ONGLET TRAVAUX (CCTP du chantier : Visite / CCTP / Carnet) ============ */
+#page-travaux { max-width: 1040px; }
 
-/* ----- Vue Carnet (saisie par ouvrage) ----- */
-.travaux-ouvrage {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  margin-bottom: 12px;
-  overflow: hidden;
-}
-.travaux-ouvrage-head {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 14px;
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border);
-}
-.travaux-ouvrage-name {
-  flex: 1; min-width: 0;
-  border: none; background: transparent;
-  font-size: 15px; font-weight: 800;
-  color: var(--text);
-  padding: 4px 2px;
-  border-bottom: 1px solid transparent;
-}
-.travaux-ouvrage-name:focus { outline: none; border-bottom-color: var(--accent); }
-.travaux-ouvrage-name::placeholder { color: var(--text-3); font-style: italic; font-weight: 500; }
-.travaux-ouvrage-del { border: none; background: transparent; color: var(--text-3); cursor: pointer; padding: 4px; }
-.travaux-ouvrage-del svg { width: 16px; height: 16px; fill: currentColor; }
-.travaux-ouvrage-del:hover { color: var(--danger); }
-.travaux-presc-list { display: flex; flex-direction: column; }
-.travaux-add-presc { margin: 10px 14px 14px; width: calc(100% - 28px); }
-
-.travaux-presc {
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border);
-  display: flex; flex-direction: column; gap: 10px;
-}
-.travaux-presc:last-of-type { border-bottom: none; }
-.travaux-presc-top { display: flex; align-items: flex-start; gap: 8px; }
-.travaux-presc-text {
-  flex: 1; min-width: 0;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text);
-  border-radius: var(--radius-sm);
-  font-family: inherit; font-size: 14px; font-weight: 600;
-  padding: 8px 10px;
-  resize: none; overflow: hidden;
-  min-height: 40px; line-height: 1.35;
-}
-.travaux-presc-text:focus { outline: none; border-color: var(--accent); background: var(--surface); }
-.travaux-presc-text::placeholder { color: var(--text-3); font-style: italic; font-weight: 400; }
-
-.travaux-rempl-toggle {
-  display: inline-flex; align-items: center; gap: 8px;
-  align-self: flex-start;
-  font-size: 12.5px; font-weight: 600; color: var(--text-2);
-  cursor: pointer;
-  padding: 5px 11px; border-radius: 999px;
-  border: 1px solid var(--border-strong); background: var(--surface-2);
-}
-.travaux-rempl-toggle input { accent-color: var(--warning); width: 16px; height: 16px; margin: 0; }
-.travaux-rempl-toggle.is-on { background: #3a1d15; border-color: #5a4a1e; color: var(--warning); }
-
-.travaux-specs-edit { display: flex; flex-direction: column; gap: 6px; }
-.travaux-spec-row { display: flex; align-items: center; gap: 6px; }
-.travaux-spec-label, .travaux-spec-value {
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text);
-  border-radius: 6px;
-  font-size: 13px;
-  padding: 6px 9px;
-}
-.travaux-spec-label { flex: 0 1 130px; font-weight: 700; }
-.travaux-spec-value { flex: 1; min-width: 0; color: var(--accent-2); font-weight: 600; }
-.travaux-spec-label:focus, .travaux-spec-value:focus { outline: none; border-color: var(--accent); background: var(--surface); }
-.travaux-spec-label::placeholder, .travaux-spec-value::placeholder { color: var(--text-3); font-style: italic; font-weight: 400; }
-.travaux-spec-del { border: none; background: transparent; color: var(--text-3); font-size: 16px; cursor: pointer; padding: 0 4px; }
-.travaux-spec-del:hover { color: var(--danger); }
-.travaux-add-spec {
-  align-self: flex-start;
-  border: 1px dashed var(--border-strong); background: transparent;
-  color: var(--text-3); font-size: 12px; font-weight: 600;
-  padding: 5px 11px; border-radius: 999px; cursor: pointer;
-}
-.travaux-add-spec:hover { color: var(--accent); border-color: var(--accent); }
-
-.travaux-zones {
-  border-top: 1px dashed var(--border-strong);
-  padding-top: 10px;
-}
-.travaux-zones-head {
-  font-size: 10.5px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.05em; color: var(--text-3); margin-bottom: 7px;
-}
-.travaux-zone-grid { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
-.travaux-zone-chk {
-  display: inline-flex; align-items: center; gap: 8px;
-  font-size: 13px; font-weight: 600; color: var(--text-2);
-  cursor: pointer; padding: 4px 2px; width: fit-content;
-}
-.travaux-zone-chk input { accent-color: var(--accent); width: 17px; height: 17px; margin: 0; }
-.travaux-zone-chk.is-on { color: var(--accent); }
-.travaux-zone-every { font-weight: 700; }
-.travaux-zone-note { margin: 7px 0 0; font-size: 11px; font-style: italic; color: var(--text-3); }
-.travaux-zone-hint { font-size: 13px; color: var(--text-3); font-style: italic; }
-
-/* ----- Vue Visite (fiche de lieu) ----- */
-.travaux-loc-picker { margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px; }
-.travaux-loc-row { display: flex; gap: 8px; flex-wrap: wrap; }
-.travaux-loc-btn {
-  flex: 0 0 auto;
-  border: 1px solid var(--border-strong);
-  background: var(--surface);
-  color: var(--text-2);
-  border-radius: 12px;
-  padding: 11px 16px;
-  font-size: 14.5px; font-weight: 700;
-  cursor: pointer; -webkit-tap-highlight-color: transparent;
-}
-.travaux-loc-btn.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
-.travaux-loc-btn-etage { padding: 8px 14px; font-size: 13.5px; }
-.travaux-loc-row-etage .travaux-loc-btn { border-radius: 999px; }
-
-.travaux-visite-crumb {
-  font-size: 13px; font-weight: 700; color: var(--text-2);
-  margin: 4px 0 12px;
-}
-.travaux-sheet {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  margin-bottom: 10px;
-  overflow: hidden;
-}
-.travaux-sheet-head {
-  display: flex; align-items: center; gap: 10px;
-  padding: 11px 15px;
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border);
-}
-.travaux-sheet-name { flex: 1; font-size: 15px; font-weight: 800; color: var(--text); }
-.travaux-rempl-badge {
+/* ---------- Éléments partagés ---------- */
+.travaux-lot-dot {
   flex-shrink: 0;
-  background: #3a1d15; color: var(--warning);
-  border-radius: 999px; padding: 3px 10px;
-  font-size: 11px; font-weight: 800;
-}
-.travaux-sheet-line {
-  padding: 11px 15px;
-  border-bottom: 1px solid var(--border);
-  font-size: 14px; line-height: 1.5; color: var(--text-2);
-}
-.travaux-sheet-line:last-child { border-bottom: none; }
-.travaux-rempl-tag {
+  width: 10px; height: 10px; border-radius: 3px;
   display: inline-block;
-  background: #3a1d15; color: var(--warning);
+}
+.travaux-art-num {
+  flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 46px; padding: 3px 7px;
+  background: var(--accent-soft);
+  border: 1px solid #4a2c18;
+  border-radius: 6px;
+  color: var(--accent-2);
+  font-size: 12px; font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.travaux-art-num-sm { min-width: 40px; font-size: 11px; padding: 2px 6px; }
+.travaux-rempl-tag {
+  flex-shrink: 0;
+  display: inline-block;
+  background: var(--warning-soft); color: var(--warning);
+  border: 1px solid var(--warning-border);
   border-radius: 6px; padding: 2px 7px;
   font-size: 10px; font-weight: 800; text-transform: uppercase;
-  margin-right: 8px; vertical-align: middle;
+  vertical-align: middle;
 }
 .travaux-sheet-text { color: var(--text); font-weight: 600; }
 .travaux-sheet-specs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
@@ -5116,6 +4982,430 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   color: var(--text-3); font-weight: 700;
   text-transform: uppercase; font-size: 9.5px; letter-spacing: 0.04em;
 }
+
+/* Bloc « LOCALISATION : » — la signature visuelle d'un CCTP */
+.travaux-loca {
+  margin-top: 10px;
+  border-left: 3px solid var(--border-strong);
+  background: var(--surface-2);
+  border-radius: 0 8px 8px 0;
+  padding: 8px 12px;
+}
+.travaux-loca-head {
+  font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em;
+  color: var(--text-3);
+  margin-bottom: 5px;
+}
+.travaux-loca-note {
+  margin: 0; font-size: 13.5px; line-height: 1.45; color: var(--text-2);
+  white-space: pre-wrap;
+}
+.travaux-loca-all { margin: 0; font-size: 13.5px; font-weight: 700; color: var(--accent-2); }
+.travaux-loca-list { margin: 5px 0 0; padding-left: 18px; }
+.travaux-loca-list li { font-size: 13px; color: var(--text-2); line-height: 1.5; }
+
+.travaux-art-body {
+  margin-top: 8px;
+  font-size: 13.5px; line-height: 1.55; color: var(--text-2);
+  white-space: pre-wrap;
+}
+
+/* ---------- Vue CCTP (consultation par lot) ---------- */
+.travaux-search {
+  position: relative;
+  display: flex; align-items: center;
+  margin-bottom: 10px;
+}
+.travaux-search svg {
+  position: absolute; left: 12px;
+  width: 18px; height: 18px; fill: var(--text-3);
+  pointer-events: none;
+}
+.travaux-search input {
+  flex: 1; min-width: 0;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 11px 14px 11px 38px;
+  font-size: 14px;
+}
+.travaux-search input:focus { outline: none; border-color: var(--accent); background: var(--surface-2); }
+.travaux-search input::placeholder { color: var(--text-3); }
+
+.travaux-lot-chips {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.travaux-lot-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-2);
+  border-radius: 999px;
+  padding: 7px 13px;
+  font-size: 13px; font-weight: 700;
+  cursor: pointer;
+}
+.travaux-lot-chip.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.travaux-lot-count {
+  background: var(--surface-3); color: var(--text-3);
+  border-radius: 999px; padding: 1px 7px;
+  font-size: 11px; font-weight: 800;
+}
+.travaux-lot-chip.is-on .travaux-lot-count { background: rgba(0,0,0,0.25); color: #fff; }
+
+.travaux-sommaire {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+.travaux-sommaire > summary {
+  padding: 11px 15px;
+  background: var(--surface-2);
+  font-size: 12px; font-weight: 800; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--text-2);
+  cursor: pointer;
+  list-style: none;
+}
+.travaux-sommaire > summary::-webkit-details-marker { display: none; }
+.travaux-sommaire > summary::before { content: '▸ '; color: var(--accent); }
+.travaux-sommaire[open] > summary::before { content: '▾ '; }
+.travaux-sommaire-list { padding: 8px 6px 10px; }
+.travaux-sommaire-chap {
+  padding: 9px 10px 4px;
+  font-size: 12px; font-weight: 800; letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+.travaux-sommaire-art {
+  display: flex; align-items: baseline; gap: 9px;
+  width: 100%; text-align: left;
+  border: none; background: transparent;
+  color: var(--text-2);
+  font-size: 13.5px; line-height: 1.4;
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.travaux-sommaire-art:hover { background: var(--surface-2); color: var(--text); }
+.travaux-sommaire-num {
+  flex-shrink: 0;
+  color: var(--accent-2); font-weight: 800; font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  min-width: 44px;
+}
+
+.travaux-lot-head {
+  display: flex; align-items: baseline; gap: 10px;
+  margin: 22px 0 6px;
+  padding: 10px 14px;
+  background: var(--surface-2);
+  border-left: 4px solid var(--lot-color, var(--accent));
+  border-radius: 0 10px 10px 0;
+}
+.travaux-lot-head-num {
+  font-size: 11px; font-weight: 800; letter-spacing: 0.08em;
+  color: var(--text-3);
+}
+.travaux-lot-head-name {
+  font-size: 15.5px; font-weight: 800; color: var(--text);
+  text-transform: uppercase;
+}
+.travaux-chap-head {
+  margin: 18px 0 8px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border-strong);
+  font-size: 13.5px; font-weight: 800; letter-spacing: 0.03em;
+  color: var(--accent-2);
+  scroll-margin-top: 12px;
+}
+
+.travaux-art {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  scroll-margin-top: 12px;
+  transition: box-shadow 0.4s, border-color 0.4s;
+}
+.travaux-art.is-flash { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+.travaux-art-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.travaux-art-title {
+  flex: 1; min-width: 0;
+  margin: 0;
+  font-size: 14.5px; font-weight: 800; color: var(--text);
+  text-transform: uppercase; letter-spacing: 0.01em;
+  line-height: 1.35;
+}
+.travaux-art-crumb {
+  display: flex; align-items: center; gap: 7px;
+  margin-top: 7px;
+  font-size: 11.5px; font-weight: 700; color: var(--text-3);
+}
+.travaux-search-info {
+  margin: 2px 0 12px;
+  font-size: 13px; font-weight: 700; color: var(--text-3);
+}
+
+/* ---------- Vue Visite (par lieu) ---------- */
+.travaux-loc-picker { margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px; }
+.travaux-loc-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.travaux-loc-level {
+  flex: 0 0 auto;
+  min-width: 68px;
+  font-size: 10.5px; font-weight: 800; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--text-3);
+}
+.travaux-loc-btn {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-2);
+  border-radius: 12px;
+  padding: 10px 15px;
+  font-size: 14px; font-weight: 700;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.travaux-loc-btn.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.travaux-loc-btn-sub { padding: 7px 13px; font-size: 13px; border-radius: 999px; }
+
+.travaux-visite-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 4px 0 14px;
+}
+.travaux-visite-crumb { flex: 1; min-width: 180px; font-size: 13.5px; font-weight: 700; color: var(--text-2); }
+.travaux-deep-toggle {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 12.5px; font-weight: 600; color: var(--text-2);
+  cursor: pointer;
+  padding: 5px 11px; border-radius: 999px;
+  border: 1px solid var(--border-strong); background: var(--surface-2);
+}
+.travaux-deep-toggle input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.travaux-deep-toggle.is-on { border-color: var(--accent); color: var(--accent-2); }
+
+.travaux-visite-lot {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--lot-color, var(--accent));
+  border-radius: 0 14px 14px 0;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.travaux-visite-lot-head {
+  display: flex; align-items: center; gap: 9px;
+  padding: 10px 14px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.travaux-visite-lot-name { flex: 1; min-width: 0; font-size: 14px; font-weight: 800; color: var(--text); }
+.travaux-visite-lot-count {
+  flex-shrink: 0;
+  background: var(--surface-3); color: var(--text-3);
+  border-radius: 999px; padding: 2px 9px;
+  font-size: 11px; font-weight: 800;
+}
+.travaux-visite-chap {
+  padding: 9px 14px 4px;
+  font-size: 11.5px; font-weight: 800; letter-spacing: 0.05em;
+  color: var(--text-3);
+}
+.travaux-visite-line {
+  padding: 8px 14px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.travaux-visite-line:last-child { border-bottom: none; }
+.travaux-visite-line-top { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; font-size: 14px; line-height: 1.45; }
+.travaux-visite-via { margin-top: 5px; font-size: 12px; font-weight: 700; color: var(--warning); }
+.travaux-art-detail { margin-top: 8px; }
+.travaux-art-detail > summary {
+  display: inline-block;
+  font-size: 12px; font-weight: 700; color: var(--text-3);
+  cursor: pointer; list-style: none;
+  padding: 2px 0;
+}
+.travaux-art-detail > summary::-webkit-details-marker { display: none; }
+.travaux-art-detail > summary::before { content: '▸ '; color: var(--accent); }
+.travaux-art-detail[open] > summary::before { content: '▾ '; }
+
+/* ---------- Vue Carnet (paramétrage) ---------- */
+.travaux-carnet-lot {
+  border-left: 4px solid var(--lot-color, var(--accent));
+  padding-left: 12px;
+  margin-bottom: 22px;
+}
+.travaux-carnet-lot-head {
+  display: flex; align-items: center; gap: 9px;
+  margin-bottom: 10px;
+}
+.travaux-carnet-lot-name {
+  font-size: 14px; font-weight: 800; color: var(--text);
+  text-transform: uppercase; letter-spacing: 0.02em;
+}
+.travaux-add-chap {
+  border: 1px dashed var(--border-strong); background: transparent;
+  color: var(--text-3); font-size: 13px; font-weight: 700;
+  padding: 9px 14px; border-radius: 10px; cursor: pointer;
+  width: 100%;
+}
+.travaux-add-chap:hover { color: var(--accent); border-color: var(--accent); }
+.travaux-add-chap-orphan { margin-top: 6px; }
+
+.travaux-ouvrage {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.travaux-ouvrage-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.travaux-ouvrage-name {
+  flex: 1 1 220px; min-width: 0;
+  border: none; background: transparent;
+  font-size: 15px; font-weight: 800;
+  color: var(--text);
+  padding: 4px 2px;
+  border-bottom: 1px solid transparent;
+}
+.travaux-ouvrage-name:focus { outline: none; border-bottom-color: var(--accent); }
+.travaux-ouvrage-name::placeholder { color: var(--text-3); font-style: italic; font-weight: 500; }
+.travaux-ouvrage-lot {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 8px;
+  font-size: 12px; font-weight: 600;
+  padding: 5px 8px;
+  max-width: 170px;
+}
+.travaux-ouvrage-del { border: none; background: transparent; color: var(--text-3); cursor: pointer; padding: 4px; }
+.travaux-ouvrage-del svg { width: 16px; height: 16px; fill: currentColor; }
+.travaux-ouvrage-del:hover { color: var(--danger); }
+.travaux-presc-list { display: flex; flex-direction: column; }
+.travaux-add-presc { margin: 10px 14px 14px; width: calc(100% - 28px); }
+
+.travaux-presc {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.travaux-presc:last-of-type { border-bottom: none; }
+.travaux-presc-top { display: flex; align-items: center; gap: 8px; }
+.travaux-presc-title {
+  flex: 1; min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  font-size: 14px; font-weight: 800;
+  padding: 8px 10px;
+}
+.travaux-presc-title:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+.travaux-presc-title::placeholder { color: var(--text-3); font-style: italic; font-weight: 500; }
+
+.travaux-field-label {
+  margin-top: 6px;
+  font-size: 10.5px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-3);
+}
+.travaux-presc-text, .travaux-presc-loca {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  font-family: inherit; font-size: 13.5px; font-weight: 500;
+  padding: 8px 10px;
+  resize: none; overflow: hidden;
+  min-height: 40px; line-height: 1.4;
+}
+.travaux-presc-text:focus, .travaux-presc-loca:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+.travaux-presc-text::placeholder, .travaux-presc-loca::placeholder { color: var(--text-3); font-style: italic; font-weight: 400; }
+
+.travaux-rempl-toggle {
+  display: inline-flex; align-items: center; gap: 8px;
+  align-self: flex-start;
+  margin-top: 4px;
+  font-size: 12.5px; font-weight: 600; color: var(--text-2);
+  cursor: pointer;
+  padding: 5px 11px; border-radius: 999px;
+  border: 1px solid var(--border-strong); background: var(--surface-2);
+}
+.travaux-rempl-toggle input { accent-color: var(--warning); width: 16px; height: 16px; margin: 0; }
+.travaux-rempl-toggle.is-on { background: var(--warning-soft); border-color: var(--warning-border); color: var(--warning); }
+
+.travaux-specs-edit { display: flex; flex-direction: column; gap: 6px; }
+.travaux-spec-row { display: flex; align-items: center; gap: 6px; }
+.travaux-spec-label, .travaux-spec-value {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: 6px;
+  font-size: 13px;
+  padding: 6px 9px;
+}
+.travaux-spec-label { flex: 0 1 130px; min-width: 0; font-weight: 700; }
+.travaux-spec-value { flex: 1; min-width: 0; color: var(--accent-2); font-weight: 600; }
+.travaux-spec-label:focus, .travaux-spec-value:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+.travaux-spec-label::placeholder, .travaux-spec-value::placeholder { color: var(--text-3); font-style: italic; font-weight: 400; }
+.travaux-spec-del { border: none; background: transparent; color: var(--text-3); font-size: 16px; cursor: pointer; padding: 0 4px; }
+.travaux-spec-del:hover { color: var(--danger); }
+.travaux-add-spec {
+  align-self: flex-start;
+  border: 1px dashed var(--border-strong); background: transparent;
+  color: var(--text-3); font-size: 12px; font-weight: 600;
+  padding: 5px 11px; border-radius: 999px; cursor: pointer;
+}
+.travaux-add-spec:hover { color: var(--accent); border-color: var(--accent); }
+
+.travaux-zones {
+  margin-top: 8px;
+  border-top: 1px dashed var(--border-strong);
+  padding-top: 10px;
+}
+.travaux-zones-head {
+  font-size: 10.5px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-3); margin-bottom: 7px;
+}
+/* Liste compacte : un bloc par bâtiment, rangés sur autant de colonnes que
+   la largeur le permet (1 sur mobile, 2 puis 3 sur grand écran). Chaque
+   arborescence reste d'un seul tenant, dans l'ordre des zones. */
+.travaux-zone-grid {
+  margin-top: 6px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(235px, 1fr));
+  gap: 4px 18px;
+  align-items: start;
+}
+.travaux-zone-bloc { display: flex; flex-direction: column; min-width: 0; }
+.travaux-zone-chk {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 12.5px; font-weight: 600; color: var(--text-2);
+  cursor: pointer; padding: 3px 2px;
+}
+.travaux-zone-chk input { flex-shrink: 0; accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.travaux-zone-chk span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.travaux-zone-chk.is-on { color: var(--accent); }
+.travaux-zone-every { font-weight: 800; font-size: 13px; }
+.travaux-zone-d1 { font-weight: 800; color: var(--text); }
+.travaux-zone-d2 { padding-left: 13px; }
+.travaux-zone-d3 { padding-left: 26px; }
+.travaux-zone-d4 { padding-left: 39px; }
+.travaux-zone-d5 { padding-left: 52px; }
+.travaux-zone-d1.is-on, .travaux-zone-d2.is-on, .travaux-zone-d3.is-on,
+.travaux-zone-d4.is-on, .travaux-zone-d5.is-on { color: var(--accent); }
+.travaux-zone-note { margin: 8px 0 0; font-size: 11px; font-style: italic; color: var(--text-3); }
+.travaux-zone-hint { font-size: 13px; color: var(--text-3); font-style: italic; }
 
 /* ============ DASHBOARD : cartes Heures / Devis / ST ============ */
 .dash-locked {

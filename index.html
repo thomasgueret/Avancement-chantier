@@ -484,25 +484,34 @@
 
     <!-- ============== ONGLET : TRAVAUX ============== -->
     <section class="page" id="page-travaux">
-      <div class="segmented" role="tablist" data-group="travaux">
+      <div class="segmented" role="tablist" data-group="travaux" style="--count:3;">
         <div class="segmented-thumb"></div>
         <button class="seg-btn active" data-group="travaux" data-sub="visite" role="tab">Visite</button>
+        <button class="seg-btn" data-group="travaux" data-sub="cctp" role="tab">CCTP</button>
         <button class="seg-btn" data-group="travaux" data-sub="carnet" role="tab">Carnet</button>
       </div>
 
-      <!-- Sous-page : Visite (fiche de lieu) -->
+      <!-- Sous-page : Visite (par lieu) -->
       <div class="sub-page active" id="sub-visite" data-group="travaux">
-        <p class="section-help">Sélectionnez un lieu pour voir tout ce qui y est dû (couleurs, quincailleries, remplacements).</p>
+        <p class="section-help">Descendez dans l'arborescence jusqu'au lieu où vous êtes : toutes les prestations dues s'affichent, classées par lot.</p>
         <div class="travaux-loc-picker" id="travauxvisitepicker"></div>
         <div id="travauxvisitebody"></div>
       </div>
 
-      <!-- Sous-page : Carnet (prescriptions par ouvrage) -->
-      <div class="sub-page" id="sub-carnet" data-group="travaux">
-        <p class="section-help">Une fiche de prescription par type d'ouvrage : le niveau de prestation dû, les détails (couleur, quincaillerie…) et les lieux concernés.</p>
-        <div class="travaux-carnet-actions">
-          <button class="btn-primary" id="travauxaddouvrage" type="button">+ Type d'ouvrage</button>
+      <!-- Sous-page : CCTP (par lot, articles numérotés) -->
+      <div class="sub-page" id="sub-cctp" data-group="travaux">
+        <p class="section-help">Le CCTP du chantier : choisissez un lot ou cherchez une prestation pour retrouver son article complet et sa localisation.</p>
+        <div class="travaux-search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5Zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14Z"/></svg>
+          <input type="search" id="travauxsearch" placeholder="Rechercher une prestation, un détail, une localisation…" autocomplete="off">
         </div>
+        <div class="travaux-lot-chips" id="travauxcctplots"></div>
+        <div id="travauxcctpbody"></div>
+      </div>
+
+      <!-- Sous-page : Carnet (paramétrage) -->
+      <div class="sub-page" id="sub-carnet" data-group="travaux">
+        <p class="section-help">Le paramétrage, à la structure d'un CCTP : chaque lot contient des chapitres, chaque chapitre des articles (descriptif, détails techniques, localisation).</p>
         <div id="travauxcarnetbody"></div>
       </div>
     </section>
