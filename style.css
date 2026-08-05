@@ -1675,79 +1675,279 @@ option {
 .toast.error { background: var(--danger); }
 
 /* ============ AVANCEMENT : RÉCAPITULATIF ============ */
+/* ============ AVANCEMENT → TABLEAU DE BORD ============ */
+#page-avancement .recap-content { display: block; }
+
+/* ----- Barre de périmètre ----- */
 .recap-picker {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   margin-bottom: 16px;
 }
-.recap-picker-label {
-  font-size: 13px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.04em;
-  color: var(--text-2);
-  flex-shrink: 0;
-}
-.recap-picker-select {
-  flex: 1; min-width: 0;
-  font-size: 16px; font-weight: 600;
-  color: var(--text);
-  background: var(--surface);
+.db-scope { display: flex; gap: 8px; flex-wrap: wrap; flex: 1; min-width: 0; }
+.db-scope-chip {
+  display: inline-flex; align-items: baseline; gap: 8px;
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  padding: 10px 12px;
-  -webkit-appearance: menulist;
-  min-height: 44px;
+  background: var(--surface);
+  color: var(--text-2);
+  border-radius: 999px;
+  padding: 8px 15px;
+  font-size: 13px; font-weight: 700;
+  max-width: 100%;
 }
-.recap-section { margin-bottom: 18px; }
-.recap-section:last-child { margin-bottom: 0; }
-.recap-section-header {
-  background: var(--ouvrage-bg, var(--surface-2));
-  border: 1px solid var(--ouvrage-border, var(--border));
+.db-scope-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-scope-pct { font-size: 11.5px; font-weight: 800; color: var(--accent-2); font-variant-numeric: tabular-nums; }
+.db-scope-chip:hover { border-color: var(--accent); }
+.db-scope-chip.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.db-scope-chip.is-on .db-scope-pct { color: rgba(255,255,255,0.9); }
+.db-export {
+  flex-shrink: 0;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-2);
+  border-radius: 999px;
+  padding: 8px 15px;
+  font-size: 12.5px; font-weight: 700;
+}
+.db-export:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ----- Barres de progression ----- */
+.db-bar {
+  height: 7px;
+  background: var(--surface-3);
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 8px 0 6px;
+}
+.db-bar-lg { height: 10px; }
+.db-bar-fill { height: 100%; border-radius: 999px; transition: width 0.35s ease; background: var(--accent); }
+.db-bar-fill.is-done { background: var(--success); }
+.db-bar-fill.is-good { background: var(--accent); }
+.db-bar-fill.is-going { background: var(--warning); }
+.db-bar-fill.is-idle { background: var(--border-strong); }
+.db-bar-time .db-bar-fill { background: var(--info); }
+
+/* ----- Bandeau d'indicateurs ----- */
+.db-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.db-kpi {
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 8px 14px;
+  padding: 14px 16px;
   box-shadow: var(--shadow-sm);
+  min-width: 0;
+}
+.db-kpi-main { border-color: var(--border-strong); background: linear-gradient(160deg, var(--surface-2), var(--surface)); }
+.db-kpi-label {
+  font-size: 10.5px; font-weight: 800; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--text-3);
   margin-bottom: 6px;
 }
-.recap-section-name {
-  font-size: 13px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.04em;
-  color: var(--text-2);
+.db-kpi-value { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.db-kpi-num {
+  font-size: 30px; font-weight: 800; color: var(--text);
+  font-variant-numeric: tabular-nums; line-height: 1.05;
 }
-.recap-rows { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
-.recap-row {
-  display: flex; align-items: center; gap: 10px;
-  background: var(--ouvrage-bg, var(--surface));
-  border: 1px solid var(--ouvrage-border, var(--border));
+.db-kpi-main .db-kpi-num { font-size: 38px; color: var(--accent-2); }
+.db-kpi-unit { font-size: 12px; font-weight: 700; color: var(--text-3); }
+.db-kpi-value.is-pos .db-kpi-num { color: var(--success-2); }
+.db-kpi-value.is-neg .db-kpi-num { color: var(--danger); }
+.db-kpi-void { font-size: 26px; font-weight: 800; color: var(--text-4); }
+.db-kpi-sub { margin-top: 7px; font-size: 11.5px; line-height: 1.45; color: var(--text-3); }
+.db-kpi-rate { color: var(--accent-2); font-weight: 700; }
+.db-kpi-tag {
+  display: inline-block;
+  margin-top: 8px;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11px; font-weight: 800;
+}
+.db-kpi-tag.is-pos { background: var(--success-soft); color: var(--success-2); }
+.db-kpi-tag.is-neg { background: var(--danger-soft); color: var(--danger); }
+
+/* ----- Cartes ----- */
+.db-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px 14px;
+  padding: 14px 16px 16px;
   box-shadow: var(--shadow-sm);
-  min-height: 44px;
+  margin-bottom: 14px;
+  min-width: 0;
 }
-.recap-task-name {
-  flex: 1; min-width: 0;
-  font-size: 15px;
+.db-card-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.db-card-title {
+  margin: 0;
+  font-size: 12px; font-weight: 800; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--accent-2);
+}
+.db-card-hint { font-size: 11.5px; color: var(--text-3); font-style: italic; }
+.db-empty { margin: 4px 0; font-size: 13px; color: var(--text-3); font-style: italic; }
+.db-note { margin: 10px 0 0; font-size: 11px; color: var(--text-4); font-style: italic; }
+.db-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+@media (min-width: 900px) { .db-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); } }
+.db-grid > .db-card { margin-bottom: 0; }
+
+/* ----- Courbe d'avancement ----- */
+.db-curve-wrap { width: 100%; overflow: hidden; }
+.db-curve { width: 100%; height: auto; display: block; }
+.db-curve-grid { stroke: var(--border); stroke-width: 1; }
+.db-curve-axis { fill: var(--text-4); font-size: 10px; font-family: inherit; }
+.db-curve-theory { stroke: var(--info); stroke-width: 2; stroke-dasharray: 6 5; opacity: 0.8; }
+.db-curve-real { stroke: var(--accent); stroke-width: 2.5; fill: none; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.db-curve-area { fill: var(--accent); opacity: 0.13; }
+.db-curve-dot { fill: var(--accent); stroke: var(--bg); stroke-width: 2; }
+.db-curve-today { stroke: var(--text-4); stroke-width: 1; stroke-dasharray: 3 4; }
+.db-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
+.db-legend-item { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--text-3); font-weight: 600; }
+.db-legend-swatch { width: 16px; height: 3px; border-radius: 2px; background: var(--text-4); }
+.db-legend-swatch.is-real { background: var(--accent); height: 3px; }
+.db-legend-swatch.is-theory { background: var(--info); }
+.db-legend-swatch.is-today { background: var(--text-4); width: 2px; height: 12px; }
+
+/* ----- Lignes comparatives (par bâtiment) ----- */
+.db-rows { display: flex; flex-direction: column; gap: 12px; }
+.db-row { min-width: 0; }
+.db-row-head { display: flex; align-items: baseline; gap: 10px; }
+.db-row-name { flex: 1; min-width: 0; font-size: 14px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-row-pct { font-size: 14px; font-weight: 800; color: var(--accent-2); font-variant-numeric: tabular-nums; }
+.db-row-sub { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 11.5px; color: var(--text-3); }
+.db-delta { font-weight: 800; }
+.db-delta.is-pos { color: var(--success-2); }
+.db-delta.is-neg { color: var(--danger); }
+
+/* ----- Matrice croisée ----- */
+.db-matrix-wrap { overflow-x: auto; }
+.db-matrix { border-collapse: separate; border-spacing: 3px; font-variant-numeric: tabular-nums; }
+.db-matrix th, .db-matrix td { padding: 0; }
+.db-matrix-corner {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--text-3);
+  text-align: left; padding-right: 8px;
+  position: sticky; left: 0; background: var(--surface); z-index: 2;
+}
+.db-matrix-col {
+  height: 114px; width: 36px; min-width: 36px;
+  vertical-align: bottom;
+  font-size: 11px; font-weight: 700; color: var(--text-2);
+}
+.db-matrix-col > span {
+  display: block;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  max-height: 108px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin: 0 auto 4px;
+}
+.db-matrix-row {
+  font-size: 12px; font-weight: 700; color: var(--text-2);
+  text-align: left; padding-right: 10px;
+  max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  position: sticky; left: 0; background: var(--surface); z-index: 1;
+}
+.db-matrix-cell {
+  width: 36px; height: 30px;
+  text-align: center;
+  font-size: 11px; font-weight: 800;
+  border-radius: 6px;
   color: var(--text);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  background: var(--surface-2);
 }
-.recap-task-pct {
-  font-size: 15px; font-weight: 700;
-  color: var(--accent);
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
-}
-.recap-tag {
-  flex-shrink: 0;
-  font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.04em;
-  color: var(--text-3);
+.db-matrix-cell.is-idle { color: var(--text-4); }
+.db-matrix-cell.is-na { background: transparent; color: var(--text-4); font-weight: 600; }
+
+/* ----- Détail par ouvrage ----- */
+.db-ouvrages { display: flex; flex-direction: column; gap: 10px; }
+.db-ouvrage {
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 2px 8px;
+  border-radius: 12px;
+  padding: 11px 13px;
 }
-.recap-row.is-done { background: var(--success-soft); border-color: var(--success-border); }
-.recap-row.is-done .recap-task-pct { color: var(--success-2); }
-.recap-row.is-excluded { background: var(--surface-2); }
-.recap-row.is-excluded .recap-task-name { color: var(--text-3); }
-.recap-row.is-excluded .recap-task-pct { color: var(--text-3); }
+.db-ouvrage[open] { border-color: var(--border-strong); }
+.db-ouvrage-head {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  cursor: pointer; list-style: none;
+}
+.db-ouvrage-head::-webkit-details-marker { display: none; }
+.db-ouvrage-head::before {
+  content: '▸'; color: var(--accent); font-size: 11px; flex-shrink: 0;
+  transition: transform 0.15s;
+}
+.db-ouvrage[open] .db-ouvrage-head::before { transform: rotate(90deg); }
+.db-ouvrage-id { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.db-ouvrage-name { font-size: 14px; font-weight: 800; color: var(--text); }
+.db-ouvrage-meta { font-size: 11.5px; color: var(--text-3); }
+.db-ouvrage-stats { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.db-ouvrage-weight {
+  background: var(--surface-3); color: var(--text-3);
+  border-radius: 999px; padding: 3px 10px;
+  font-size: 10.5px; font-weight: 800;
+}
+.db-ouvrage-pct { font-size: 16px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--accent-2); }
+.db-ouvrage-pct.is-done { color: var(--success-2); }
+.db-ouvrage-pct.is-idle { color: var(--text-4); }
+
+.db-tasks-wrap { overflow-x: auto; margin-top: 8px; }
+.db-tasks { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.db-tasks th, .db-tasks td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  text-align: left;
+  white-space: nowrap;
+}
+.db-tasks th {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--text-4);
+  border-bottom-color: var(--border-strong);
+}
+.db-tasks th.num, .db-tasks td.num { text-align: right; }
+.db-tasks tbody tr:last-child th, .db-tasks tbody tr:last-child td { border-bottom: none; }
+.db-task-name { color: var(--text); font-weight: 600; white-space: normal; min-width: 150px; }
+.db-task-tag {
+  margin-left: 8px;
+  background: var(--surface-3); color: var(--text-4);
+  border-radius: 5px; padding: 1px 6px;
+  font-size: 9.5px; font-weight: 800; text-transform: uppercase;
+}
+.db-tasks td { color: var(--text-2); }
+.db-task-pct { font-weight: 800; color: var(--accent-2); }
+.db-task-pct.is-done { color: var(--success-2); }
+.db-task-pct.is-idle { color: var(--text-4); }
+.db-tasks tr.is-excluded td { color: var(--text-4); }
+.db-tasks tr.is-done .db-task-name { color: var(--success-2); }
+
+/* ----- Points d'attention ----- */
+.db-focus { display: grid; grid-template-columns: 1fr; gap: 16px; }
+@media (min-width: 780px) { .db-focus { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.db-focus-col { min-width: 0; }
+.db-focus-title {
+  font-size: 10.5px; font-weight: 800; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--text-3);
+  padding-bottom: 6px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.db-focus-item {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 6px 0;
+  font-size: 12.5px;
+}
+.db-focus-name { flex: 1; min-width: 0; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-focus-val { flex-shrink: 0; font-weight: 800; color: var(--accent-2); font-variant-numeric: tabular-nums; }
+.db-focus-val.is-warn { color: var(--warning); }
+.db-focus-note {
+  padding: 7px 10px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  font-size: 11.5px; line-height: 1.45;
+}
+.db-focus-note.is-warn { background: var(--warning-soft); color: var(--warning); border: 1px solid var(--warning-border); }
+.db-focus-note.is-ok { background: var(--success-soft); color: var(--success-2); border: 1px solid var(--success-border); }
+.db-focus-counts { margin-top: 8px; font-size: 11px; color: var(--text-4); line-height: 1.5; }
 
 /* ============ ADMINISTRATIF (commun Sécurité + eCheckIn) ============ */
 .admin-company {
@@ -4401,60 +4601,6 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   background: var(--surface-2);
   color: var(--accent);
 }
-
-/* ============================================================
-   Avancement → Récap v1.14 — Avancement physique intégré au header existant
-   ============================================================ */
-/* Chip % à droite du nom d'ouvrage, dans la barre colorée du header.
-   Reprend exactement le style des chips existantes du langage visuel. */
-.recap-section-header {
-  display: flex; align-items: center; gap: 10px;
-}
-.recap-section-name { flex: 1; min-width: 0; }
-.recap-section-pct {
-  flex-shrink: 0;
-  padding: 3px 10px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.22);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-/* Ligne texte sous le header : la stat physique en plein texte, comme
-   les .section-help du reste de l'app. Pas de carton décoratif. */
-.recap-section-summary {
-  font-size: 12px;
-  color: var(--text-2);
-  padding: 8px 12px 6px;
-  font-variant-numeric: tabular-nums;
-}
-.recap-section-summary strong {
-  color: var(--text);
-  font-weight: 700;
-}
-.recap-section-sep {
-  color: var(--text-3);
-  margin: 0 4px;
-}
-
-/* Tâches : layout 2 lignes (nom + sous-ligne discrète) pour la
-   contribution physique, sans changer le rythme du reste du récap. */
-.recap-task-main {
-  flex: 1; min-width: 0;
-  display: flex; flex-direction: column;
-  gap: 1px;
-}
-.recap-task-sub {
-  font-size: 11px;
-  color: var(--text-3);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.recap-row.is-done .recap-task-sub { color: var(--success-2); }
-.recap-task-sub-excluded { font-style: italic; }
 
 /* ============================================================
    TABLEAU DE BORD v2 — Design « Graphite chaud » (Direction B)

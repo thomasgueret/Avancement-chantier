@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.53';
+const APP_VERSION = '1.54';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -54,6 +54,10 @@ const state = {
   zoneUpdated: {},        // { [zoneId]: timestamp (ms) — dernière modif d'avancement }
   avancementZoneId: null, // zone affichée dans l'onglet Avancement
   recapBuildingId: null,  // zone racine sélectionnée dans Avancement → Récapitulatif
+  // Tableau de bord Avancement : un point d'historique par jour, pour la
+  // courbe d'avancement et le calcul du rythme.
+  // { 'YYYY-MM-DD': { pct, hDone, hBudget } }
+  avancementHistory: {},
   // Administratif → Sécurité : documents administratifs par entreprise
   adminDocs: {},          // { [companyId]: [{ id, name, receivedAt: 'YYYY-MM-DD' | null }] }
   // Administratif → eCheckIn : ouvriers + pièces administratives par ouvrier
@@ -186,6 +190,7 @@ function load() {
     if (data.zoneCollapsed) state.zoneCollapsed = data.zoneCollapsed;
     if (data.taskProgress) state.taskProgress = data.taskProgress;
     if (data.zoneUpdated) state.zoneUpdated = data.zoneUpdated;
+    if (data.avancementHistory && typeof data.avancementHistory === 'object') state.avancementHistory = data.avancementHistory;
     if (data.avancementZoneId) state.avancementZoneId = data.avancementZoneId;
     if (data.recapBuildingId) state.recapBuildingId = data.recapBuildingId;
     if (data.adminDocs) state.adminDocs = data.adminDocs;
@@ -306,6 +311,7 @@ function buildPersistedData() {
     zoneCollapsed: state.zoneCollapsed,
     taskProgress: state.taskProgress,
     zoneUpdated: state.zoneUpdated,
+    avancementHistory: state.avancementHistory,
     avancementZoneId: state.avancementZoneId,
     recapBuildingId: state.recapBuildingId,
     adminDocs: state.adminDocs,
@@ -601,6 +607,9 @@ function renderAll() {
   renderLegend();
   renderRecapTable();
   renderAvancement();
+  // Un point d'avancement daté du jour dès l'ouverture : la courbe se
+  // construit même si l'on ne visite pas le récapitulatif.
+  stampAvancementHistory(true);
   renderAdministratif();
   renderDocLabelsConfig();
   renderEOTPsConfig();
@@ -2292,6 +2301,9 @@ function setProgress(zoneId, taskId, percent) {
   }
   state.zoneUpdated[zoneId] = Date.now();
   save();
+  // Point d'historique du jour : c'est ce qui alimente la courbe
+  // d'avancement et le calcul du rythme (throttlé en interne).
+  stampAvancementHistory();
 }
 
 // Avancement global d'un ouvrage : PONDÉRÉ PAR LES HEURES ALLOUÉES à
@@ -2625,48 +2637,6 @@ function getDescendantZones(rootId) {
   return out;
 }
 
-// Calcule l'avancement « physique » (m², ml, u…) d'un ouvrage agrégé sur
-// l'ensemble des zones d'un bâtiment. Chaque tâche pondère selon son
-// ratio de production rapporté à la somme des ratios actifs.
-//   total     = somme des quantités de l'ouvrage sur le bâtiment (1 zone = 1 quantité)
-//   realized  = Σ_tâche (ratio_t / Σ_ratios) × (somme des quantité × progress%)
-//   remaining = total − realized
-// Si aucun ratio n'est renseigné (R = 0), repli sur des poids égaux pour
-// éviter d'afficher 0 réalisés sur des tâches déjà avancées. Les tâches
-// excluded (« hors ratio ») ne comptent pas dans l'avancement physique.
-function computeSetupPhysicalAggregate(group) {
-  const tasks = group.setup.tasks || [];
-  const activeTasks = tasks.filter(t => !t.excluded);
-  const totalRatio = activeTasks.reduce((s, t) => s + (t.ratio || 0), 0);
-  let total = 0;
-  for (const tid of Object.keys(group.tasks)) {
-    total = group.tasks[tid].den;
-    break;
-  }
-  let realized = 0;
-  if (totalRatio > 0) {
-    for (const t of activeTasks) {
-      const tAgg = group.tasks[t.id];
-      if (!tAgg) continue;
-      const weight = (t.ratio || 0) / totalRatio;
-      realized += weight * tAgg.num / 100;
-    }
-  } else if (activeTasks.length > 0) {
-    const weight = 1 / activeTasks.length;
-    for (const t of activeTasks) {
-      const tAgg = group.tasks[t.id];
-      if (!tAgg) continue;
-      realized += weight * tAgg.num / 100;
-    }
-  }
-  if (realized > total) realized = total;
-  return {
-    total,
-    realized,
-    remaining: Math.max(0, total - realized),
-    unit: group.setup.unit || 'm²'
-  };
-}
 
 // Formate une quantité physique (m², ml, u…) avec séparation FR et
 // précision décroissante par paliers. 2 décimales sous 100 garantit que
@@ -2680,6 +2650,276 @@ function formatQty(n) {
   return n.toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: decimals });
 }
 
+// ========================================================================
+// AVANCEMENT → RÉCAPITULATIF : le tableau de bord du projet
+//
+// Un modèle d'agrégation unique alimente toutes les vues. La brique
+// élémentaire est le triplet (zone, ouvrage, tâche) :
+//     heures budgétées  h     = quantité de la zone × ratio de la tâche (h/unité)
+//     heures acquises   hDone = h × avancement de la tâche
+// Les heures sont le seul dénominateur commun entre des ouvrages exprimés
+// en m², ml ou u : c'est la valeur acquise du projet, et c'est déjà la
+// règle appliquée dans getZoneProgress / getOuvrageAllocatedHours.
+// Repli documenté si aucun ratio n'est saisi : pondération par les
+// quantités, puis à défaut par le nombre de tâches. Le mode retenu est
+// exposé et affiché — un chiffre présenté en réunion doit être opposable.
+// ========================================================================
+const AVANCEMENT_STALE_DAYS = 21;   // seuil « sans mise à jour »
+
+function computeAvancementModel(buildingId) {
+  const buildings = getBuildings();
+  const inScope = buildingId ? buildings.filter(b => b.id === buildingId) : buildings;
+
+  // Choix du mode de pondération, une fois pour tout le projet (et non par
+  // bâtiment) : le % doit rester comparable d'un bâtiment à l'autre.
+  let ratioSum = 0, qtySum = 0;
+  for (const s of state.taskSetups) for (const t of (s.tasks || [])) if (!t.excluded) ratioSum += (t.ratio || 0);
+  for (const zid of Object.keys(state.zoneOuvrages || {})) {
+    for (const o of (state.zoneOuvrages[zid] || [])) qtySum += (o.quantity || 0);
+  }
+  const weighting = ratioSum > 0 ? 'heures' : (qtySum > 0 ? 'quantites' : 'taches');
+  const taskWeight = (task, qty) => {
+    if (task.excluded) return 0;
+    if (weighting === 'heures') return (qty || 0) * (task.ratio || 0);
+    if (weighting === 'quantites') return (qty || 0);
+    return 1;
+  };
+
+  const model = {
+    weighting, scopeId: buildingId || '',
+    hBudget: 0, hDone: 0, pct: 0,
+    buildings: [], ouvrages: [], matrix: {}, zones: [],
+    counts: { zones: 0, zonesDone: 0, zonesToStart: 0, ouvrages: 0, taches: 0 },
+    issues: { noRatio: [], noQty: [], stale: [] },
+  };
+
+  const ouvrageById = new Map();   // agrégat par ouvrage sur le périmètre
+  const now = Date.now();
+
+  for (const b of inScope) {
+    const bAgg = { id: b.id, name: b.name || '(bâtiment)', hBudget: 0, hDone: 0, pct: 0, zones: 0 };
+    model.matrix[b.id] = {};
+    for (const zid of getDescendantZones(b.id)) {
+      const ouvrages = getZoneOuvrages(zid);
+      if (!ouvrages.length) continue;
+      model.counts.zones++;
+      bAgg.zones++;
+      let zH = 0, zD = 0;
+      for (const o of ouvrages) {
+        const setup = o.setup;
+        const qty = o.quantity || 0;
+        if (!(qty > 0)) model.issues.noQty.push({ zoneId: zid, setupName: setup.name || '(ouvrage)' });
+
+        let agg = ouvrageById.get(setup.id);
+        if (!agg) {
+          agg = {
+            setupId: setup.id, name: setup.name || '(ouvrage sans nom)',
+            unit: setup.unit || 'm²', setup,
+            qtyTotal: 0, hBudget: 0, hDone: 0, pct: 0, weight: 0, zones: 0,
+            tasks: new Map(),
+          };
+          ouvrageById.set(setup.id, agg);
+        }
+        agg.qtyTotal += qty;
+        agg.zones++;
+
+        const cell = model.matrix[b.id][setup.id] || (model.matrix[b.id][setup.id] = { h: 0, d: 0, qty: 0 });
+        cell.qty += qty;
+
+        for (const task of (setup.tasks || [])) {
+          const p = getProgress(zid, task.id);
+          const w = taskWeight(task, qty);
+          let tAgg = agg.tasks.get(task.id);
+          if (!tAgg) {
+            tAgg = { id: task.id, name: task.name || '(tâche sans nom)', ratio: task.ratio || 0,
+                     excluded: !!task.excluded, num: 0, den: 0, sum: 0, count: 0, hBudget: 0, hDone: 0 };
+            agg.tasks.set(task.id, tAgg);
+          }
+          tAgg.num += p * qty;
+          tAgg.den += qty;
+          tAgg.sum += p;
+          tAgg.count += 1;
+          tAgg.hBudget += w;
+          tAgg.hDone += w * p / 100;
+          agg.hBudget += w;
+          agg.hDone += w * p / 100;
+          bAgg.hBudget += w;
+          bAgg.hDone += w * p / 100;
+          cell.h += w;
+          cell.d += w * p / 100;
+          zH += w;
+          zD += w * p / 100;
+        }
+      }
+      const zPct = zH > 0 ? (zD / zH) * 100 : getZoneProgress(zid);
+      if (zPct >= 99.95) model.counts.zonesDone++;
+      else if (zPct <= 0.05) model.counts.zonesToStart++;
+      const updatedAt = state.zoneUpdated[zid] || 0;
+      model.zones.push({
+        id: zid, label: travauxZoneLabel(zid), buildingId: b.id,
+        hBudget: zH, hDone: zD, pct: zPct, updatedAt,
+      });
+      const days = updatedAt ? Math.floor((now - updatedAt) / 86400000) : null;
+      if (zPct > 0.05 && zPct < 99.95 && (days === null || days >= AVANCEMENT_STALE_DAYS)) {
+        model.issues.stale.push({ zoneId: zid, label: travauxZoneLabel(zid), days, pct: zPct });
+      }
+    }
+    bAgg.pct = bAgg.hBudget > 0 ? (bAgg.hDone / bAgg.hBudget) * 100 : 0;
+    model.hBudget += bAgg.hBudget;
+    model.hDone += bAgg.hDone;
+    model.buildings.push(bAgg);
+  }
+  model.pct = model.hBudget > 0 ? (model.hDone / model.hBudget) * 100 : 0;
+
+  // Mise en forme des ouvrages : quantités réalisées et poids relatif.
+  for (const agg of ouvrageById.values()) {
+    const tasks = Array.from(agg.tasks.values());
+    const active = tasks.filter(t => !t.excluded);
+    const totalRatio = active.reduce((s, t) => s + t.ratio, 0);
+    const normWeight = (t) => {
+      if (t.excluded) return 0;
+      if (totalRatio > 0) return t.ratio / totalRatio;
+      return active.length ? 1 / active.length : 0;
+    };
+    let qtyDone = 0;
+    for (const t of tasks) {
+      t.pct = t.den > 0 ? t.num / t.den : (t.count > 0 ? t.sum / t.count : 0);
+      t.share = normWeight(t);
+      t.qtyMax = t.share * agg.qtyTotal;
+      t.qtyDone = (t.share * t.num) / 100;
+      qtyDone += t.qtyDone;
+    }
+    agg.tasks = tasks.sort((a, b) => b.hBudget - a.hBudget || b.share - a.share);
+    agg.qtyDone = Math.min(qtyDone, agg.qtyTotal);
+    agg.qtyRemaining = Math.max(0, agg.qtyTotal - agg.qtyDone);
+    agg.pct = agg.hBudget > 0 ? (agg.hDone / agg.hBudget) * 100
+      : (agg.qtyTotal > 0 ? (agg.qtyDone / agg.qtyTotal) * 100 : 0);
+    if (weighting === 'heures' && agg.hBudget <= 0) {
+      model.issues.noRatio.push({ setupId: agg.setupId, name: agg.name });
+    }
+    model.counts.taches += agg.tasks.length;
+    model.ouvrages.push(agg);
+  }
+  model.counts.ouvrages = model.ouvrages.length;
+  for (const o of model.ouvrages) o.weight = model.hBudget > 0 ? (o.hBudget / model.hBudget) * 100 : 0;
+  model.ouvrages.sort((a, b) => b.hBudget - a.hBudget || b.qtyTotal - a.qtyTotal);
+  model.zones.sort((a, b) => a.pct - b.pct || b.hBudget - a.hBudget);
+  model.issues.stale.sort((a, b) => (b.days == null ? 1e9 : b.days) - (a.days == null ? 1e9 : a.days));
+  return model;
+}
+
+// ---------- Planning : avancement attendu au regard du calendrier ----------
+function computeAvancementPlanning(pctReel) {
+  const s = state.projectStart, e = state.projectEnd;
+  if (!s || !e) return null;
+  const d0 = new Date(s + 'T00:00:00'), d1 = new Date(e + 'T00:00:00');
+  const now = new Date(todayISO() + 'T00:00:00');
+  if (!isFinite(d0.getTime()) || !isFinite(d1.getTime()) || d1 <= d0) return null;
+  const day = 86400000;
+  const totalDays = Math.round((d1 - d0) / day);
+  const elapsed = Math.max(0, Math.min(totalDays, Math.round((now - d0) / day)));
+  const pctTemps = (elapsed / totalDays) * 100;
+  return {
+    start: s, end: e, totalDays, elapsed,
+    remainingDays: Math.max(0, Math.round((d1 - now) / day)),
+    overdue: now > d1,
+    pctTemps,
+    ecart: pctReel - pctTemps,
+  };
+}
+
+// ---------- Historique : la courbe se construit jour après jour ----------
+// Un point par jour ({ pct, hDone, hBudget }) : dictionnaire indexé par
+// date, donc fusionné par union à la synchro — aucun point ne se perd.
+let _avancementStampAt = 0;
+function stampAvancementHistory(force) {
+  if (!state.avancementHistory || typeof state.avancementHistory !== 'object') state.avancementHistory = {};
+  const now = Date.now();
+  if (!force && now - _avancementStampAt < 3000) return;
+  _avancementStampAt = now;
+  const m = computeAvancementModel('');
+  if (m.hBudget <= 0 && m.pct <= 0) return;
+  const key = todayISO();
+  const prev = state.avancementHistory[key];
+  const next = {
+    pct: Math.round(m.pct * 100) / 100,
+    hDone: Math.round(m.hDone * 10) / 10,
+    hBudget: Math.round(m.hBudget * 10) / 10,
+  };
+  if (prev && prev.pct === next.pct && prev.hBudget === next.hBudget) return;
+  state.avancementHistory[key] = next;
+  save();
+}
+// Vitesse d'avancement sur les 28 derniers jours et date de fin projetée.
+function computeAvancementVelocity() {
+  const h = state.avancementHistory || {};
+  const keys = Object.keys(h).sort();
+  if (keys.length < 2) return null;
+  const last = keys[keys.length - 1];
+  const lastD = new Date(last + 'T00:00:00');
+  let first = keys[0];
+  for (const k of keys) {
+    if ((lastD - new Date(k + 'T00:00:00')) / 86400000 <= 28) { first = k; break; }
+  }
+  const days = (lastD - new Date(first + 'T00:00:00')) / 86400000;
+  if (days <= 0) return null;
+  const perDay = (h[last].pct - h[first].pct) / days;
+  const out = { perDay, perWeek: perDay * 7, windowDays: Math.round(days), etaISO: null, etaDays: null };
+  if (perDay > 0.001 && h[last].pct < 99.95) {
+    const etaDays = Math.ceil((100 - h[last].pct) / perDay);
+    if (etaDays < 3650) {
+      out.etaDays = etaDays;
+      out.etaISO = new Date(lastD.getTime() + etaDays * 86400000).toISOString().slice(0, 10);
+    }
+  }
+  return out;
+}
+
+// ---------- Petits utilitaires d'affichage ----------
+// Teinte d'une cellule de matrice : couleur de la bande d'avancement,
+// opacité proportionnelle au %. Le texte reste crème et lisible partout.
+const DB_CELL_RGB = { 'is-done': '63,206,142', 'is-good': '242,105,30', 'is-going': '242,169,59' };
+function dbCellTint(pct) {
+  const rgb = DB_CELL_RGB[dbPctClass(pct)];
+  if (!rgb) return 'var(--surface-2)';
+  const a = 0.16 + 0.52 * Math.max(0, Math.min(100, pct)) / 100;
+  return 'rgba(' + rgb + ',' + a.toFixed(2) + ')';
+}
+function dbPctClass(pct) {
+  if (pct >= 99.95) return 'is-done';
+  if (pct >= 50) return 'is-good';
+  if (pct > 0) return 'is-going';
+  return 'is-idle';
+}
+function formatHours(n) {
+  if (!isFinite(n)) return '—';
+  const abs = Math.abs(n);
+  const dec = abs >= 100 ? 0 : (abs >= 10 ? 1 : 2);
+  return n.toLocaleString('fr-FR', { maximumFractionDigits: dec });
+}
+function dbEl(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text != null) el.textContent = text;
+  return el;
+}
+function dbCard(title, hint) {
+  const card = dbEl('section', 'db-card');
+  const head = dbEl('div', 'db-card-head');
+  head.appendChild(dbEl('h3', 'db-card-title', title));
+  if (hint) head.appendChild(dbEl('span', 'db-card-hint', hint));
+  card.appendChild(head);
+  return card;
+}
+function dbBar(pct, cls) {
+  const wrap = dbEl('div', 'db-bar' + (cls ? ' ' + cls : ''));
+  const fill = dbEl('div', 'db-bar-fill ' + dbPctClass(pct));
+  fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  wrap.appendChild(fill);
+  return wrap;
+}
+
+// ======================= RENDU DU TABLEAU DE BORD =======================
 function renderRecap() {
   const pickerEl = document.getElementById('recappicker');
   const contentEl = document.getElementById('recapcontent');
@@ -2691,166 +2931,491 @@ function renderRecap() {
 
   const buildings = getBuildings();
   if (buildings.length === 0) {
-    emptyEl.innerHTML = '<p>Aucun bâtiment.</p><p class="hint">Crée au moins une zone racine dans <strong>Données → Zones</strong>.</p>';
+    emptyEl.innerHTML = '<p>Aucun bâtiment.</p><p class="hint">Créez au moins une zone racine dans <strong>Données → Zones</strong>.</p>';
     emptyEl.classList.add('show');
     return;
   }
+  // Périmètre : tout le projet, ou un bâtiment. '' = tout le projet.
+  let scope = state.recapBuildingId || '';
+  if (scope && !buildings.some(b => b.id === scope)) scope = '';
+  if (scope !== state.recapBuildingId) { state.recapBuildingId = scope; save(); }
 
-  // Résolution du bâtiment sélectionné
-  let buildingId = state.recapBuildingId;
-  if (!buildings.some(b => b.id === buildingId)) buildingId = buildings[0].id;
-  if (buildingId !== state.recapBuildingId) {
-    state.recapBuildingId = buildingId;
-    save();
-  }
+  stampAvancementHistory();
+  const model = computeAvancementModel(scope);
+  const full = scope ? computeAvancementModel('') : model;
 
-  // Menu déroulant des bâtiments
-  const label = document.createElement('label');
-  label.className = 'recap-picker-label';
-  label.textContent = 'Bâtiment';
-  const select = document.createElement('select');
-  select.className = 'recap-picker-select';
-  select.setAttribute('aria-label', 'Bâtiment');
-  for (const b of buildings) {
-    const opt = document.createElement('option');
-    opt.value = b.id;
-    opt.textContent = b.name || '(zone sans nom)';
-    if (b.id === buildingId) opt.selected = true;
-    select.appendChild(opt);
-  }
-  select.addEventListener('change', () => {
-    state.recapBuildingId = select.value;
-    save();
-    renderRecap();
+  // ----- Barre de périmètre + export -----
+  const chips = dbEl('div', 'db-scope');
+  const mkChip = (id, label, pct) => {
+    const b = dbEl('button', 'db-scope-chip' + (scope === id ? ' is-on' : ''));
+    b.type = 'button';
+    b.appendChild(dbEl('span', 'db-scope-name', label));
+    if (pct != null) b.appendChild(dbEl('span', 'db-scope-pct', formatPct(Math.round(pct * 10) / 10) + ' %'));
+    b.addEventListener('click', () => { state.recapBuildingId = id; save(); renderRecap(); });
+    chips.appendChild(b);
+  };
+  mkChip('', 'Tout le projet', full.pct);
+  for (const b of full.buildings) mkChip(b.id, b.name, b.pct);
+  pickerEl.appendChild(chips);
+  const exportBtn = dbEl('button', 'db-export', 'Exporter la synthèse');
+  exportBtn.type = 'button';
+  exportBtn.addEventListener('click', () => {
+    const label = scope ? (buildings.find(b => b.id === scope) || {}).name : 'Tout le projet';
+    travauxShareOrCopy('Synthèse avancement — ' + label, buildAvancementSynthesisText(model, scope, label));
   });
-  pickerEl.append(label, select);
+  pickerEl.appendChild(exportBtn);
 
-  // Agrégation : pour chaque (ouvrage, tâche), somme pondérée par la quantité
-  // d'ouvrage de chaque sous-zone. agg[setupId][taskId] = { num, den, count, sum }
-  const descendants = getDescendantZones(buildingId);
-  const agg = {};
-  const setupOrder = [];
-  for (const zid of descendants) {
-    for (const o of getZoneOuvrages(zid)) {
-      const sid = o.setup.id;
-      if (!agg[sid]) { agg[sid] = { setup: o.setup, tasks: {} }; setupOrder.push(sid); }
-      const q = o.quantity || 0;
-      for (const task of o.setup.tasks) {
-        const t = agg[sid].tasks[task.id] || (agg[sid].tasks[task.id] = { task, num: 0, den: 0, sum: 0, count: 0 });
-        const p = getProgress(zid, task.id);
-        t.num += p * q;
-        t.den += q;
-        t.sum += p;
-        t.count += 1;
-      }
-    }
-  }
-
-  if (setupOrder.length === 0) {
-    emptyEl.innerHTML = '<p>Ce bâtiment ne contient aucun ouvrage.</p><p class="hint">Affecte un ouvrage à au moins une de ses zones dans <strong>Données → Zones</strong>.</p>';
+  if (model.counts.zones === 0) {
+    emptyEl.innerHTML = '<p>Aucun ouvrage affecté dans ce périmètre.</p><p class="hint">Affectez un ouvrage à au moins une zone dans <strong>Données → Zones</strong>.</p>';
     emptyEl.classList.add('show');
     return;
   }
 
-  // Construction du tableau
-  for (const sid of setupOrder) {
-    const group = agg[sid];
-    const section = document.createElement('div');
-    section.className = 'recap-section';
-    applyOuvrageColor(section, group.setup);
+  const planning = computeAvancementPlanning(model.pct);
+  const velocity = computeAvancementVelocity();
 
-    const header = document.createElement('div');
-    header.className = 'recap-section-header';
-    const name = document.createElement('span');
-    name.className = 'recap-section-name';
-    name.textContent = group.setup.name || '(ouvrage sans nom)';
-    header.appendChild(name);
-    // Stats physiques (réalisés / restants / totaux) — intégrées au header
-    // sous forme de chip % à droite + une ligne texte juste en dessous.
-    // Pondération : chaque tâche compte selon son ratio relatif (traçage
-    // à 0,17 sur 2 h/m² = 8,5 % du voile).
-    const phys = computeSetupPhysicalAggregate(group);
-    if (phys.total > 0) {
-      const pctPhys = Math.round((phys.realized / phys.total) * 1000) / 10;
-      const chip = document.createElement('span');
-      chip.className = 'recap-section-pct';
-      chip.textContent = `${formatPct(pctPhys)} %`;
-      header.appendChild(chip);
-    }
-    section.appendChild(header);
-    if (phys.total > 0) {
-      const summary = document.createElement('div');
-      summary.className = 'recap-section-summary';
-      summary.innerHTML =
-        `<strong>${formatQty(phys.realized)}</strong> / ${formatQty(phys.total)} ${escapeHtml(phys.unit)} réalisés` +
-        ` <span class="recap-section-sep">•</span> ` +
-        `<strong>${formatQty(phys.remaining)}</strong> ${escapeHtml(phys.unit)} restants`;
-      section.appendChild(summary);
-    }
-
-    const rows = document.createElement('ul');
-    rows.className = 'recap-rows';
-    // Précalcul des poids par tâche (mêmes règles que computeSetupPhysicalAggregate
-    // pour rester cohérent avec le total affiché en haut). On expose ensuite
-    // la contribution de chaque tâche en unité physique à côté de son %.
-    const physUnit = phys.unit;
-    const activeTasks = (group.setup.tasks || []).filter(t => !t.excluded);
-    const totalRatio = activeTasks.reduce((s, t) => s + (t.ratio || 0), 0);
-    const weightFor = (task) => {
-      if (task.excluded) return 0;
-      if (totalRatio > 0) return (task.ratio || 0) / totalRatio;
-      if (activeTasks.length > 0) return 1 / activeTasks.length;
-      return 0;
-    };
-    for (const task of group.setup.tasks) {
-      const t = group.tasks[task.id];
-      if (!t) continue;
-      // % pondéré par la quantité ; si toutes les quantités sont 0, repli sur moyenne simple
-      const pct = t.den > 0 ? t.num / t.den : (t.count > 0 ? t.sum / t.count : 0);
-      const rounded = Math.round(pct * 10) / 10;
-      const isDone = rounded >= 100;
-      // Contribution physique = weight × (Σ q × progress) / 100. Égale à
-      // weight × pct × den / 100 quand den > 0. Permet de cross-vérifier
-      // que Σ_tâche contribution = total réalisé en haut.
-      const w = weightFor(task);
-      const physContribution = (w * t.num) / 100;
-      const physMax = w * (phys.total || 0);
-      const li = document.createElement('li');
-      li.className = 'recap-row' + (isDone ? ' is-done' : '') + (task.excluded ? ' is-excluded' : '');
-      const main = document.createElement('div');
-      main.className = 'recap-task-main';
-      const nm = document.createElement('span');
-      nm.className = 'recap-task-name';
-      nm.textContent = task.name || '(tâche sans nom)';
-      main.appendChild(nm);
-      // Sous-ligne : contribution physique de la tâche au total réalisé
-      // de l'ouvrage. Σ_tâche contribution = total réalisé du bandeau du
-      // haut (cohérence vérifiable à l'œil).
-      if (task.excluded) {
-        const tag = document.createElement('span');
-        tag.className = 'recap-task-sub recap-task-sub-excluded';
-        tag.textContent = 'hors ratio — ne compte pas dans l\'avancement physique';
-        main.appendChild(tag);
-      } else if (phys.total > 0 && w > 0) {
-        // Format « réalisés / total » par tâche, comme dans le volet
-        // Saisie. Les deux valeurs sont PONDÉRÉES par le poids de la
-        // tâche (ratio / Σ ratios) : Σ des lignes = bandeau de l'ouvrage.
-        const sub = document.createElement('span');
-        sub.className = 'recap-task-sub';
-        sub.title = `Poids : ${formatPct(Math.round(w * 1000) / 10)} % de l'ouvrage`;
-        sub.textContent = `${formatQty(physContribution)} / ${formatQty(physMax)} ${phys.unit} réalisés`;
-        main.appendChild(sub);
-      }
-      li.append(main);
-      const pc = document.createElement('span');
-      pc.className = 'recap-task-pct';
-      pc.textContent = `${formatPct(rounded)} %`;
-      li.append(pc);
-      rows.appendChild(li);
-    }
-    section.appendChild(rows);
-    contentEl.appendChild(section);
+  contentEl.appendChild(buildDbKpis(model, planning, velocity));
+  contentEl.appendChild(buildDbCurve(model, planning));
+  const panels = [];
+  if (!scope && full.buildings.length > 1) panels.push(buildDbBuildings(model));
+  panels.push(buildDbMatrix(model, scope));
+  if (panels.length > 1) {
+    const grid = dbEl('div', 'db-grid');
+    for (const p of panels) grid.appendChild(p);
+    contentEl.appendChild(grid);
+  } else {
+    contentEl.appendChild(panels[0]);
   }
+  contentEl.appendChild(buildDbOuvrages(model));
+  contentEl.appendChild(buildDbFocus(model, planning));
+}
+
+// ----- 1. Bandeau d'indicateurs -----
+function buildDbKpis(model, planning, velocity) {
+  const row = dbEl('div', 'db-kpis');
+
+  // Avancement global
+  const k1 = dbEl('div', 'db-kpi db-kpi-main');
+  k1.appendChild(dbEl('div', 'db-kpi-label', 'Avancement global'));
+  const v1 = dbEl('div', 'db-kpi-value');
+  v1.appendChild(dbEl('span', 'db-kpi-num', formatPct(Math.round(model.pct * 10) / 10)));
+  v1.appendChild(dbEl('span', 'db-kpi-unit', '%'));
+  k1.appendChild(v1);
+  k1.appendChild(dbBar(model.pct, 'db-bar-lg'));
+  const wLabel = model.weighting === 'heures' ? 'pondéré par les heures budgétées'
+    : (model.weighting === 'quantites' ? 'pondéré par les quantités (aucun ratio saisi)'
+      : 'moyenne des tâches (ni ratio ni quantité saisis)');
+  k1.appendChild(dbEl('div', 'db-kpi-sub', wLabel));
+  row.appendChild(k1);
+
+  // Écart au planning
+  const k2 = dbEl('div', 'db-kpi');
+  k2.appendChild(dbEl('div', 'db-kpi-label', 'Écart au planning'));
+  if (planning) {
+    const e = planning.ecart;
+    const v = dbEl('div', 'db-kpi-value ' + (e >= 0 ? 'is-pos' : 'is-neg'));
+    v.appendChild(dbEl('span', 'db-kpi-num', (e >= 0 ? '+' : '−') + formatPct(Math.abs(Math.round(e * 10) / 10))));
+    v.appendChild(dbEl('span', 'db-kpi-unit', 'pts'));
+    k2.appendChild(v);
+    k2.appendChild(dbEl('div', 'db-kpi-tag ' + (e >= 0 ? 'is-pos' : 'is-neg'),
+      e >= 0 ? 'En avance sur le calendrier' : 'En retard sur le calendrier'));
+    k2.appendChild(dbEl('div', 'db-kpi-sub',
+      'Attendu au ' + fmtFR(todayISO()) + ' : ' + formatPct(Math.round(planning.pctTemps * 10) / 10) + ' %'));
+  } else {
+    k2.appendChild(dbEl('div', 'db-kpi-value db-kpi-void', '—'));
+    k2.appendChild(dbEl('div', 'db-kpi-sub', 'Renseignez les dates du chantier dans Données → Chantier.'));
+  }
+  row.appendChild(k2);
+
+  // Charge de travail
+  const k3 = dbEl('div', 'db-kpi');
+  k3.appendChild(dbEl('div', 'db-kpi-label', model.weighting === 'heures' ? 'Heures de main-d\'œuvre' : 'Charge pondérée'));
+  const v3 = dbEl('div', 'db-kpi-value');
+  v3.appendChild(dbEl('span', 'db-kpi-num', formatHours(model.hDone)));
+  v3.appendChild(dbEl('span', 'db-kpi-unit', model.weighting === 'heures' ? 'h acquises' : 'pts acquis'));
+  k3.appendChild(v3);
+  k3.appendChild(dbBar(model.pct));
+  k3.appendChild(dbEl('div', 'db-kpi-sub',
+    'sur ' + formatHours(model.hBudget) + (model.weighting === 'heures' ? ' h budgétées · reste ' : ' · reste ')
+    + formatHours(Math.max(0, model.hBudget - model.hDone)) + (model.weighting === 'heures' ? ' h' : '')));
+  row.appendChild(k3);
+
+  // Calendrier / projection
+  const k4 = dbEl('div', 'db-kpi');
+  k4.appendChild(dbEl('div', 'db-kpi-label', 'Calendrier'));
+  if (planning) {
+    const v = dbEl('div', 'db-kpi-value');
+    v.appendChild(dbEl('span', 'db-kpi-num', String(planning.remainingDays)));
+    v.appendChild(dbEl('span', 'db-kpi-unit', 'jours restants'));
+    k4.appendChild(v);
+    k4.appendChild(dbBar(planning.pctTemps, 'db-bar-time'));
+    k4.appendChild(dbEl('div', 'db-kpi-sub',
+      'Fin prévue le ' + fmtFR(planning.end) + ' · ' + planning.elapsed + '/' + planning.totalDays + ' j écoulés'));
+  } else {
+    k4.appendChild(dbEl('div', 'db-kpi-value db-kpi-void', '—'));
+    k4.appendChild(dbEl('div', 'db-kpi-sub', 'Dates de chantier non renseignées.'));
+  }
+  if (velocity) {
+    const rate = dbEl('div', 'db-kpi-sub db-kpi-rate',
+      'Rythme : ' + formatPct(Math.round(velocity.perWeek * 10) / 10) + ' pts/semaine'
+      + (velocity.etaISO ? ' · fin projetée le ' + fmtFR(velocity.etaISO) : ''));
+    k4.appendChild(rate);
+  }
+  row.appendChild(k4);
+  return row;
+}
+
+// ----- 2. Courbe d'avancement (réel vs théorique) -----
+function buildDbCurve(model, planning) {
+  const card = dbCard('Courbe d\'avancement', 'réel mesuré chaque jour, comparé à la trajectoire théorique');
+  const hist = state.avancementHistory || {};
+  const keys = Object.keys(hist).sort();
+  // Le viewBox suit la largeur d'écran : sans cela, l'étirement d'un
+  // canevas 760×220 sur un téléphone déforme les libellés d'axes.
+  const narrow = (window.innerWidth || 1024) < 700;
+  const W = narrow ? 400 : 760, H = narrow ? 240 : 220;
+  const PAD_L = 38, PAD_R = 14, PAD_T = 12, PAD_B = 26;
+
+  if (!keys.length) {
+    card.appendChild(dbEl('p', 'db-empty',
+      'La courbe se construit automatiquement : un point est enregistré chaque jour où l\'avancement évolue.'));
+    return card;
+  }
+  // Étendue temporelle : le planning s'il existe, sinon l'historique.
+  const day = 86400000;
+  const firstHist = new Date(keys[0] + 'T00:00:00').getTime();
+  const lastHist = new Date(keys[keys.length - 1] + 'T00:00:00').getTime();
+  const t0 = planning ? Math.min(firstHist, new Date(planning.start + 'T00:00:00').getTime()) : firstHist;
+  const t1 = planning ? Math.max(lastHist, new Date(planning.end + 'T00:00:00').getTime()) : Math.max(lastHist, t0 + day);
+  const span = Math.max(day, t1 - t0);
+  const x = (ms) => PAD_L + ((ms - t0) / span) * (W - PAD_L - PAD_R);
+  const y = (pct) => PAD_T + (1 - Math.max(0, Math.min(100, pct)) / 100) * (H - PAD_T - PAD_B);
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('class', 'db-curve');
+  const mk = (tag, attrs) => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const k in attrs) el.setAttribute(k, attrs[k]);
+    return el;
+  };
+  // Grille horizontale + graduations
+  for (const p of [0, 25, 50, 75, 100]) {
+    svg.appendChild(mk('line', { x1: PAD_L, x2: W - PAD_R, y1: y(p), y2: y(p), class: 'db-curve-grid' }));
+    const lab = mk('text', { x: PAD_L - 6, y: y(p) + 4, class: 'db-curve-axis', 'text-anchor': 'end' });
+    lab.textContent = p + '%';
+    svg.appendChild(lab);
+  }
+  // Trajectoire théorique (linéaire de 0 à 100 sur la durée du chantier)
+  if (planning) {
+    const ps = new Date(planning.start + 'T00:00:00').getTime();
+    const pe = new Date(planning.end + 'T00:00:00').getTime();
+    svg.appendChild(mk('line', { x1: x(ps), y1: y(0), x2: x(pe), y2: y(100), class: 'db-curve-theory' }));
+  }
+  // Courbe réelle
+  const pts = keys.map(k => ({ x: x(new Date(k + 'T00:00:00').getTime()), y: y(hist[k].pct), k, pct: hist[k].pct }));
+  if (pts.length > 1) {
+    const d = pts.map((p, i) => (i ? 'L' : 'M') + p.x.toFixed(1) + ' ' + p.y.toFixed(1)).join(' ');
+    const area = d + ` L${pts[pts.length - 1].x.toFixed(1)} ${y(0)} L${pts[0].x.toFixed(1)} ${y(0)} Z`;
+    svg.appendChild(mk('path', { d: area, class: 'db-curve-area' }));
+    svg.appendChild(mk('path', { d, class: 'db-curve-real' }));
+  }
+  const lastPt = pts[pts.length - 1];
+  svg.appendChild(mk('circle', { cx: lastPt.x, cy: lastPt.y, r: 4.5, class: 'db-curve-dot' }));
+  // Aujourd'hui
+  const todayX = x(new Date(todayISO() + 'T00:00:00').getTime());
+  if (todayX >= PAD_L && todayX <= W - PAD_R) {
+    svg.appendChild(mk('line', { x1: todayX, y1: PAD_T, x2: todayX, y2: H - PAD_B, class: 'db-curve-today' }));
+  }
+  // Dates aux extrémités
+  const lab0 = mk('text', { x: PAD_L, y: H - 8, class: 'db-curve-axis' });
+  lab0.textContent = fmtFR(new Date(t0).toISOString().slice(0, 10));
+  svg.appendChild(lab0);
+  const lab1 = mk('text', { x: W - PAD_R, y: H - 8, class: 'db-curve-axis', 'text-anchor': 'end' });
+  lab1.textContent = fmtFR(new Date(t1).toISOString().slice(0, 10));
+  svg.appendChild(lab1);
+
+  const box = dbEl('div', 'db-curve-wrap');
+  box.appendChild(svg);
+  card.appendChild(box);
+
+  const legend = dbEl('div', 'db-legend');
+  const mkLeg = (cls, text) => {
+    const l = dbEl('span', 'db-legend-item');
+    l.appendChild(dbEl('span', 'db-legend-swatch ' + cls));
+    l.appendChild(dbEl('span', null, text));
+    legend.appendChild(l);
+  };
+  mkLeg('is-real', 'Avancement réel');
+  if (planning) mkLeg('is-theory', 'Trajectoire théorique');
+  mkLeg('is-today', 'Aujourd\'hui');
+  card.appendChild(legend);
+  if (keys.length < 2) {
+    card.appendChild(dbEl('p', 'db-note',
+      'Un seul point pour l\'instant : la courbe se remplira au fil des saisies d\'avancement.'));
+  }
+  return card;
+}
+
+// ----- 3. Avancement par bâtiment -----
+function buildDbBuildings(model) {
+  const card = dbCard('Par bâtiment', 'écart à la moyenne du projet');
+  const list = dbEl('div', 'db-rows');
+  const sorted = model.buildings.slice().sort((a, b) => b.pct - a.pct);
+  for (const b of sorted) {
+    const row = dbEl('div', 'db-row');
+    const head = dbEl('div', 'db-row-head');
+    head.appendChild(dbEl('span', 'db-row-name', b.name));
+    head.appendChild(dbEl('span', 'db-row-pct', formatPct(Math.round(b.pct * 10) / 10) + ' %'));
+    row.appendChild(head);
+    row.appendChild(dbBar(b.pct));
+    const delta = b.pct - model.pct;
+    const sub = dbEl('div', 'db-row-sub');
+    sub.appendChild(dbEl('span', null, formatHours(b.hDone) + ' / ' + formatHours(b.hBudget)
+      + (model.weighting === 'heures' ? ' h' : '') + ' · ' + b.zones + ' zone' + (b.zones > 1 ? 's' : '')));
+    if (Math.abs(delta) >= 0.05) {
+      sub.appendChild(dbEl('span', 'db-delta ' + (delta >= 0 ? 'is-pos' : 'is-neg'),
+        (delta >= 0 ? '+' : '−') + formatPct(Math.abs(Math.round(delta * 10) / 10)) + ' pts'));
+    }
+    row.appendChild(sub);
+    list.appendChild(row);
+  }
+  card.appendChild(list);
+  return card;
+}
+
+// ----- 4. Matrice bâtiment × ouvrage -----
+function buildDbMatrix(model, scope) {
+  const card = dbCard('Matrice ' + (scope ? 'zones' : 'bâtiments') + ' × ouvrages', 'avancement croisé, en un coup d\'œil');
+  const rows = scope
+    ? model.zones.slice().sort((a, b) => a.label.localeCompare(b.label, 'fr')).map(z => ({ id: z.id, name: z.label.split(' › ').slice(1).join(' › ') || z.label }))
+    : model.buildings.map(b => ({ id: b.id, name: b.name }));
+  const cols = model.ouvrages.slice(0, 12);
+  if (!rows.length || !cols.length) {
+    card.appendChild(dbEl('p', 'db-empty', 'Pas assez de données pour croiser les axes.'));
+    return card;
+  }
+  // En mode « un bâtiment », on recalcule les cellules à la maille zone.
+  const cellFor = (rowId, setupId) => {
+    if (!scope) {
+      const c = (model.matrix[rowId] || {})[setupId];
+      return c && c.h > 0 ? (c.d / c.h) * 100 : (c ? null : null);
+    }
+    const ouv = getZoneOuvrages(rowId).find(o => o.setup.id === setupId);
+    if (!ouv) return null;
+    return getOuvrageRawProgress(rowId, ouv.setup);
+  };
+  const wrap = dbEl('div', 'db-matrix-wrap');
+  const table = dbEl('table', 'db-matrix');
+  const thead = dbEl('thead');
+  const trh = dbEl('tr');
+  trh.appendChild(dbEl('th', 'db-matrix-corner', scope ? 'Zone' : 'Bâtiment'));
+  for (const c of cols) {
+    const th = dbEl('th', 'db-matrix-col');
+    th.appendChild(dbEl('span', null, c.name));
+    th.title = c.name + ' — ' + formatPct(Math.round(c.weight * 10) / 10) + ' % du projet';
+    trh.appendChild(th);
+  }
+  thead.appendChild(trh);
+  table.appendChild(thead);
+  const tbody = dbEl('tbody');
+  for (const r of rows) {
+    const tr = dbEl('tr');
+    tr.appendChild(dbEl('th', 'db-matrix-row', r.name));
+    for (const c of cols) {
+      const v = cellFor(r.id, c.setupId);
+      const td = dbEl('td', 'db-matrix-cell');
+      if (v == null) {
+        td.classList.add('is-na');
+        td.textContent = '·';
+        td.title = r.name + ' — ' + c.name + ' : ouvrage non affecté';
+      } else {
+        // Teinte pleine dont l'opacité suit l'avancement : la valeur reste
+        // lisible à 5 % comme à 100 %, contrairement à un remplissage partiel.
+        td.classList.add(dbPctClass(v));
+        td.textContent = Math.round(v) + '';
+        td.title = r.name + ' — ' + c.name + ' : ' + formatPct(Math.round(v * 10) / 10) + ' %';
+        td.style.background = dbCellTint(v);
+      }
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  card.appendChild(wrap);
+  if (model.ouvrages.length > cols.length) {
+    card.appendChild(dbEl('p', 'db-note', 'Les ' + cols.length + ' ouvrages les plus lourds sont affichés (sur ' + model.ouvrages.length + ').'));
+  }
+  return card;
+}
+
+// ----- 5. Détail par ouvrage et par tâche -----
+function buildDbOuvrages(model) {
+  const card = dbCard('Détail par ouvrage', 'trié par poids dans le projet — dépliez pour voir les tâches');
+  const list = dbEl('div', 'db-ouvrages');
+  for (const o of model.ouvrages) {
+    const box = dbEl('details', 'db-ouvrage');
+    const sum = dbEl('summary', 'db-ouvrage-head');
+    const idBox = dbEl('div', 'db-ouvrage-id');
+    idBox.appendChild(dbEl('span', 'db-ouvrage-name', o.name));
+    idBox.appendChild(dbEl('span', 'db-ouvrage-meta',
+      formatQty(o.qtyDone) + ' / ' + formatQty(o.qtyTotal) + ' ' + o.unit + ' réalisés'
+      + ' · reste ' + formatQty(o.qtyRemaining) + ' ' + o.unit));
+    sum.appendChild(idBox);
+    const stats = dbEl('div', 'db-ouvrage-stats');
+    const w = dbEl('span', 'db-ouvrage-weight', formatPct(Math.round(o.weight * 10) / 10) + ' % du projet');
+    w.title = 'Poids de cet ouvrage dans l\'avancement global';
+    stats.appendChild(w);
+    stats.appendChild(dbEl('span', 'db-ouvrage-pct ' + dbPctClass(o.pct), formatPct(Math.round(o.pct * 10) / 10) + ' %'));
+    sum.appendChild(stats);
+    box.appendChild(sum);
+    box.appendChild(dbBar(o.pct));
+
+    const tbl = dbEl('table', 'db-tasks');
+    const thead = dbEl('thead');
+    const trh = dbEl('tr');
+    for (const [label, cls] of [['Tâche', ''], ['Poids', 'num'], ['Réalisé', 'num'], ['Reste', 'num'], ['Heures', 'num'], ['%', 'num']]) {
+      trh.appendChild(dbEl('th', cls, label));
+    }
+    thead.appendChild(trh);
+    tbl.appendChild(thead);
+    const tbody = dbEl('tbody');
+    for (const t of o.tasks) {
+      const tr = dbEl('tr', t.excluded ? 'is-excluded' : (t.pct >= 99.95 ? 'is-done' : ''));
+      const name = dbEl('td', 'db-task-name');
+      name.appendChild(dbEl('span', null, t.name));
+      if (t.excluded) name.appendChild(dbEl('span', 'db-task-tag', 'hors ratio'));
+      tr.appendChild(name);
+      tr.appendChild(dbEl('td', 'num', t.excluded ? '—' : formatPct(Math.round(t.share * 1000) / 10) + ' %'));
+      tr.appendChild(dbEl('td', 'num', t.excluded ? '—' : formatQty(t.qtyDone) + ' ' + o.unit));
+      tr.appendChild(dbEl('td', 'num', t.excluded ? '—' : formatQty(Math.max(0, t.qtyMax - t.qtyDone)) + ' ' + o.unit));
+      tr.appendChild(dbEl('td', 'num', t.excluded ? '—' : formatHours(t.hDone) + ' / ' + formatHours(t.hBudget)));
+      const pc = dbEl('td', 'num db-task-pct ' + dbPctClass(t.pct), formatPct(Math.round(t.pct * 10) / 10) + ' %');
+      tr.appendChild(pc);
+      tbody.appendChild(tr);
+    }
+    tbl.appendChild(tbody);
+    const tw = dbEl('div', 'db-tasks-wrap');
+    tw.appendChild(tbl);
+    box.appendChild(tw);
+    list.appendChild(box);
+  }
+  card.appendChild(list);
+  return card;
+}
+
+// ----- 6. Points d'attention -----
+function buildDbFocus(model, planning) {
+  const card = dbCard('Points d\'attention', 'ce qui mérite une décision');
+  const cols = dbEl('div', 'db-focus');
+
+  // a) Zones les moins avancées à fort volume
+  const heavy = model.zones
+    .filter(z => z.hBudget > 0 && z.pct < 99.95)
+    .sort((a, b) => (b.hBudget * (100 - b.pct)) - (a.hBudget * (100 - a.pct)))
+    .slice(0, 6);
+  const c1 = dbEl('div', 'db-focus-col');
+  c1.appendChild(dbEl('div', 'db-focus-title', 'Reste à faire le plus lourd'));
+  if (!heavy.length) c1.appendChild(dbEl('p', 'db-empty', 'Tout est terminé dans ce périmètre.'));
+  for (const z of heavy) {
+    const it = dbEl('div', 'db-focus-item');
+    it.appendChild(dbEl('span', 'db-focus-name', z.label));
+    it.appendChild(dbEl('span', 'db-focus-val',
+      formatHours(z.hBudget - z.hDone) + (model.weighting === 'heures' ? ' h' : '') + ' · ' + formatPct(Math.round(z.pct)) + ' %'));
+    c1.appendChild(it);
+  }
+  cols.appendChild(c1);
+
+  // b) Zones sans mise à jour récente
+  const c2 = dbEl('div', 'db-focus-col');
+  c2.appendChild(dbEl('div', 'db-focus-title', 'Sans mise à jour depuis ' + AVANCEMENT_STALE_DAYS + ' jours'));
+  const stale = model.issues.stale.slice(0, 6);
+  if (!stale.length) c2.appendChild(dbEl('p', 'db-empty', 'Toutes les zones en cours ont été mises à jour récemment.'));
+  for (const s of stale) {
+    const it = dbEl('div', 'db-focus-item');
+    it.appendChild(dbEl('span', 'db-focus-name', s.label));
+    it.appendChild(dbEl('span', 'db-focus-val is-warn',
+      (s.days == null ? 'jamais saisie' : s.days + ' j') + ' · ' + formatPct(Math.round(s.pct)) + ' %'));
+    c2.appendChild(it);
+  }
+  cols.appendChild(c2);
+
+  // c) Qualité des données — ce qui fausse le chiffre global
+  const c3 = dbEl('div', 'db-focus-col');
+  c3.appendChild(dbEl('div', 'db-focus-title', 'Qualité des données'));
+  const notes = [];
+  if (model.weighting !== 'heures') {
+    notes.push(['is-warn', 'Aucun ratio de production saisi : l\'avancement est pondéré par ' +
+      (model.weighting === 'quantites' ? 'les quantités' : 'le nombre de tâches') + '.']);
+  }
+  const noRatio = [...new Set(model.issues.noRatio.map(i => i.name))];
+  if (noRatio.length) notes.push(['is-warn', noRatio.length + ' ouvrage(s) sans ratio ne pèsent pas dans le global : ' + noRatio.slice(0, 4).join(', ')]);
+  const noQty = [...new Set(model.issues.noQty.map(i => i.setupName))];
+  if (noQty.length) notes.push(['is-warn', model.issues.noQty.length + ' affectation(s) sans quantité (' + noQty.slice(0, 4).join(', ') + ').']);
+  if (!planning) notes.push(['is-warn', 'Dates de chantier non renseignées : ni écart au planning, ni trajectoire théorique.']);
+  if (!notes.length) notes.push(['is-ok', 'Ratios, quantités et dates sont renseignés : le chiffre global est pleinement pondéré.']);
+  for (const [cls, txt] of notes) {
+    const it = dbEl('div', 'db-focus-note ' + cls);
+    it.textContent = txt;
+    c3.appendChild(it);
+  }
+  const counts = dbEl('div', 'db-focus-counts');
+  counts.textContent = model.counts.zones + ' zones porteuses · ' + model.counts.ouvrages + ' ouvrages · '
+    + model.counts.taches + ' tâches · ' + model.counts.zonesDone + ' zones terminées · '
+    + model.counts.zonesToStart + ' non commencées';
+  c3.appendChild(counts);
+  cols.appendChild(c3);
+
+  card.appendChild(cols);
+  return card;
+}
+
+// ----- Export texte pour la réunion -----
+function buildAvancementSynthesisText(model, scope, label) {
+  const planning = computeAvancementPlanning(model.pct);
+  const velocity = computeAvancementVelocity();
+  const L = [];
+  L.push('SYNTHÈSE AVANCEMENT — ' + (label || 'Tout le projet'));
+  L.push('Au ' + fmtFR(todayISO()));
+  L.push('');
+  L.push('Avancement global : ' + formatPct(Math.round(model.pct * 10) / 10) + ' %'
+    + (model.weighting === 'heures' ? ' (pondéré par les heures budgétées)' : ''));
+  const unit = model.weighting === 'heures' ? ' h' : '';
+  L.push('Charge : ' + formatHours(model.hDone) + ' / ' + formatHours(model.hBudget) + unit
+    + ' — reste ' + formatHours(Math.max(0, model.hBudget - model.hDone)) + unit);
+  if (planning) {
+    L.push('Planning : ' + formatPct(Math.round(planning.pctTemps * 10) / 10) + ' % du temps écoulé, '
+      + planning.remainingDays + ' j restants (fin le ' + fmtFR(planning.end) + ')');
+    L.push('Écart : ' + (planning.ecart >= 0 ? '+' : '−') + formatPct(Math.abs(Math.round(planning.ecart * 10) / 10))
+      + ' pts — ' + (planning.ecart >= 0 ? 'en avance' : 'en retard'));
+  }
+  if (velocity) {
+    L.push('Rythme : ' + formatPct(Math.round(velocity.perWeek * 10) / 10) + ' pts/semaine'
+      + (velocity.etaISO ? ' — fin projetée le ' + fmtFR(velocity.etaISO) : ''));
+  }
+  if (!scope && model.buildings.length > 1) {
+    L.push('');
+    L.push('PAR BÂTIMENT');
+    for (const b of model.buildings.slice().sort((a, b2) => b2.pct - a.pct)) {
+      L.push('  ' + b.name + ' : ' + formatPct(Math.round(b.pct * 10) / 10) + ' % ('
+        + formatHours(b.hDone) + ' / ' + formatHours(b.hBudget) + ')');
+    }
+  }
+  L.push('');
+  L.push('PAR OUVRAGE');
+  for (const o of model.ouvrages) {
+    L.push('  ' + o.name + ' : ' + formatPct(Math.round(o.pct * 10) / 10) + ' % — '
+      + formatQty(o.qtyDone) + ' / ' + formatQty(o.qtyTotal) + ' ' + o.unit
+      + ' (poids ' + formatPct(Math.round(o.weight * 10) / 10) + ' %)');
+  }
+  const stale = model.issues.stale.slice(0, 5);
+  if (stale.length) {
+    L.push('');
+    L.push('SANS MISE À JOUR DEPUIS ' + AVANCEMENT_STALE_DAYS + ' JOURS');
+    for (const s of stale) L.push('  ' + s.label + ' — ' + (s.days == null ? 'jamais saisie' : s.days + ' j') + ' (' + formatPct(Math.round(s.pct)) + ' %)');
+  }
+  return L.join('\n');
 }
 
 // ---------- Administratif → Sécurité (documents par entreprise) ----------
@@ -14297,7 +14862,7 @@ async function doSyncPull(initial = false, opts = {}) {
 // retard (il « réapparaît » — bénin et rare, contre une perte de données
 // catastrophique).
 const SYNC_UNION_DICT_KEYS = new Set([
-  'presences', 'weather', 'taskProgress', 'zoneUpdated',
+  'presences', 'weather', 'taskProgress', 'zoneUpdated', 'avancementHistory',
   'adminDocs', 'workerDocs', 'heuresData', 'crEntries', 'stEntries',
   'travauxCells'
 ]);
