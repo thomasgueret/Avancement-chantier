@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.51';
+const APP_VERSION = '1.52';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -8275,13 +8275,16 @@ function travauxArticleHaystack(p, chapName, lotName, num) {
 
 // ======================= MUTATIONS (vue Carnet) =======================
 function addTravauxOuvrage(lotId) {
-  getTravauxOuvrages().push({ id: 'to_' + uid(), name: '', lotId: lotId || '' });
+  const o = { id: 'to_' + uid(), name: '', lotId: lotId || '' };
+  getTravauxOuvrages().push(o);
   save();
-  renderTravaux();
+  travauxCarnetSel = { type: 'chapitre', id: o.id };
+  travauxCarnetEditing = true;
+  travauxCarnetCollapsed.delete('lot:' + (lotId || TRAVAUX_HORS_LOT));
+  renderTravauxCarnet();
   requestAnimationFrame(() => {
-    const inputs = document.querySelectorAll('.travaux-ouvrage-name');
-    const last = inputs[inputs.length - 1];
-    if (last) { last.focus(); last.scrollIntoView({ block: 'center' }); }
+    const el = document.getElementById('carnet-field-chap');
+    if (el) el.focus();
   });
 }
 function renameTravauxOuvrage(id, name) {
@@ -8295,31 +8298,35 @@ function setTravauxOuvrageLot(id, lotId) {
   if (!o) return;
   o.lotId = lotId || '';
   save();
-  renderTravaux();
+  renderTravauxCarnet();
 }
 function deleteTravauxOuvrage(id) {
   const o = getTravauxOuvrage(id);
   if (!o) return;
   const nb = getPrescriptionsForOuvrage(id).length;
-  if (!confirm(`Supprimer le chapitre « ${o.name || 'sans nom'} »${nb ? ` et ses ${nb} article(s)` : ''} ?`)) return;
+  if (!confirm(`Supprimer le chapitre \u00ab ${o.name || 'sans nom'} \u00bb${nb ? ` et ses ${nb} article(s)` : ''} ?`)) return;
   state.travauxOuvrages = getTravauxOuvrages().filter(x => x.id !== id);
   state.travauxPrescriptions = getTravauxPrescriptions().filter(p => p.ouvrageId !== id);
   save();
-  renderTravaux();
+  travauxCarnetSel = null;
+  travauxCarnetEditing = false;
+  renderTravauxCarnet();
 }
 
 function addTravauxPrescription(ouvrageId) {
-  getTravauxPrescriptions().push({
+  const p = {
     id: 'tp_' + uid(), ouvrageId, title: '', text: '', remplacement: false,
     specs: [], everywhere: false, zones: {}, localisation: ''
-  });
+  };
+  getTravauxPrescriptions().push(p);
   save();
-  renderTravaux();
+  travauxCarnetCollapsed.delete('chap:' + ouvrageId);
+  travauxCarnetSel = { type: 'article', id: p.id };
+  travauxCarnetEditing = true;
+  renderTravauxCarnet();
   requestAnimationFrame(() => {
-    const cards = document.querySelectorAll(`.travaux-presc[data-ouvrage-id="${cssEscape(ouvrageId)}"]`);
-    const last = cards[cards.length - 1];
-    const el = last && last.querySelector('.travaux-presc-title');
-    if (el) { el.focus(); el.scrollIntoView({ block: 'center' }); }
+    const el = document.getElementById('carnet-field-title');
+    if (el) el.focus();
   });
 }
 function setTravauxPrescriptionField(id, field, value) {
@@ -8328,33 +8335,15 @@ function setTravauxPrescriptionField(id, field, value) {
   p[field] = value;
   save(); // frappe en cours : pas de re-render
 }
-function toggleTravauxPrescriptionRempl(id, val) {
-  const p = getTravauxPrescription(id);
-  if (!p) return;
-  p.remplacement = !!val;
-  save();
-  renderTravaux();
-}
 function deleteTravauxPrescription(id) {
   const p = getTravauxPrescription(id);
   if (!p) return;
   if (!confirm('Supprimer cet article ?')) return;
   state.travauxPrescriptions = getTravauxPrescriptions().filter(x => x.id !== id);
   save();
-  renderTravaux();
-}
-// Détails techniques (couple libellé/valeur : « Couleur » / « RAL 9007 »)
-function addTravauxSpec(prescId) {
-  const p = getTravauxPrescription(prescId);
-  if (!p) return;
-  if (!Array.isArray(p.specs)) p.specs = [];
-  p.specs.push({ id: 'sp_' + uid(), label: '', value: '' });
-  save();
-  renderTravaux();
-  requestAnimationFrame(() => {
-    const el = document.querySelector(`.travaux-presc[data-presc-id="${cssEscape(prescId)}"] .travaux-spec-row:last-of-type .travaux-spec-label`);
-    if (el) el.focus();
-  });
+  travauxCarnetSel = null;
+  travauxCarnetEditing = false;
+  renderTravauxCarnet();
 }
 function setTravauxSpecField(prescId, specId, field, value) {
   const p = getTravauxPrescription(prescId);
@@ -8363,35 +8352,6 @@ function setTravauxSpecField(prescId, specId, field, value) {
   if (!s) return;
   s[field] = value;
   save(); // frappe en cours
-}
-function deleteTravauxSpec(prescId, specId) {
-  const p = getTravauxPrescription(prescId);
-  if (!p || !Array.isArray(p.specs)) return;
-  p.specs = p.specs.filter(x => x.id !== specId);
-  save();
-  renderTravaux();
-}
-// Lieux concernés
-function setTravauxPrescriptionEverywhere(id, val) {
-  const p = getTravauxPrescription(id);
-  if (!p) return;
-  p.everywhere = !!val;
-  save();
-  renderTravaux();
-}
-function toggleTravauxPrescriptionZone(id, zoneId, checked) {
-  const p = getTravauxPrescription(id);
-  if (!p) return;
-  if (!p.zones || typeof p.zones !== 'object') p.zones = {};
-  if (checked) p.zones[zoneId] = true;
-  else delete p.zones[zoneId];
-  save();
-  renderTravauxVisite();
-  renderTravauxCCTP();
-  // La grille de zones se met à jour seule (état de la case) : pas de
-  // re-render du Carnet, qui ferait perdre la position de défilement.
-  const lbl = document.querySelector(`.travaux-presc[data-presc-id="${cssEscape(id)}"] .travaux-zone-chk[data-zone-id="${cssEscape(zoneId)}"]`);
-  if (lbl) lbl.classList.toggle('is-on', checked);
 }
 
 // ======================= RENDU =======================
@@ -8875,284 +8835,889 @@ function buildTravauxVisiteLine(a, viaSub) {
   return line;
 }
 
-// ---------------------- Vue Carnet (paramétrage) ----------------------
+// ---------------------- Vue Carnet (éditeur de CCTP) ----------------------
+// Interface maître / détail : à gauche la structure complète du CCTP
+// (lots → chapitres → articles), à droite l'éditeur du SEUL élément
+// sélectionné. On passe ainsi d'un mur de formulaires empilés à un écran
+// où l'on ne voit que ce que l'on modifie.
+// Sur mobile les deux panneaux se succèdent (structure ⇄ éditeur).
+//
+// Les états ci-dessous sont des états d'écran : ni persistés, ni
+// synchronisés — chaque appareil garde sa propre navigation.
+let travauxCarnetSel = null;            // { type: 'chapitre' | 'article', id }
+let travauxCarnetFilter = '';           // filtre de la structure
+let travauxCarnetCollapsed = new Set(); // lots / chapitres repliés
+let travauxCarnetEditing = false;       // mobile : éditeur au premier plan
+let travauxZonesOpen = false;           // panneau « zones » déplié
+let travauxZoneFilter = '';             // filtre de l'arbre des zones
+
+const SVG_SEARCH = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5Zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14Z"/></svg>';
+const SVG_TRASH = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z"/></svg>';
+const SVG_COPY = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1Zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2Zm0 16H8V7h11v14Z"/></svg>';
+
+// État de complétude d'un article — signalé par une pastille dans la
+// structure, pour repérer d'un coup d'œil ce qui reste à rédiger.
+function travauxArticleStatus(p) {
+  if (!(p.title || '').trim() && !(p.text || '').trim()) return 'vide';
+  if (!p.everywhere && !Object.keys(p.zones || {}).length && !(p.localisation || '').trim()) return 'loca';
+  return 'ok';
+}
+const TRAVAUX_STATUS_LABEL = {
+  vide: 'Article encore vide',
+  loca: 'Localisation non renseignée',
+  ok: 'Article complet',
+};
+
+// ======================= Réorganisation =======================
+// L'ordre des tableaux fixe la numérotation du CCTP : déplacer un élément,
+// c'est le déplacer réellement dans state.travauxOuvrages / …Prescriptions.
+function travauxSiblingsOfOuvrage(o) {
+  return getTravauxOuvrages().filter(x => (x.lotId || '') === (o.lotId || ''));
+}
+function moveTravauxOuvrageStep(id, dir) {
+  const arr = getTravauxOuvrages();
+  const o = getTravauxOuvrage(id);
+  if (!o) return;
+  const sibs = travauxSiblingsOfOuvrage(o);
+  const j = sibs.indexOf(o) + dir;
+  if (j < 0 || j >= sibs.length) return;
+  const a = arr.indexOf(o), b = arr.indexOf(sibs[j]);
+  arr[a] = sibs[j]; arr[b] = o;
+  save();
+  renderTravauxCarnet();
+}
+function moveTravauxPrescriptionStep(id, dir) {
+  const arr = getTravauxPrescriptions();
+  const p = getTravauxPrescription(id);
+  if (!p) return;
+  const sibs = getPrescriptionsForOuvrage(p.ouvrageId);
+  const j = sibs.indexOf(p) + dir;
+  if (j < 0 || j >= sibs.length) return;
+  const a = arr.indexOf(p), b = arr.indexOf(sibs[j]);
+  arr[a] = sibs[j]; arr[b] = p;
+  save();
+  renderTravauxCarnet();
+}
+// Glisser-déposer : on retire l'élément puis on le réinsère avant (ou
+// après) la cible. Le déplacement reste confiné à son parent.
+function dropTravauxOuvrage(dragId, targetId, after) {
+  if (dragId === targetId) return;
+  const arr = getTravauxOuvrages();
+  const d = getTravauxOuvrage(dragId), t = getTravauxOuvrage(targetId);
+  if (!d || !t || (d.lotId || '') !== (t.lotId || '')) return;
+  arr.splice(arr.indexOf(d), 1);
+  arr.splice(arr.indexOf(t) + (after ? 1 : 0), 0, d);
+  save();
+  renderTravauxCarnet();
+}
+function dropTravauxPrescription(dragId, targetId, after) {
+  if (dragId === targetId) return;
+  const arr = getTravauxPrescriptions();
+  const d = getTravauxPrescription(dragId), t = getTravauxPrescription(targetId);
+  if (!d || !t || d.ouvrageId !== t.ouvrageId) return;
+  arr.splice(arr.indexOf(d), 1);
+  arr.splice(arr.indexOf(t) + (after ? 1 : 0), 0, d);
+  save();
+  renderTravauxCarnet();
+}
+// Dupliquer un article : le gain de temps décisif quand on rédige un CCTP,
+// où deux articles voisins ne diffèrent souvent que d'une ligne.
+function duplicateTravauxPrescription(id) {
+  const arr = getTravauxPrescriptions();
+  const p = getTravauxPrescription(id);
+  if (!p) return;
+  const copy = JSON.parse(JSON.stringify(p));
+  copy.id = 'tp_' + uid();
+  copy.specs = (copy.specs || []).map(s => ({ ...s, id: 'sp_' + uid() }));
+  if ((copy.title || '').trim()) copy.title = copy.title + ' (copie)';
+  arr.splice(arr.indexOf(p) + 1, 0, copy);
+  save();
+  travauxCarnetSel = { type: 'article', id: copy.id };
+  renderTravauxCarnet();
+  requestAnimationFrame(() => {
+    const el = document.getElementById('carnet-field-title');
+    if (el) { el.focus(); el.select(); }
+  });
+}
+
+// ======================= Sélection & navigation =======================
+function travauxCarnetNormalizeSelection() {
+  const sel = travauxCarnetSel;
+  if (sel && sel.type === 'article' && getTravauxPrescription(sel.id)) return;
+  if (sel && sel.type === 'chapitre' && getTravauxOuvrage(sel.id)) return;
+  const p = getTravauxPrescriptions()[0];
+  if (p) { travauxCarnetSel = { type: 'article', id: p.id }; return; }
+  const o = getTravauxOuvrages()[0];
+  travauxCarnetSel = o ? { type: 'chapitre', id: o.id } : null;
+}
+function selectTravauxCarnet(type, id, focusSel) {
+  travauxCarnetSel = { type, id };
+  travauxCarnetEditing = true;
+  travauxZonesOpen = false;
+  travauxZoneFilter = '';
+  renderTravauxCarnetTree();
+  renderTravauxCarnetEditor();
+  travauxCarnetSyncPane();
+  if (focusSel) requestAnimationFrame(() => {
+    const el = document.querySelector(focusSel);
+    if (el) { el.focus(); if (el.select) el.select(); }
+  });
+}
+function travauxCarnetSyncPane() {
+  const wrap = document.querySelector('.carnet');
+  if (wrap) wrap.classList.toggle('is-editing', travauxCarnetEditing);
+}
+function travauxCarnetBackToTree() {
+  travauxCarnetEditing = false;
+  travauxCarnetSyncPane();
+}
+function toggleTravauxCarnetNode(id) {
+  if (travauxCarnetCollapsed.has(id)) travauxCarnetCollapsed.delete(id);
+  else travauxCarnetCollapsed.add(id);
+  renderTravauxCarnetTree();
+}
+function toggleTravauxCarnetFoldAll() {
+  const groups = buildTravauxCCTP();
+  const ids = [];
+  for (const g of groups) { ids.push('lot:' + g.id); for (const c of g.ouvrages) ids.push('chap:' + c.ouvrage.id); }
+  const allFolded = ids.length > 0 && ids.every(i => travauxCarnetCollapsed.has(i));
+  travauxCarnetCollapsed = allFolded ? new Set() : new Set(ids);
+  renderTravauxCarnetTree();
+}
+
+// ======================= Rendu : ossature =======================
 function renderTravauxCarnet() {
   const body = document.getElementById('travauxcarnetbody');
   if (!body) return;
+  if (!body.querySelector('.carnet')) buildTravauxCarnetSkeleton(body);
+  travauxCarnetNormalizeSelection();
+  renderTravauxCarnetTree();
+  renderTravauxCarnetEditor();
+  travauxCarnetSyncPane();
+}
+function buildTravauxCarnetSkeleton(body) {
   body.innerHTML = '';
+  const wrap = document.createElement('div');
+  wrap.className = 'carnet';
+  // L'ossature n'est construite qu'une fois : le champ de filtre n'est
+  // jamais recréé, donc la saisie ne perd jamais le focus.
+  wrap.innerHTML =
+    '<aside class="carnet-nav">' +
+      '<div class="carnet-nav-head">' +
+        '<div class="carnet-search">' + SVG_SEARCH +
+          '<input type="search" id="carnetfilter" placeholder="Filtrer la structure…" autocomplete="off">' +
+        '</div>' +
+        '<button type="button" class="carnet-fold" id="carnetfold" aria-label="Tout replier ou déplier">⇕</button>' +
+      '</div>' +
+      '<div class="carnet-tree" id="carnettree"></div>' +
+    '</aside>' +
+    '<section class="carnet-editor" id="carneteditor"></section>';
+  body.appendChild(wrap);
+  const input = wrap.querySelector('#carnetfilter');
+  input.addEventListener('input', () => { travauxCarnetFilter = input.value; renderTravauxCarnetTree(); });
+  wrap.querySelector('#carnetfold').addEventListener('click', toggleTravauxCarnetFoldAll);
+}
+
+// ======================= Rendu : structure (panneau gauche) =======================
+function renderTravauxCarnetTree() {
+  const tree = document.getElementById('carnettree');
+  if (!tree) return;
+  tree.innerHTML = '';
+  const q = travauxCarnetFilter.trim().toLowerCase();
   const groups = buildTravauxCCTP();
   const lots = getWorkBatches();
+
   if (!lots.length && !getTravauxOuvrages().length) {
-    body.appendChild(travauxEmptyMsg('Créez d\'abord vos lots dans Données → Lots : le carnet suit la structure d\'un CCTP (lot → chapitre → article).'));
+    tree.appendChild(travauxEmptyMsg('Commencez par créer vos lots dans Données → Lots, puis ajoutez ici un chapitre et ses articles.'));
   }
-  for (const g of groups) body.appendChild(buildTravauxCarnetLot(g));
-  // Le groupe « Hors lot » n'existe dans buildTravauxCCTP que s'il contient
-  // des chapitres : on offre quand même un point d'entrée pour en créer.
-  if (!groups.some(g => g.isOrphan)) {
+
+  let shown = 0;
+  for (const g of groups) {
+    const lotHit = !q || g.name.toLowerCase().includes(q);
+    const chaps = [];
+    for (const chap of g.ouvrages) {
+      const chapHit = lotHit || (chap.ouvrage.name || '').toLowerCase().includes(q);
+      const arts = chapHit ? chap.articles
+        : chap.articles.filter(a => travauxArticleHaystack(a.presc, chap.ouvrage.name || '', g.name, a.num).includes(q));
+      if (chapHit || arts.length) chaps.push({ chap, arts });
+    }
+    if (q && !lotHit && !chaps.length) continue;
+    shown++;
+    tree.appendChild(buildCarnetLotNode(g, chaps, !!q));
+  }
+  if (q && !shown) tree.appendChild(travauxEmptyMsg('Aucun résultat pour « ' + travauxCarnetFilter.trim() + ' ».'));
+
+  // Un point d'entrée « hors lot » tant qu'aucun chapitre orphelin n'existe.
+  if (!q && !groups.some(g => g.isOrphan)) {
     const add = document.createElement('button');
     add.type = 'button';
-    add.className = 'travaux-add-chap travaux-add-chap-orphan';
+    add.className = 'carnet-add carnet-add-lot';
     add.textContent = '+ Chapitre hors lot';
     add.addEventListener('click', () => addTravauxOuvrage(''));
-    body.appendChild(add);
+    tree.appendChild(add);
   }
 }
-function buildTravauxCarnetLot(g) {
-  const sec = document.createElement('section');
-  sec.className = 'travaux-carnet-lot';
-  sec.style.setProperty('--lot-color', g.color);
+function buildCarnetLotNode(g, chaps, filtering) {
+  const key = 'lot:' + g.id;
+  const folded = !filtering && travauxCarnetCollapsed.has(key);
+  const node = document.createElement('div');
+  node.className = 'carnet-lot';
+  node.style.setProperty('--lot-color', g.color);
 
-  const head = document.createElement('div');
-  head.className = 'travaux-carnet-lot-head';
+  const row = document.createElement('button');
+  row.type = 'button';
+  row.className = 'carnet-lot-row' + (folded ? ' is-folded' : '');
+  row.innerHTML = '<span class="carnet-caret"></span>';
   const dot = document.createElement('span');
   dot.className = 'travaux-lot-dot';
   dot.style.background = g.color;
-  head.appendChild(dot);
+  row.appendChild(dot);
   const nm = document.createElement('span');
-  nm.className = 'travaux-carnet-lot-name';
-  nm.textContent = 'LOT ' + g.num + ' · ' + g.name;
-  head.appendChild(nm);
-  sec.appendChild(head);
+  nm.className = 'carnet-lot-name';
+  nm.textContent = g.num + ' · ' + g.name;
+  row.appendChild(nm);
+  const cnt = document.createElement('span');
+  cnt.className = 'carnet-count';
+  cnt.textContent = String(g.ouvrages.reduce((n, c) => n + c.articles.length, 0));
+  row.appendChild(cnt);
+  row.addEventListener('click', () => toggleTravauxCarnetNode(key));
+  node.appendChild(row);
 
-  for (const chap of g.ouvrages) sec.appendChild(buildTravauxOuvrageCard(chap));
-
+  if (folded) return node;
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'carnet-lot-body';
+  for (const { chap, arts } of chaps) bodyEl.appendChild(buildCarnetChapNode(chap, arts, filtering));
   const add = document.createElement('button');
   add.type = 'button';
-  add.className = 'travaux-add-chap';
+  add.className = 'carnet-add';
   add.textContent = '+ Chapitre';
   add.addEventListener('click', () => addTravauxOuvrage(g.isOrphan ? '' : g.id));
-  sec.appendChild(add);
-  return sec;
+  bodyEl.appendChild(add);
+  node.appendChild(bodyEl);
+  return node;
 }
-function buildTravauxOuvrageCard(chap) {
-  const ouvrage = chap.ouvrage;
-  const card = document.createElement('div');
-  card.className = 'travaux-ouvrage';
+function buildCarnetChapNode(chap, arts, filtering) {
+  const o = chap.ouvrage;
+  const key = 'chap:' + o.id;
+  const folded = !filtering && travauxCarnetCollapsed.has(key);
+  const selected = travauxCarnetSel && travauxCarnetSel.type === 'chapitre' && travauxCarnetSel.id === o.id;
 
-  const head = document.createElement('div');
-  head.className = 'travaux-ouvrage-head';
+  const node = document.createElement('div');
+  node.className = 'carnet-chap';
+
+  const row = document.createElement('div');
+  row.className = 'carnet-chap-row' + (folded ? ' is-folded' : '') + (selected ? ' is-sel' : '');
+  row.dataset.chapId = o.id;
+  row.draggable = true;
+  const caret = document.createElement('button');
+  caret.type = 'button';
+  caret.className = 'carnet-caret-btn';
+  caret.setAttribute('aria-label', folded ? 'Déplier' : 'Replier');
+  caret.innerHTML = '<span class="carnet-caret"></span>';
+  caret.addEventListener('click', (e) => { e.stopPropagation(); toggleTravauxCarnetNode(key); });
+  row.appendChild(caret);
+  const open = document.createElement('button');
+  open.type = 'button';
+  open.className = 'carnet-chap-open';
   const num = document.createElement('span');
-  num.className = 'travaux-art-num';
+  num.className = 'carnet-num';
   num.textContent = chap.num;
-  head.appendChild(num);
-  const nm = document.createElement('input');
-  nm.type = 'text';
-  nm.className = 'travaux-ouvrage-name';
-  nm.placeholder = 'Chapitre (ex. CLOISONS, PEINTURES, PORTES…)';
-  nm.maxLength = 80;
-  nm.value = ouvrage.name || '';
-  nm.addEventListener('input', () => renameTravauxOuvrage(ouvrage.id, nm.value));
-  head.appendChild(nm);
-  // Rattachement à un lot (déplacement d'un chapitre)
-  const sel = document.createElement('select');
-  sel.className = 'travaux-ouvrage-lot';
-  sel.setAttribute('aria-label', 'Lot du chapitre');
-  sel.appendChild(new Option('Hors lot', ''));
-  for (const lot of getWorkBatches()) sel.appendChild(new Option(lot.name || 'Lot sans nom', lot.id));
-  sel.value = ouvrage.lotId || '';
-  sel.addEventListener('change', () => setTravauxOuvrageLot(ouvrage.id, sel.value));
-  head.appendChild(sel);
-  const del = document.createElement('button');
-  del.type = 'button';
-  del.className = 'travaux-ouvrage-del';
-  del.setAttribute('aria-label', 'Supprimer ce chapitre');
-  del.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z"/></svg>';
-  del.addEventListener('click', () => deleteTravauxOuvrage(ouvrage.id));
-  head.appendChild(del);
-  card.appendChild(head);
+  open.appendChild(num);
+  const nm = document.createElement('span');
+  nm.className = 'carnet-chap-name';
+  nm.textContent = o.name || 'Chapitre sans nom';
+  if (!o.name) nm.classList.add('is-empty');
+  open.appendChild(nm);
+  open.addEventListener('click', () => selectTravauxCarnet('chapitre', o.id));
+  row.appendChild(open);
+  const cnt = document.createElement('span');
+  cnt.className = 'carnet-count';
+  cnt.textContent = String(chap.articles.length);
+  row.appendChild(cnt);
+  travauxAttachDrag(row, o.id, 'chap', dropTravauxOuvrage);
+  node.appendChild(row);
 
+  if (folded) return node;
   const list = document.createElement('div');
-  list.className = 'travaux-presc-list';
-  for (const a of chap.articles) list.appendChild(buildTravauxPrescription(a));
-  card.appendChild(list);
-
+  list.className = 'carnet-art-list';
+  for (const a of arts) list.appendChild(buildCarnetArtRow(a));
   const add = document.createElement('button');
   add.type = 'button';
-  add.className = 'cr-add-section travaux-add-presc';
+  add.className = 'carnet-add carnet-add-art';
   add.textContent = '+ Article';
-  add.addEventListener('click', () => addTravauxPrescription(ouvrage.id));
-  card.appendChild(add);
-  return card;
+  add.addEventListener('click', () => addTravauxPrescription(o.id));
+  list.appendChild(add);
+  node.appendChild(list);
+  return node;
 }
-function buildTravauxPrescription(a) {
+function buildCarnetArtRow(a) {
   const p = a.presc;
-  const wrap = document.createElement('div');
-  wrap.className = 'travaux-presc';
-  wrap.dataset.prescId = p.id;
-  wrap.dataset.ouvrageId = p.ouvrageId;
-
-  // Ligne 1 : numéro + titre de l'article + suppression
-  const top = document.createElement('div');
-  top.className = 'travaux-presc-top';
+  const selected = travauxCarnetSel && travauxCarnetSel.type === 'article' && travauxCarnetSel.id === p.id;
+  const row = document.createElement('button');
+  row.type = 'button';
+  row.className = 'carnet-art-row' + (selected ? ' is-sel' : '');
+  row.dataset.artId = p.id;
+  row.draggable = true;
   const num = document.createElement('span');
-  num.className = 'travaux-art-num travaux-art-num-sm';
+  num.className = 'carnet-num';
   num.textContent = a.num;
-  top.appendChild(num);
+  row.appendChild(num);
+  const t = document.createElement('span');
+  t.className = 'carnet-art-title';
+  t.textContent = travauxArticleTitle(p);
+  row.appendChild(t);
+  const st = travauxArticleStatus(p);
+  const dot = document.createElement('span');
+  dot.className = 'carnet-status carnet-status-' + st;
+  dot.title = TRAVAUX_STATUS_LABEL[st];
+  row.appendChild(dot);
+  row.addEventListener('click', () => selectTravauxCarnet('article', p.id));
+  travauxAttachDrag(row, p.id, 'art', dropTravauxPrescription);
+  return row;
+}
+// Glisser-déposer natif : réservé au pointeur (PC). Sur tactile, les
+// flèches ▲▼ de l'éditeur font le même travail.
+let _travauxDrag = null;
+function travauxAttachDrag(el, id, kind, dropFn) {
+  el.addEventListener('dragstart', (e) => {
+    _travauxDrag = { id, kind };
+    el.classList.add('is-dragging');
+    if (e.dataTransfer) { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', id); }
+  });
+  el.addEventListener('dragend', () => { el.classList.remove('is-dragging'); travauxClearDropMarks(); _travauxDrag = null; });
+  el.addEventListener('dragover', (e) => {
+    if (!_travauxDrag || _travauxDrag.kind !== kind || _travauxDrag.id === id) return;
+    e.preventDefault();
+    const r = el.getBoundingClientRect();
+    const after = (e.clientY - r.top) > r.height / 2;
+    travauxClearDropMarks();
+    el.classList.add(after ? 'is-drop-after' : 'is-drop-before');
+  });
+  el.addEventListener('drop', (e) => {
+    if (!_travauxDrag || _travauxDrag.kind !== kind) return;
+    e.preventDefault();
+    const r = el.getBoundingClientRect();
+    const after = (e.clientY - r.top) > r.height / 2;
+    const dragId = _travauxDrag.id;
+    travauxClearDropMarks();
+    _travauxDrag = null;
+    dropFn(dragId, id, after);
+  });
+}
+function travauxClearDropMarks() {
+  document.querySelectorAll('.is-drop-before, .is-drop-after')
+    .forEach(el => el.classList.remove('is-drop-before', 'is-drop-after'));
+}
+
+// ======================= Rendu : éditeur (panneau droit) =======================
+function renderTravauxCarnetEditor() {
+  const host = document.getElementById('carneteditor');
+  if (!host) return;
+  host.innerHTML = '';
+  const sel = travauxCarnetSel;
+  if (!sel) {
+    host.appendChild(buildCarnetPlaceholder());
+    return;
+  }
+  if (sel.type === 'chapitre') host.appendChild(buildCarnetChapEditor(getTravauxOuvrage(sel.id)));
+  else host.appendChild(buildCarnetArtEditor(getTravauxPrescription(sel.id)));
+}
+function buildCarnetPlaceholder() {
+  const box = document.createElement('div');
+  box.className = 'carnet-placeholder';
+  box.innerHTML =
+    '<div class="carnet-placeholder-icon">📖</div>' +
+    '<p class="carnet-placeholder-title">Votre CCTP est vide</p>' +
+    '<p class="carnet-placeholder-text">Ajoutez un chapitre dans un lot (colonne de gauche), puis ses articles. ' +
+    'La numérotation 1.1.1 se met à jour toute seule.</p>';
+  return box;
+}
+// Bandeau commun : retour (mobile), fil d'Ariane, actions.
+function buildCarnetHead(crumbParts, actions) {
+  const head = document.createElement('header');
+  head.className = 'carnet-head';
+  const back = document.createElement('button');
+  back.type = 'button';
+  back.className = 'carnet-back';
+  back.textContent = '‹ Structure';
+  back.addEventListener('click', travauxCarnetBackToTree);
+  head.appendChild(back);
+  const crumb = document.createElement('div');
+  crumb.className = 'carnet-crumb';
+  crumbParts.forEach((part, i) => {
+    if (i) { const s = document.createElement('span'); s.className = 'carnet-crumb-sep'; s.textContent = '›'; crumb.appendChild(s); }
+    const s = document.createElement('span');
+    s.textContent = part;
+    crumb.appendChild(s);
+  });
+  head.appendChild(crumb);
+  const bar = document.createElement('div');
+  bar.className = 'carnet-actions';
+  for (const a of actions) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'carnet-action' + (a.danger ? ' is-danger' : '');
+    b.setAttribute('aria-label', a.label);
+    b.title = a.label;
+    if (a.icon) b.innerHTML = a.icon; else b.textContent = a.text;
+    b.addEventListener('click', a.onClick);
+    bar.appendChild(b);
+  }
+  head.appendChild(bar);
+  return head;
+}
+function carnetSection(title, hint) {
+  const sec = document.createElement('section');
+  sec.className = 'carnet-card';
+  const h = document.createElement('div');
+  h.className = 'carnet-card-head';
+  const t = document.createElement('span');
+  t.className = 'carnet-card-title';
+  t.textContent = title;
+  h.appendChild(t);
+  if (hint) {
+    const s = document.createElement('span');
+    s.className = 'carnet-card-hint';
+    s.textContent = hint;
+    h.appendChild(s);
+  }
+  sec.appendChild(h);
+  return sec;
+}
+
+// ----- Éditeur de chapitre -----
+function buildCarnetChapEditor(o) {
+  const wrap = document.createElement('div');
+  if (!o) return wrap;
+  const chap = travauxFindChap(o.id);
+  const lotName = chap ? chap.lotName : 'Hors lot';
+  wrap.appendChild(buildCarnetHead(['LOT ' + (chap ? chap.lotNum : '?') + ' · ' + lotName, 'Chapitre ' + (chap ? chap.num : '')], [
+    { label: 'Monter le chapitre', text: '▲', onClick: () => moveTravauxOuvrageStep(o.id, -1) },
+    { label: 'Descendre le chapitre', text: '▼', onClick: () => moveTravauxOuvrageStep(o.id, 1) },
+    { label: 'Supprimer le chapitre', icon: SVG_TRASH, danger: true, onClick: () => deleteTravauxOuvrage(o.id) },
+  ]));
+
+  const idSec = carnetSection('Chapitre', 'Une famille d\'ouvrages : Cloisons, Peintures, Portes…');
+  const nm = document.createElement('input');
+  nm.type = 'text';
+  nm.id = 'carnet-field-chap';
+  nm.className = 'carnet-input carnet-input-title';
+  nm.placeholder = 'Nom du chapitre (ex. CLOISONS)';
+  nm.maxLength = 80;
+  nm.value = o.name || '';
+  nm.addEventListener('input', () => {
+    renameTravauxOuvrage(o.id, nm.value);
+    const row = document.querySelector('.carnet-chap-row[data-chap-id="' + cssEscape(o.id) + '"] .carnet-chap-name');
+    if (row) { row.textContent = nm.value || 'Chapitre sans nom'; row.classList.toggle('is-empty', !nm.value); }
+  });
+  idSec.appendChild(nm);
+  const lotLbl = document.createElement('div');
+  lotLbl.className = 'carnet-label';
+  lotLbl.textContent = 'Lot de rattachement';
+  idSec.appendChild(lotLbl);
+  const sel = document.createElement('select');
+  sel.className = 'carnet-input carnet-select';
+  sel.appendChild(new Option('Hors lot', ''));
+  for (const lot of getWorkBatches()) sel.appendChild(new Option(lot.name || 'Lot sans nom', lot.id));
+  sel.value = o.lotId || '';
+  sel.addEventListener('change', () => setTravauxOuvrageLot(o.id, sel.value));
+  idSec.appendChild(sel);
+  wrap.appendChild(idSec);
+
+  const arts = getPrescriptionsForOuvrage(o.id);
+  const listSec = carnetSection('Articles', arts.length + ' article' + (arts.length > 1 ? 's' : ''));
+  if (!arts.length) {
+    const e = document.createElement('p');
+    e.className = 'carnet-hint';
+    e.textContent = 'Aucun article dans ce chapitre.';
+    listSec.appendChild(e);
+  }
+  for (const p of arts) {
+    const a = travauxFindArticle(p.id);
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'carnet-mini-row';
+    const n = document.createElement('span');
+    n.className = 'carnet-num';
+    n.textContent = a ? a.num : '';
+    row.appendChild(n);
+    const t = document.createElement('span');
+    t.textContent = travauxArticleTitle(p);
+    row.appendChild(t);
+    row.addEventListener('click', () => selectTravauxCarnet('article', p.id));
+    listSec.appendChild(row);
+  }
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'carnet-add';
+  add.textContent = '+ Article';
+  add.addEventListener('click', () => addTravauxPrescription(o.id));
+  listSec.appendChild(add);
+  wrap.appendChild(listSec);
+  return wrap;
+}
+
+// ----- Éditeur d'article -----
+function buildCarnetArtEditor(p) {
+  const wrap = document.createElement('div');
+  if (!p) return wrap;
+  const a = travauxFindArticle(p.id);
+  const num = a ? a.num : '';
+  wrap.appendChild(buildCarnetHead(
+    ['LOT ' + (a ? a.lotNum : '?') + ' · ' + (a ? a.lotName : ''), a ? (a.chapName || 'Chapitre') : '', 'Article ' + num],
+    [
+      { label: 'Monter l\'article', text: '▲', onClick: () => moveTravauxPrescriptionStep(p.id, -1) },
+      { label: 'Descendre l\'article', text: '▼', onClick: () => moveTravauxPrescriptionStep(p.id, 1) },
+      { label: 'Dupliquer l\'article', icon: SVG_COPY, onClick: () => duplicateTravauxPrescription(p.id) },
+      { label: 'Supprimer l\'article', icon: SVG_TRASH, danger: true, onClick: () => deleteTravauxPrescription(p.id) },
+    ]));
+
+  // 1) Intitulé
+  const idSec = carnetSection('Intitulé de l\'article', num);
   const ti = document.createElement('input');
   ti.type = 'text';
-  ti.className = 'travaux-presc-title';
-  ti.placeholder = 'Titre de l\'article (ex. PEINTURE DES PORTES INTÉRIEURES)';
+  ti.id = 'carnet-field-title';
+  ti.className = 'carnet-input carnet-input-title';
+  ti.placeholder = 'Ex. PEINTURE DES PORTES INTÉRIEURES';
   ti.maxLength = 120;
   ti.value = p.title || '';
-  ti.addEventListener('input', () => setTravauxPrescriptionField(p.id, 'title', ti.value));
-  top.appendChild(ti);
-  const del = document.createElement('button');
-  del.type = 'button';
-  del.className = 'st-entry-delete';
-  del.setAttribute('aria-label', 'Supprimer cet article');
-  del.innerHTML = '×';
-  del.addEventListener('click', () => deleteTravauxPrescription(p.id));
-  top.appendChild(del);
-  wrap.appendChild(top);
-
-  // Description (corps de l'article)
-  wrap.appendChild(travauxFieldLabel('Descriptif de la prestation'));
-  const ta = document.createElement('textarea');
-  ta.className = 'travaux-presc-text';
-  ta.rows = 2;
-  ta.placeholder = 'Mise en œuvre comprenant :\n- …\n- …';
-  ta.value = p.text || '';
-  const autoResize = () => { ta.style.height = 'auto'; ta.style.height = (ta.scrollHeight + 2) + 'px'; };
-  ta.addEventListener('input', () => { autoResize(); setTravauxPrescriptionField(p.id, 'text', ta.value); });
-  setTimeout(autoResize, 0);
-  wrap.appendChild(ta);
-
-  // Bascule « Remplacement »
+  ti.addEventListener('input', () => {
+    setTravauxPrescriptionField(p.id, 'title', ti.value);
+    carnetRefreshArtRow(p);
+  });
+  idSec.appendChild(ti);
   const remplLbl = document.createElement('label');
-  remplLbl.className = 'travaux-rempl-toggle' + (p.remplacement ? ' is-on' : '');
+  remplLbl.className = 'carnet-switch' + (p.remplacement ? ' is-on' : '');
   const remplCb = document.createElement('input');
   remplCb.type = 'checkbox';
   remplCb.checked = !!p.remplacement;
-  remplCb.addEventListener('change', () => toggleTravauxPrescriptionRempl(p.id, remplCb.checked));
+  remplCb.addEventListener('change', () => {
+    p.remplacement = remplCb.checked;
+    save();
+    remplLbl.classList.toggle('is-on', remplCb.checked);
+  });
   remplLbl.appendChild(remplCb);
   const remplTxt = document.createElement('span');
   remplTxt.textContent = 'Remplacement (dépose + pose de neuf)';
   remplLbl.appendChild(remplTxt);
-  wrap.appendChild(remplLbl);
+  idSec.appendChild(remplLbl);
+  wrap.appendChild(idSec);
 
-  // Détails techniques (libellé / valeur)
-  wrap.appendChild(travauxFieldLabel('Détails techniques'));
+  // 2) Descriptif
+  const dSec = carnetSection('Descriptif', 'Le corps de l\'article, tel qu\'il sera lu');
+  const ta = document.createElement('textarea');
+  ta.className = 'carnet-input carnet-textarea';
+  ta.rows = 4;
+  ta.placeholder = 'Mise en œuvre comprenant :\n- …\n- …';
+  ta.value = p.text || '';
+  const grow = () => { ta.style.height = 'auto'; ta.style.height = (ta.scrollHeight + 2) + 'px'; };
+  ta.addEventListener('input', () => { grow(); setTravauxPrescriptionField(p.id, 'text', ta.value); carnetRefreshArtRow(p); });
+  setTimeout(grow, 0);
+  dSec.appendChild(ta);
+  wrap.appendChild(dSec);
+
+  // 3) Détails techniques
+  const sSec = carnetSection('Détails techniques', 'Couleur, référence, performance…');
   const specsWrap = document.createElement('div');
-  specsWrap.className = 'travaux-specs-edit';
-  for (const s of (p.specs || [])) {
-    const row = document.createElement('div');
-    row.className = 'travaux-spec-row';
-    const lab = document.createElement('input');
-    lab.type = 'text';
-    lab.className = 'travaux-spec-label';
-    lab.placeholder = 'Détail (ex. Couleur)';
-    lab.maxLength = 30;
-    lab.value = s.label || '';
-    lab.addEventListener('input', () => setTravauxSpecField(p.id, s.id, 'label', lab.value));
-    row.appendChild(lab);
-    const val = document.createElement('input');
-    val.type = 'text';
-    val.className = 'travaux-spec-value';
-    val.placeholder = 'Valeur (ex. RAL 9007)';
-    val.maxLength = 60;
-    val.value = s.value || '';
-    val.addEventListener('input', () => setTravauxSpecField(p.id, s.id, 'value', val.value));
-    row.appendChild(val);
-    const sdel = document.createElement('button');
-    sdel.type = 'button';
-    sdel.className = 'travaux-spec-del';
-    sdel.setAttribute('aria-label', 'Supprimer ce détail');
-    sdel.textContent = '×';
-    sdel.addEventListener('click', () => deleteTravauxSpec(p.id, s.id));
-    row.appendChild(sdel);
-    specsWrap.appendChild(row);
-  }
+  specsWrap.className = 'carnet-specs';
+  for (const s of (p.specs || [])) specsWrap.appendChild(buildCarnetSpecRow(p, s));
+  sSec.appendChild(specsWrap);
   const addSpec = document.createElement('button');
   addSpec.type = 'button';
-  addSpec.className = 'travaux-add-spec';
-  addSpec.textContent = '+ Détail (couleur, modèle…)';
-  addSpec.addEventListener('click', () => addTravauxSpec(p.id));
-  specsWrap.appendChild(addSpec);
-  wrap.appendChild(specsWrap);
+  addSpec.className = 'carnet-add carnet-add-inline';
+  addSpec.textContent = '+ Détail';
+  addSpec.addEventListener('click', () => {
+    if (!Array.isArray(p.specs)) p.specs = [];
+    const s = { id: 'sp_' + uid(), label: '', value: '' };
+    p.specs.push(s);
+    save();
+    const row = buildCarnetSpecRow(p, s);
+    specsWrap.appendChild(row);
+    const inp = row.querySelector('input');
+    if (inp) inp.focus();
+  });
+  sSec.appendChild(addSpec);
+  wrap.appendChild(sSec);
 
-  // LOCALISATION : note libre (façon CCTP) + zones cochées
-  wrap.appendChild(travauxFieldLabel('Localisation (texte libre, façon CCTP)'));
+  // 4) Localisation
+  const lSec = carnetSection('Localisation', 'Le « LOCALISATION : » du CCTP');
   const loc = document.createElement('textarea');
-  loc.className = 'travaux-presc-loca';
+  loc.className = 'carnet-input carnet-textarea';
   loc.rows = 2;
   loc.placeholder = 'Ex. : entre la loge et le sas, suivant légende des plans architecte.';
   loc.value = p.localisation || '';
-  const autoResizeLoc = () => { loc.style.height = 'auto'; loc.style.height = (loc.scrollHeight + 2) + 'px'; };
-  loc.addEventListener('input', () => { autoResizeLoc(); setTravauxPrescriptionField(p.id, 'localisation', loc.value); });
-  setTimeout(autoResizeLoc, 0);
-  wrap.appendChild(loc);
-
-  wrap.appendChild(buildTravauxZonePicker(p));
+  const growLoc = () => { loc.style.height = 'auto'; loc.style.height = (loc.scrollHeight + 2) + 'px'; };
+  loc.addEventListener('input', () => { growLoc(); setTravauxPrescriptionField(p.id, 'localisation', loc.value); carnetRefreshArtRow(p); });
+  setTimeout(growLoc, 0);
+  lSec.appendChild(loc);
+  lSec.appendChild(buildCarnetZonePanel(p));
+  wrap.appendChild(lSec);
   return wrap;
 }
-function travauxFieldLabel(text) {
-  const el = document.createElement('div');
-  el.className = 'travaux-field-label';
-  el.textContent = text;
-  return el;
+function buildCarnetSpecRow(p, s) {
+  const row = document.createElement('div');
+  row.className = 'carnet-spec-row';
+  const lab = document.createElement('input');
+  lab.type = 'text';
+  lab.className = 'carnet-input carnet-spec-label';
+  lab.placeholder = 'Détail (ex. Couleur)';
+  lab.maxLength = 30;
+  lab.value = s.label || '';
+  lab.addEventListener('input', () => setTravauxSpecField(p.id, s.id, 'label', lab.value));
+  row.appendChild(lab);
+  const val = document.createElement('input');
+  val.type = 'text';
+  val.className = 'carnet-input carnet-spec-value';
+  val.placeholder = 'Valeur (ex. RAL 9007)';
+  val.maxLength = 60;
+  val.value = s.value || '';
+  val.addEventListener('input', () => setTravauxSpecField(p.id, s.id, 'value', val.value));
+  row.appendChild(val);
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'carnet-spec-del';
+  del.setAttribute('aria-label', 'Supprimer ce détail');
+  del.textContent = '×';
+  del.addEventListener('click', () => {
+    p.specs = (p.specs || []).filter(x => x.id !== s.id);
+    save();
+    row.remove();
+  });
+  row.appendChild(del);
+  return row;
 }
-// Grille compacte des zones, en ordre ARBORESCENT et sur 2–3 colonnes.
-function buildTravauxZonePicker(p) {
-  const zonesWrap = document.createElement('div');
-  zonesWrap.className = 'travaux-zones';
-  const zHead = document.createElement('div');
-  zHead.className = 'travaux-zones-head';
-  zHead.textContent = 'Zones concernées';
-  zonesWrap.appendChild(zHead);
+// Met à jour la ligne correspondante dans la structure sans tout redessiner
+// (le titre et la pastille de complétude suivent la frappe).
+function carnetRefreshArtRow(p) {
+  const row = document.querySelector('.carnet-art-row[data-art-id="' + cssEscape(p.id) + '"]');
+  if (!row) return;
+  const t = row.querySelector('.carnet-art-title');
+  if (t) t.textContent = travauxArticleTitle(p);
+  const dot = row.querySelector('.carnet-status');
+  if (dot) {
+    const st = travauxArticleStatus(p);
+    dot.className = 'carnet-status carnet-status-' + st;
+    dot.title = TRAVAUX_STATUS_LABEL[st];
+  }
+}
 
-  const everyLbl = document.createElement('label');
-  everyLbl.className = 'travaux-zone-chk travaux-zone-every' + (p.everywhere ? ' is-on' : '');
+// ----- Sélecteur de zones : résumé + arbre dépliable -----
+function buildCarnetZonePanel(p) {
+  const panel = document.createElement('div');
+  panel.className = 'carnet-zones';
+
+  const bar = document.createElement('div');
+  bar.className = 'carnet-zones-bar';
+  const summary = document.createElement('div');
+  summary.className = 'carnet-zones-summary';
+  bar.appendChild(summary);
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'carnet-zones-toggle';
+  bar.appendChild(toggle);
+  panel.appendChild(bar);
+
+  const treeBox = document.createElement('div');
+  treeBox.className = 'carnet-zones-tree';
+  panel.appendChild(treeBox);
+
+  const refreshSummary = () => {
+    summary.innerHTML = '';
+    if (p.everywhere) {
+      const chip = document.createElement('span');
+      chip.className = 'carnet-zone-chip is-all';
+      chip.textContent = 'Partout sur le chantier';
+      summary.appendChild(chip);
+      return;
+    }
+    const ids = travauxArticleZoneIds(p);
+    if (!ids.length) {
+      const e = document.createElement('span');
+      e.className = 'carnet-zones-empty';
+      e.textContent = 'Aucune zone sélectionnée';
+      summary.appendChild(e);
+      return;
+    }
+    for (const id of ids.slice(0, 4)) {
+      const chip = document.createElement('span');
+      chip.className = 'carnet-zone-chip';
+      chip.textContent = travauxZoneLabel(id);
+      summary.appendChild(chip);
+    }
+    if (ids.length > 4) {
+      const more = document.createElement('span');
+      more.className = 'carnet-zone-chip is-more';
+      more.textContent = '+' + (ids.length - 4);
+      summary.appendChild(more);
+    }
+  };
+  const refreshOpen = () => {
+    toggle.textContent = travauxZonesOpen ? 'Terminer' : 'Choisir les zones';
+    toggle.classList.toggle('is-on', travauxZonesOpen);
+    treeBox.hidden = !travauxZonesOpen;
+    if (travauxZonesOpen) renderCarnetZoneTree(p, treeBox, refreshSummary);
+  };
+  toggle.addEventListener('click', () => {
+    travauxZonesOpen = !travauxZonesOpen;
+    refreshOpen();
+    if (travauxZonesOpen) requestAnimationFrame(() => treeBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
+  });
+  refreshSummary();
+  refreshOpen();
+  return panel;
+}
+function renderCarnetZoneTree(p, box, onChange) {
+  box.innerHTML = '';
+
+  // « Partout » court-circuite l'arbre : inutile de l'afficher.
+  const every = document.createElement('label');
+  every.className = 'carnet-switch carnet-zone-every' + (p.everywhere ? ' is-on' : '');
   const everyCb = document.createElement('input');
   everyCb.type = 'checkbox';
   everyCb.checked = !!p.everywhere;
-  everyCb.addEventListener('change', () => setTravauxPrescriptionEverywhere(p.id, everyCb.checked));
-  everyLbl.appendChild(everyCb);
+  everyCb.addEventListener('change', () => {
+    p.everywhere = everyCb.checked;
+    save();
+    carnetRefreshArtRow(p);
+    renderCarnetZoneTree(p, box, onChange);
+    onChange();
+  });
+  every.appendChild(everyCb);
   const everyTxt = document.createElement('span');
-  everyTxt.textContent = 'Partout';
-  everyLbl.appendChild(everyTxt);
-  zonesWrap.appendChild(everyLbl);
+  everyTxt.textContent = 'Partout — toutes les zones du chantier';
+  every.appendChild(everyTxt);
+  box.appendChild(every);
+  if (p.everywhere) return;
 
-  if (!p.everywhere) {
-    const ordered = getZonesOrdered();
-    const grid = document.createElement('div');
-    grid.className = 'travaux-zone-grid';
-    if (!ordered.length) {
-      const hint = document.createElement('span');
-      hint.className = 'travaux-zone-hint';
-      hint.textContent = 'Créez des zones dans Données → Zones.';
-      grid.appendChild(hint);
-    }
-    // Un bloc par bâtiment (racine) : les blocs se rangent sur 2 ou 3
-    // colonnes selon la largeur, mais chaque arborescence reste d'un seul
-    // tenant et dans son ordre.
-    let bloc = null;
-    for (const { zone, depth } of ordered) {
-      if (depth === 1 || !bloc) {
-        bloc = document.createElement('div');
-        bloc.className = 'travaux-zone-bloc';
-        grid.appendChild(bloc);
-      }
-      const lbl = document.createElement('label');
-      lbl.className = 'travaux-zone-chk travaux-zone-d' + Math.min(depth, 5)
-        + (p.zones && p.zones[zone.id] ? ' is-on' : '');
-      lbl.dataset.zoneId = zone.id;
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.checked = !!(p.zones && p.zones[zone.id]);
-      cb.addEventListener('change', () => toggleTravauxPrescriptionZone(p.id, zone.id, cb.checked));
-      lbl.appendChild(cb);
-      const t = document.createElement('span');
-      t.textContent = zone.name || '(zone)';
-      lbl.appendChild(t);
-      bloc.appendChild(lbl);
-    }
-    zonesWrap.appendChild(grid);
-    const note = document.createElement('p');
-    note.className = 'travaux-zone-note';
-    note.textContent = 'Cocher un bâtiment ou un niveau couvre automatiquement toutes ses sous-zones.';
-    zonesWrap.appendChild(note);
+  if (!state.zones.length) {
+    const hint = document.createElement('p');
+    hint.className = 'carnet-hint';
+    hint.textContent = 'Créez vos zones dans Données → Zones.';
+    box.appendChild(hint);
+    return;
   }
-  return zonesWrap;
+
+  const search = document.createElement('div');
+  search.className = 'carnet-search carnet-zone-search';
+  search.innerHTML = SVG_SEARCH;
+  const inp = document.createElement('input');
+  inp.type = 'search';
+  inp.placeholder = 'Trouver une zone…';
+  inp.value = travauxZoneFilter;
+  inp.addEventListener('input', () => {
+    travauxZoneFilter = inp.value;
+    renderCarnetZoneTree(p, box, onChange);
+    const again = box.querySelector('.carnet-zone-search input');
+    if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+  });
+  search.appendChild(inp);
+  box.appendChild(search);
+
+  const q = travauxZoneFilter.trim().toLowerCase();
+  const ordered = getZonesOrdered();
+  // Une zone reste visible si elle correspond au filtre, ou si l'un de ses
+  // descendants y correspond (on garde le chemin d'accès).
+  let visible = null;
+  if (q) {
+    visible = new Set();
+    const byId = new Map(state.zones.map(z => [z.id, z]));
+    for (const { zone } of ordered) {
+      if (!(zone.name || '').toLowerCase().includes(q)) continue;
+      let cur = zone, guard = 0;
+      while (cur && guard++ < 40) { visible.add(cur.id); cur = cur.parentId ? byId.get(cur.parentId) : null; }
+    }
+  }
+  const checked = p.zones || {};
+  const coveredBy = travauxCoveringAncestors(checked);
+
+  const tree = document.createElement('div');
+  tree.className = 'ztree';
+  let shown = 0;
+  for (const { zone, depth } of ordered) {
+    if (visible && !visible.has(zone.id)) continue;
+    shown++;
+    const row = document.createElement('div');
+    row.className = 'ztree-row';
+    row.style.setProperty('--d', String(Math.min(depth, 6) - 1));
+    const lbl = document.createElement('label');
+    const isChecked = !!checked[zone.id];
+    const inherited = !isChecked && coveredBy.has(zone.id);
+    lbl.className = 'ztree-lbl' + (isChecked ? ' is-on' : '') + (inherited ? ' is-inherited' : '');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = isChecked || inherited;
+    cb.disabled = inherited;
+    cb.addEventListener('change', () => {
+      if (cb.checked) checkedSet(p, zone.id, true);
+      else checkedSet(p, zone.id, false);
+      carnetRefreshArtRow(p);
+      renderCarnetZoneTree(p, box, onChange);
+      onChange();
+    });
+    lbl.appendChild(cb);
+    const nm = document.createElement('span');
+    nm.className = 'ztree-name';
+    nm.textContent = zone.name || '(zone)';
+    lbl.appendChild(nm);
+    if (inherited) {
+      const tag = document.createElement('span');
+      tag.className = 'ztree-tag';
+      tag.textContent = 'hérité';
+      lbl.appendChild(tag);
+    }
+    row.appendChild(lbl);
+    tree.appendChild(row);
+  }
+  if (!shown) {
+    const e = document.createElement('p');
+    e.className = 'carnet-hint';
+    e.textContent = 'Aucune zone ne correspond.';
+    tree.appendChild(e);
+  }
+  box.appendChild(tree);
+  const note = document.createElement('p');
+  note.className = 'carnet-hint';
+  note.textContent = 'Cocher un bâtiment ou un niveau couvre automatiquement toutes ses sous-zones.';
+  box.appendChild(note);
+}
+function checkedSet(p, zoneId, on) {
+  if (!p.zones || typeof p.zones !== 'object') p.zones = {};
+  if (on) {
+    p.zones[zoneId] = true;
+    // Cocher un parent rend ses descendants redondants : on les retire pour
+    // que la localisation reste lisible (« Bâtiment A » et non « Bâtiment A »
+    // + « Bâtiment A › R+1 › Logement 12 »).
+    for (const d of getDescendantZones(zoneId)) if (d !== zoneId) delete p.zones[d];
+  } else {
+    delete p.zones[zoneId];
+  }
+  save();
+}
+// Zones couvertes par héritage : descendantes d'une zone cochée.
+function travauxCoveringAncestors(checked) {
+  const covered = new Set();
+  for (const zid of Object.keys(checked)) for (const d of getDescendantZones(zid)) if (d !== zid) covered.add(d);
+  return covered;
+}
+
+// Retrouve la position numérotée d'un chapitre / d'un article.
+function travauxFindChap(ouvrageId) {
+  for (const g of buildTravauxCCTP()) {
+    for (const c of g.ouvrages) {
+      if (c.ouvrage.id === ouvrageId) return { num: c.num, lotNum: g.num, lotName: g.name };
+    }
+  }
+  return null;
+}
+function travauxFindArticle(prescId) {
+  for (const g of buildTravauxCCTP()) {
+    for (const c of g.ouvrages) {
+      for (const a of c.articles) {
+        if (a.presc.id === prescId) return { num: a.num, lotNum: g.num, lotName: g.name, chapName: c.ouvrage.name };
+      }
+    }
+  }
+  return null;
 }
 function travauxEmptyMsg(text) {
   const p = document.createElement('p');
