@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.52';
+const APP_VERSION = '1.53';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -8209,7 +8209,8 @@ function buildTravauxCCTP() {
   lots.forEach((lot, i) => {
     const g = {
       id: lot.id, name: lot.name || 'Lot sans nom',
-      color: lot.color || 'var(--accent)', num: travauxLotNum(lot, i + 1), ouvrages: []
+      color: lot.color || 'var(--accent)', num: travauxLotNum(lot, i + 1),
+      companyName: travauxLotCompanyName(lot.id), ouvrages: []
     };
     byLot.set(lot.id, g);
     groups.push(g);
@@ -8220,7 +8221,7 @@ function buildTravauxCCTP() {
   // id distinct de '' : '' désigne déjà « tous les lots » dans les filtres.
   const horsLot = {
     id: TRAVAUX_HORS_LOT, isOrphan: true, name: 'Hors lot', color: '#7d7368',
-    num: groups.reduce((m, g) => Math.max(m, g.num), 0) + 1, ouvrages: []
+    num: groups.reduce((m, g) => Math.max(m, g.num), 0) + 1, companyName: '', ouvrages: []
   };
   for (const o of getTravauxOuvrages()) {
     const g = byLot.get(o.lotId) || horsLot;
@@ -8362,8 +8363,98 @@ function renderTravaux() {
   renderTravauxCarnet();
 }
 
+// ---------------------- Briques partagées aux deux vues ----------------------
+// Entreprise rattachée à un lot (Données → Lots) : en visite comme en
+// rendez-vous, la première question est « qui doit cette prestation ? ».
+function travauxLotCompanyName(lotId) {
+  const lot = getWorkBatches().find(l => l.id === lotId);
+  if (!lot || !lot.companyId) return '';
+  const c = getCompany(lot.companyId);
+  return c && c.name ? c.name : '';
+}
+// Surligne les occurrences de la recherche dans un texte.
+function travauxHiliteInto(el, text, q) {
+  const src = text || '';
+  const needle = (q || '').trim();
+  if (!needle) { el.textContent = src; return; }
+  const low = src.toLowerCase(), lq = needle.toLowerCase();
+  el.textContent = '';
+  let from = 0, i;
+  while ((i = low.indexOf(lq, from)) !== -1) {
+    if (i > from) el.appendChild(document.createTextNode(src.slice(from, i)));
+    const m = document.createElement('mark');
+    m.className = 'tv-mark';
+    m.textContent = src.slice(i, i + needle.length);
+    el.appendChild(m);
+    from = i + needle.length;
+  }
+  el.appendChild(document.createTextNode(src.slice(from)));
+}
+// Version texte d'un article — sert au partage et à la copie.
+function travauxArticleAsText(a) {
+  const p = a.presc;
+  const out = [a.num + ' - ' + travauxArticleTitle(p) + (p.remplacement ? '   [REMPLACEMENT]' : '')];
+  const body = travauxArticleBody(p).trim();
+  if (body) out.push(body);
+  const specs = (p.specs || [])
+    .filter(s => (s.label || '').trim() || (s.value || '').trim())
+    .map(s => '• ' + ((s.label || '').trim() ? s.label.trim() + ' : ' : '') + (s.value || '').trim());
+  if (specs.length) out.push(specs.join('\n'));
+  const loca = [];
+  if ((p.localisation || '').trim()) loca.push(p.localisation.trim());
+  if (p.everywhere) loca.push('Toutes les zones du chantier.');
+  else for (const z of travauxArticleZoneIds(p)) loca.push('- ' + travauxZoneLabel(z));
+  if (loca.length) out.push('LOCALISATION :\n' + loca.join('\n'));
+  return out.join('\n');
+}
+// Partage natif si l'appareil le propose (téléphone), presse-papiers sinon.
+async function travauxShareOrCopy(title, text) {
+  if (navigator.share) {
+    try { await navigator.share({ title, text }); return; }
+    catch (e) { if (e && e.name === 'AbortError') return; }
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('Copié dans le presse-papiers');
+  } catch (e) {
+    showToast('Copie impossible sur cet appareil', 'error');
+  }
+}
+// Navigation croisée : les deux vues sont deux projections du même document.
+function travauxGotoArticle(prescId) {
+  const p = getTravauxPrescription(prescId);
+  if (!p) return;
+  const o = getTravauxOuvrage(p.ouvrageId);
+  travauxCctpLotId = o ? (o.lotId || TRAVAUX_HORS_LOT) : '';
+  travauxSearchQuery = '';
+  travauxCctpRempl = false;
+  travauxCctpNoLoca = false;
+  const input = document.getElementById('travauxsearch');
+  if (input) input.value = '';
+  switchSubPage('travaux', 'cctp');
+  requestAnimationFrame(() => travauxFlashArticle(prescId));
+}
+function travauxFlashArticle(prescId) {
+  const el = document.getElementById('travaux-art-' + prescId);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.add('is-flash');
+  setTimeout(() => el.classList.remove('is-flash'), 1600);
+}
+function travauxGotoZone(zoneId) {
+  const byId = new Map(state.zones.map(z => [z.id, z]));
+  const path = [];
+  let cur = byId.get(zoneId), guard = 0;
+  while (cur && guard++ < 40) { path.unshift(cur.id); cur = cur.parentId ? byId.get(cur.parentId) : null; }
+  if (!path.length) return;
+  state.travauxVisitePath = path;
+  save();
+  travauxVisiteLotId = '';
+  switchSubPage('travaux', 'visite');
+}
+
 // Bloc « détails techniques » en pastilles (lecture).
-function buildTravauxSpecChips(p) {
+function buildTravauxSpecChips(p, q) {
   const specs = (p.specs || []).filter(s => (s.label || '').trim() || (s.value || '').trim());
   if (!specs.length) return null;
   const wrap = document.createElement('div');
@@ -8377,13 +8468,16 @@ function buildTravauxSpecChips(p) {
       k.textContent = s.label;
       chip.appendChild(k);
     }
-    chip.appendChild(document.createTextNode(s.value || ''));
+    const v = document.createElement('span');
+    travauxHiliteInto(v, s.value || '', q);
+    chip.appendChild(v);
     wrap.appendChild(chip);
   }
   return wrap;
 }
-// Bloc « LOCALISATION : » à la façon d'un CCTP.
-function buildTravauxLocalisationBlock(p) {
+// Bloc « LOCALISATION : » à la façon d'un CCTP. Les zones sont cliquables :
+// elles ouvrent la vue Visite sur le lieu concerné.
+function buildTravauxLocalisationBlock(p, q) {
   const note = (p.localisation || '').trim();
   const zoneIds = travauxArticleZoneIds(p);
   if (!p.everywhere && !note && !zoneIds.length) return null;
@@ -8396,7 +8490,7 @@ function buildTravauxLocalisationBlock(p) {
   if (note) {
     const t = document.createElement('p');
     t.className = 'travaux-loca-note';
-    t.textContent = note;
+    travauxHiliteInto(t, note, q);
     box.appendChild(t);
   }
   if (p.everywhere) {
@@ -8405,161 +8499,288 @@ function buildTravauxLocalisationBlock(p) {
     t.textContent = 'Toutes les zones du chantier.';
     box.appendChild(t);
   } else if (zoneIds.length) {
-    const ul = document.createElement('ul');
-    ul.className = 'travaux-loca-list';
+    const list = document.createElement('div');
+    list.className = 'travaux-loca-zones';
     for (const zid of zoneIds) {
-      const li = document.createElement('li');
-      li.textContent = travauxZoneLabel(zid);
-      ul.appendChild(li);
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'travaux-loca-zone';
+      b.title = 'Voir tout ce qui est dû dans ce lieu';
+      travauxHiliteInto(b, travauxZoneLabel(zid), q);
+      b.addEventListener('click', () => travauxGotoZone(zid));
+      list.appendChild(b);
     }
-    box.appendChild(ul);
+    box.appendChild(list);
   }
   return box;
 }
 
-// ---------------------- Vue CCTP (consultation par lot) ----------------------
+// ---------------------- Vue CCTP : le document ----------------------
+// Filtres d'écran (ni persistés, ni synchronisés).
+let travauxCctpRempl = false;      // n'afficher que les remplacements
+let travauxCctpNoLoca = false;     // n'afficher que les articles sans localisation
+let travauxCctpActiveChap = '';    // chapitre courant, suivi au défilement
+let _travauxScrollHooked = false;
+
 function renderTravauxCCTP() {
+  renderTravauxCctpTools();
   renderTravauxCctpLots();
   renderTravauxCctpBody();
+}
+function renderTravauxCctpTools() {
+  const setOn = (id, on) => { const b = document.getElementById(id); if (b) b.classList.toggle('is-on', !!on); };
+  setOn('travauxcctprempl', travauxCctpRempl);
+  setOn('travauxcctpnoloca', travauxCctpNoLoca);
+}
+// Structure filtrée : sert à la fois au sommaire et au document.
+function travauxCctpFiltered() {
+  const q = travauxSearchQuery.trim().toLowerCase();
+  const keep = (a, chapName, lotName) => {
+    const p = a.presc;
+    if (travauxCctpRempl && !p.remplacement) return false;
+    if (travauxCctpNoLoca && (p.everywhere || Object.keys(p.zones || {}).length || (p.localisation || '').trim())) return false;
+    if (q && !travauxArticleHaystack(p, chapName, lotName, a.num).includes(q)) return false;
+    return true;
+  };
+  const out = [];
+  for (const g of buildTravauxCCTP()) {
+    const chaps = [];
+    for (const chap of g.ouvrages) {
+      const arts = chap.articles.filter(a => keep(a, chap.ouvrage.name || '', g.name));
+      if (arts.length) chaps.push({ chap, arts });
+    }
+    if (chaps.length) out.push({ group: g, chaps });
+  }
+  return out;
 }
 function renderTravauxCctpLots() {
   const el = document.getElementById('travauxcctplots');
   if (!el) return;
   el.innerHTML = '';
-  const groups = buildTravauxCCTP().filter(g => g.ouvrages.length > 0);
-  if (!groups.length) return;
-  const mk = (id, label, color, count) => {
+  // Les compteurs suivent les filtres actifs mais IGNORENT le filtre de lot :
+  // on voit toujours combien d'articles chaque lot contiendrait.
+  const data = travauxCctpFiltered();
+  if (!data.length) return;
+  const mk = (id, label, color, count, active) => {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'travaux-lot-chip' + (travauxCctpLotId === id ? ' is-on' : '');
+    btn.className = 'tv-lot-chip' + (active ? ' is-on' : '');
     if (color) {
       const dot = document.createElement('span');
       dot.className = 'travaux-lot-dot';
       dot.style.background = color;
       btn.appendChild(dot);
     }
-    btn.appendChild(document.createTextNode(label));
-    if (count != null) {
-      const c = document.createElement('span');
-      c.className = 'travaux-lot-count';
-      c.textContent = String(count);
-      btn.appendChild(c);
-    }
-    btn.addEventListener('click', () => { travauxCctpLotId = id; renderTravauxCCTP(); });
+    const t = document.createElement('span');
+    t.className = 'tv-lot-chip-name';
+    t.textContent = label;
+    btn.appendChild(t);
+    const c = document.createElement('span');
+    c.className = 'tv-lot-count';
+    c.textContent = String(count);
+    btn.appendChild(c);
+    btn.addEventListener('click', () => {
+      travauxCctpLotId = id;
+      renderTravauxCCTP();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
     el.appendChild(btn);
   };
-  const totalArticles = groups.reduce((s, g) => s + g.ouvrages.reduce((n, c) => n + c.articles.length, 0), 0);
-  mk('', 'Tous les lots', '', totalArticles);
-  for (const g of groups) {
-    mk(g.id, g.num + ' · ' + g.name, g.color, g.ouvrages.reduce((n, c) => n + c.articles.length, 0));
+  const total = data.reduce((n, d) => n + d.chaps.reduce((m, c) => m + c.arts.length, 0), 0);
+  mk('', 'Tous les lots', '', total, !travauxCctpLotId);
+  for (const d of data) {
+    const co = d.group.companyName;
+    mk(d.group.id, d.group.num + ' · ' + d.group.name + (co ? ' — ' + co : ''), d.group.color,
+      d.chaps.reduce((m, c) => m + c.arts.length, 0), travauxCctpLotId === d.group.id);
   }
 }
 function renderTravauxCctpBody() {
   const body = document.getElementById('travauxcctpbody');
-  if (!body) return;
+  const nav = document.getElementById('travauxcctpnav');
+  const ctx = document.getElementById('travauxcctpcontext');
+  const wrap = document.querySelector('.cctp');
+  if (!body || !nav) return;
   body.innerHTML = '';
-  const groups = buildTravauxCCTP().filter(g => g.ouvrages.some(c => c.articles.length > 0));
-  if (!groups.length) {
-    body.appendChild(travauxEmptyMsg('Aucun article. Renseignez le Carnet (3e onglet) : un chapitre par famille d\'ouvrage, un article par prestation due.'));
+  nav.innerHTML = '';
+  if (ctx) { ctx.hidden = true; ctx.textContent = ''; }
+  travauxCctpActiveChap = '';
+
+  const q = travauxSearchQuery.trim();
+  const searching = q.length > 0;
+  if (wrap) wrap.classList.toggle('is-search', searching);
+
+  const data = travauxCctpFiltered();
+  if (!data.length) {
+    body.appendChild(travauxEmptyMsg(
+      (searching || travauxCctpRempl || travauxCctpNoLoca)
+        ? 'Aucun article ne correspond à cette recherche.'
+        : 'Aucun article. Renseignez le Carnet : un chapitre par famille d\'ouvrage, un article par prestation due.'));
     return;
   }
-  const q = travauxSearchQuery.trim().toLowerCase();
 
   // --- Mode recherche : résultats à plat, tous lots confondus ---
-  if (q) {
+  if (searching) {
     const hits = [];
-    for (const g of groups) {
-      for (const chap of g.ouvrages) {
-        for (const a of chap.articles) {
-          const hay = travauxArticleHaystack(a.presc, chap.ouvrage.name || '', g.name, a.num);
-          if (hay.includes(q)) hits.push({ group: g, chap, art: a });
-        }
-      }
-    }
+    for (const d of data) for (const c of d.chaps) for (const a of c.arts) hits.push({ g: d.group, chap: c.chap, a });
     const info = document.createElement('div');
-    info.className = 'travaux-search-info';
-    info.textContent = hits.length
-      ? `${hits.length} article${hits.length > 1 ? 's' : ''} trouvé${hits.length > 1 ? 's' : ''} pour « ${travauxSearchQuery.trim()} »`
-      : `Aucun article ne correspond à « ${travauxSearchQuery.trim()} ».`;
+    info.className = 'tv-result-info';
+    info.textContent = hits.length + ' article' + (hits.length > 1 ? 's' : '') + ' pour « ' + q + ' »';
     body.appendChild(info);
-    for (const h of hits) {
-      const art = buildTravauxArticle(h.art, { lot: h.group, chapName: h.chap.ouvrage.name });
-      body.appendChild(art);
-    }
+    for (const h of hits) body.appendChild(buildTravauxArticle(h.a, { lot: h.g, chapName: h.chap.ouvrage.name, q }));
     return;
   }
 
-  // --- Mode lecture : sommaire + articles du lot sélectionné ---
-  const shown = travauxCctpLotId ? groups.filter(g => g.id === travauxCctpLotId) : groups;
-  if (!shown.length) { travauxCctpLotId = ''; renderTravauxCCTP(); return; }
-  body.appendChild(buildTravauxSommaire(shown));
-  for (const g of shown) {
-    const lotHead = document.createElement('div');
-    lotHead.className = 'travaux-lot-head';
-    lotHead.style.setProperty('--lot-color', g.color);
-    const n = document.createElement('span');
-    n.className = 'travaux-lot-head-num';
-    n.textContent = 'LOT ' + g.num;
-    lotHead.appendChild(n);
-    const nm = document.createElement('span');
-    nm.className = 'travaux-lot-head-name';
-    nm.textContent = g.name;
-    lotHead.appendChild(nm);
-    body.appendChild(lotHead);
-    for (const chap of g.ouvrages) {
-      if (!chap.articles.length) continue;
-      const ch = document.createElement('h3');
-      ch.className = 'travaux-chap-head';
-      ch.id = 'travaux-chap-' + chap.ouvrage.id;
-      ch.textContent = chap.num + ' - ' + (chap.ouvrage.name || 'CHAPITRE SANS NOM').toUpperCase();
-      body.appendChild(ch);
-      for (const a of chap.articles) body.appendChild(buildTravauxArticle(a, {}));
+  // --- Mode lecture : sommaire + document du lot sélectionné ---
+  let shown = data;
+  if (travauxCctpLotId) {
+    shown = data.filter(d => d.group.id === travauxCctpLotId);
+    if (!shown.length) { travauxCctpLotId = ''; shown = data; }
+  }
+  for (const d of shown) {
+    nav.appendChild(buildCctpNavLot(d));
+    body.appendChild(buildCctpLotHead(d.group));
+    for (const { chap, arts } of d.chaps) {
+      const h = document.createElement('h3');
+      h.className = 'travaux-chap-head';
+      h.id = 'travaux-chap-' + chap.ouvrage.id;
+      h.dataset.chapId = chap.ouvrage.id;
+      h.dataset.context = 'LOT ' + d.group.num + ' › ' + chap.num + ' ' + (chap.ouvrage.name || 'CHAPITRE').toUpperCase();
+      h.textContent = chap.num + ' - ' + (chap.ouvrage.name || 'CHAPITRE SANS NOM').toUpperCase();
+      body.appendChild(h);
+      for (const a of arts) body.appendChild(buildTravauxArticle(a, {}));
     }
   }
+  hookTravauxCctpScroll();
+  requestAnimationFrame(updateTravauxCctpContext);
 }
-function buildTravauxSommaire(groups) {
-  const det = document.createElement('details');
-  det.className = 'travaux-sommaire';
-  det.open = true;
-  const sum = document.createElement('summary');
-  sum.textContent = 'Sommaire';
-  det.appendChild(sum);
-  const list = document.createElement('div');
-  list.className = 'travaux-sommaire-list';
-  for (const g of groups) {
-    for (const chap of g.ouvrages) {
-      if (!chap.articles.length) continue;
-      const h = document.createElement('div');
-      h.className = 'travaux-sommaire-chap';
-      h.textContent = chap.num + ' - ' + (chap.ouvrage.name || 'Chapitre').toUpperCase();
-      list.appendChild(h);
-      for (const a of chap.articles) {
-        const row = document.createElement('button');
-        row.type = 'button';
-        row.className = 'travaux-sommaire-art';
-        const num = document.createElement('span');
-        num.className = 'travaux-sommaire-num';
-        num.textContent = a.num;
-        row.appendChild(num);
-        row.appendChild(document.createTextNode(travauxArticleTitle(a.presc)));
-        row.addEventListener('click', () => {
-          const target = document.getElementById('travaux-art-' + a.presc.id);
-          if (target) {
-            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            target.classList.add('is-flash');
-            setTimeout(() => target.classList.remove('is-flash'), 1400);
-          }
-        });
-        list.appendChild(row);
-      }
-    }
+function buildCctpLotHead(g) {
+  const head = document.createElement('div');
+  head.className = 'travaux-lot-head';
+  head.style.setProperty('--lot-color', g.color);
+  const n = document.createElement('span');
+  n.className = 'travaux-lot-head-num';
+  n.textContent = 'LOT ' + g.num;
+  head.appendChild(n);
+  const nm = document.createElement('span');
+  nm.className = 'travaux-lot-head-name';
+  nm.textContent = g.name;
+  head.appendChild(nm);
+  if (g.companyName) {
+    const co = document.createElement('span');
+    co.className = 'travaux-lot-head-co';
+    co.textContent = g.companyName;
+    head.appendChild(co);
   }
-  det.appendChild(list);
-  return det;
+  return head;
+}
+// Sommaire : les chapitres du lot ; les articles du chapitre courant se
+// révèlent seuls (pure CSS, aucun re-rendu au défilement).
+function buildCctpNavLot(d) {
+  const box = document.createElement('div');
+  box.className = 'cctp-nav-lot';
+  const head = document.createElement('div');
+  head.className = 'cctp-nav-lot-head';
+  head.style.setProperty('--lot-color', d.group.color);
+  head.textContent = 'LOT ' + d.group.num + ' · ' + d.group.name;
+  box.appendChild(head);
+  if (d.group.companyName) {
+    const co = document.createElement('div');
+    co.className = 'cctp-nav-lot-co';
+    co.textContent = d.group.companyName;
+    box.appendChild(co);
+  }
+  for (const { chap, arts } of d.chaps) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'cctp-nav-chap';
+    b.dataset.chapId = chap.ouvrage.id;
+    const n = document.createElement('span');
+    n.className = 'cctp-nav-num';
+    n.textContent = chap.num;
+    b.appendChild(n);
+    const t = document.createElement('span');
+    t.className = 'cctp-nav-text';
+    t.textContent = (chap.ouvrage.name || 'Chapitre').toUpperCase();
+    b.appendChild(t);
+    const c = document.createElement('span');
+    c.className = 'tv-lot-count';
+    c.textContent = String(arts.length);
+    b.appendChild(c);
+    b.addEventListener('click', () => {
+      const h = document.getElementById('travaux-chap-' + chap.ouvrage.id);
+      if (h) h.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      closeTravauxCctpNav();
+    });
+    box.appendChild(b);
+    const arch = document.createElement('div');
+    arch.className = 'cctp-nav-arts';
+    for (const a of arts) {
+      const ab = document.createElement('button');
+      ab.type = 'button';
+      ab.className = 'cctp-nav-art';
+      const an = document.createElement('span');
+      an.className = 'cctp-nav-num';
+      an.textContent = a.num;
+      ab.appendChild(an);
+      const at = document.createElement('span');
+      at.className = 'cctp-nav-text';
+      at.textContent = travauxArticleTitle(a.presc);
+      ab.appendChild(at);
+      ab.addEventListener('click', () => { travauxFlashArticle(a.presc.id); closeTravauxCctpNav(); });
+      arch.appendChild(ab);
+    }
+    box.appendChild(arch);
+  }
+  return box;
+}
+function closeTravauxCctpNav() {
+  const wrap = document.querySelector('.cctp');
+  if (wrap) wrap.classList.remove('is-nav-open');
+  const btn = document.getElementById('travauxcctpsomm');
+  if (btn) btn.classList.remove('is-on');
+}
+// Repère de lecture : un bandeau collant rappelle en permanence dans quel
+// lot et quel chapitre on se trouve, et le sommaire suit.
+function hookTravauxCctpScroll() {
+  if (_travauxScrollHooked) return;
+  _travauxScrollHooked = true;
+  let raf = 0;
+  window.addEventListener('scroll', () => {
+    if (raf) return;
+    raf = requestAnimationFrame(() => { raf = 0; updateTravauxCctpContext(); });
+  }, { passive: true });
+}
+function updateTravauxCctpContext() {
+  const sub = document.getElementById('sub-cctp');
+  if (!sub || !sub.classList.contains('active')) return;
+  const bar = document.getElementById('travauxcctpcontext');
+  if (!bar) return;
+  const heads = Array.from(document.querySelectorAll('#travauxcctpbody .travaux-chap-head'));
+  if (!heads.length) { bar.hidden = true; return; }
+  const limit = 130;
+  let cur = heads[0];
+  for (const h of heads) { if (h.getBoundingClientRect().top <= limit) cur = h; else break; }
+  bar.hidden = false;
+  bar.textContent = cur.dataset.context || cur.textContent;
+  const id = cur.dataset.chapId || '';
+  if (id === travauxCctpActiveChap) return;
+  travauxCctpActiveChap = id;
+  let active = null;
+  document.querySelectorAll('.cctp-nav-chap').forEach(el => {
+    const on = el.dataset.chapId === id;
+    el.classList.toggle('is-active', on);
+    if (on) active = el;
+  });
+  // On déplace le sommaire dans son propre cadre (jamais la page).
+  const nav = document.getElementById('travauxcctpnav');
+  if (nav && active && nav.scrollHeight > nav.clientHeight) {
+    nav.scrollTop = Math.max(0, active.offsetTop - nav.clientHeight / 2);
+  }
 }
 // Un article de CCTP : numéro + titre, corps, détails, LOCALISATION.
 function buildTravauxArticle(a, opts) {
   const p = a.presc;
+  const q = (opts && opts.q) || '';
   const art = document.createElement('article');
   art.className = 'travaux-art';
   art.id = 'travaux-art-' + p.id;
@@ -8572,7 +8793,7 @@ function buildTravauxArticle(a, opts) {
   head.appendChild(num);
   const title = document.createElement('h4');
   title.className = 'travaux-art-title';
-  title.textContent = travauxArticleTitle(p);
+  travauxHiliteInto(title, travauxArticleTitle(p), q);
   head.appendChild(title);
   if (p.remplacement) {
     const tag = document.createElement('span');
@@ -8580,18 +8801,29 @@ function buildTravauxArticle(a, opts) {
     tag.textContent = 'Remplacement';
     head.appendChild(tag);
   }
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'travaux-art-copy';
+  copy.title = 'Copier / partager cet article';
+  copy.setAttribute('aria-label', 'Copier ou partager cet article');
+  copy.innerHTML = SVG_COPY;
+  copy.addEventListener('click', () => travauxShareOrCopy(a.num + ' ' + travauxArticleTitle(p), travauxArticleAsText(a)));
+  head.appendChild(copy);
   art.appendChild(head);
 
   // Fil d'Ariane (mode recherche : on rappelle lot + chapitre)
   if (opts && opts.lot) {
-    const crumb = document.createElement('div');
+    const crumb = document.createElement('button');
+    crumb.type = 'button';
     crumb.className = 'travaux-art-crumb';
+    crumb.title = 'Ouvrir ce lot dans le document';
     const dot = document.createElement('span');
     dot.className = 'travaux-lot-dot';
     dot.style.background = opts.lot.color;
     crumb.appendChild(dot);
     crumb.appendChild(document.createTextNode(
       'LOT ' + opts.lot.num + ' · ' + opts.lot.name + ' › ' + (opts.chapName || 'Chapitre')));
+    crumb.addEventListener('click', () => travauxGotoArticle(p.id));
     art.appendChild(crumb);
   }
 
@@ -8599,19 +8831,27 @@ function buildTravauxArticle(a, opts) {
   if (bodyTxt) {
     const pre = document.createElement('div');
     pre.className = 'travaux-art-body';
-    pre.textContent = bodyTxt;
+    travauxHiliteInto(pre, bodyTxt, q);
     art.appendChild(pre);
   }
-  const chips = buildTravauxSpecChips(p);
+  const chips = buildTravauxSpecChips(p, q);
   if (chips) art.appendChild(chips);
-  const loca = buildTravauxLocalisationBlock(p);
+  const loca = buildTravauxLocalisationBlock(p, q);
   if (loca) art.appendChild(loca);
   return art;
 }
 
-// ---------------------- Vue Visite (par lieu) ----------------------
+// ---------------------- Vue Visite : la fiche de lieu ----------------------
+let travauxVisiteSearch = '';
+let travauxVisiteLotId = '';          // '' = tous les lots
+let travauxVisiteRemplOnly = false;
+let travauxVisiteExpandAll = false;
+let travauxVisiteExpanded = new Set(); // articles dépliés un par un
+
 function renderTravauxVisite() {
-  renderTravauxVisitePicker();
+  renderTravauxVisiteLocBar();
+  renderTravauxVisiteHop();
+  renderTravauxVisiteTools();
   renderTravauxVisiteBody();
 }
 // Chemin de zones sélectionné, validé contre l'arborescence courante.
@@ -8637,46 +8877,102 @@ function getTravauxVisiteTarget() {
   if (!path.length) return null;
   return state.zones.find(z => z.id === path[path.length - 1]) || null;
 }
-const TRAVAUX_LEVEL_LABELS = ['Bâtiment', 'Niveau', 'Zone', 'Sous-zone', 'Détail'];
-function renderTravauxVisitePicker() {
-  const el = document.getElementById('travauxvisitepicker');
-  if (!el) return;
-  el.innerHTML = '';
+function setTravauxVisitePath(path) {
+  state.travauxVisitePath = path;
+  save();
+  renderTravauxVisite();
+}
+// Fil d'Ariane cliquable : compact quelle que soit la profondeur, chaque
+// segment remonte à son niveau.
+function renderTravauxVisiteLocBar() {
+  const bar = document.getElementById('travauxlocbar');
+  if (!bar) return;
+  bar.innerHTML = '';
   if (!state.zones.length) return;
   const path = getTravauxVisitePath();
-  let parent = null;
-  for (let i = 0; i <= path.length; i++) {
-    const opts = travauxZoneChildren(parent);
-    if (!opts.length) break;
-    const row = document.createElement('div');
-    row.className = 'travaux-loc-row' + (i > 0 ? ' travaux-loc-row-sub' : '');
-    const lvl = document.createElement('span');
-    lvl.className = 'travaux-loc-level';
-    lvl.textContent = TRAVAUX_LEVEL_LABELS[i] || ('Niveau ' + (i + 1));
-    row.appendChild(lvl);
-    for (const z of opts) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'travaux-loc-btn' + (i > 0 ? ' travaux-loc-btn-sub' : '') + (path[i] === z.id ? ' is-on' : '');
-      btn.textContent = z.name || '(zone)';
-      btn.addEventListener('click', () => {
-        // Re-cliquer sur une sous-zone déjà active remonte d'un cran.
-        if (path[i] === z.id && i > 0) state.travauxVisitePath = path.slice(0, i);
-        else state.travauxVisitePath = path.slice(0, i).concat(z.id);
-        save();
-        renderTravauxVisite();
-      });
-      row.appendChild(btn);
+  const pin = document.createElement('span');
+  pin.className = 'tv-pin';
+  pin.textContent = '📍';
+  bar.appendChild(pin);
+  const crumb = document.createElement('div');
+  crumb.className = 'tv-crumb';
+  path.forEach((zid, i) => {
+    if (i) {
+      const sep = document.createElement('span');
+      sep.className = 'tv-crumb-sep';
+      sep.textContent = '›';
+      crumb.appendChild(sep);
     }
-    el.appendChild(row);
-    if (!path[i]) break;
-    parent = path[i];
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tv-crumb-btn' + (i === path.length - 1 ? ' is-last' : '');
+    btn.textContent = travauxZoneName(zid);
+    btn.addEventListener('click', () => setTravauxVisitePath(path.slice(0, i + 1)));
+    crumb.appendChild(btn);
+  });
+  bar.appendChild(crumb);
+  const pick = document.createElement('button');
+  pick.type = 'button';
+  pick.className = 'tv-locpick';
+  pick.textContent = 'Changer de lieu';
+  pick.addEventListener('click', openTravauxZoneModal);
+  bar.appendChild(pick);
+}
+// Rangée de saut rapide : les sous-zones du lieu courant, ou à défaut ses
+// voisines — c'est le geste le plus fréquent en visite.
+function renderTravauxVisiteHop() {
+  const el = document.getElementById('travauxlochop');
+  if (!el) return;
+  el.innerHTML = '';
+  const path = getTravauxVisitePath();
+  const target = getTravauxVisiteTarget();
+  if (!target) return;
+  const kids = travauxZoneChildren(target.id);
+  const down = kids.length > 0;
+  const list = down ? kids : travauxZoneChildren(target.parentId || null);
+  if (list.length < 2 && !down) return;
+  if (!list.length) return;
+  const lbl = document.createElement('span');
+  lbl.className = 'tv-hop-label';
+  lbl.textContent = down ? 'Descendre' : 'Voisines';
+  el.appendChild(lbl);
+  const row = document.createElement('div');
+  row.className = 'tv-hop-row';
+  for (const z of list) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tv-hop-btn' + (!down && z.id === target.id ? ' is-on' : '');
+    btn.textContent = z.name || '(zone)';
+    btn.addEventListener('click', () => {
+      setTravauxVisitePath(down ? path.concat(z.id) : path.slice(0, -1).concat(z.id));
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+    row.appendChild(btn);
+  }
+  el.appendChild(row);
+}
+function renderTravauxVisiteTools() {
+  const target = getTravauxVisiteTarget();
+  const hasKids = target ? travauxZoneChildren(target.id).length > 0 : false;
+  const exp = document.getElementById('travauxvisiteexpand');
+  if (exp) {
+    exp.classList.toggle('is-on', travauxVisiteExpandAll);
+    exp.textContent = travauxVisiteExpandAll ? 'Tout replier' : 'Tout déplier';
+  }
+  const rp = document.getElementById('travauxvisiterempl');
+  if (rp) rp.classList.toggle('is-on', travauxVisiteRemplOnly);
+  const dp = document.getElementById('travauxvisitedeep');
+  if (dp) {
+    dp.hidden = !hasKids;
+    dp.classList.toggle('is-on', hasKids && !!state.travauxVisiteDeep);
   }
 }
 function renderTravauxVisiteBody() {
   const body = document.getElementById('travauxvisitebody');
+  const lotsEl = document.getElementById('travauxvisitelots');
   if (!body) return;
   body.innerHTML = '';
+  if (lotsEl) lotsEl.innerHTML = '';
   if (!state.zones.length) {
     body.appendChild(travauxEmptyMsg('Aucune zone. Créez votre arborescence dans Données → Zones, puis renseignez le Carnet.'));
     return;
@@ -8684,66 +8980,104 @@ function renderTravauxVisiteBody() {
   const target = getTravauxVisiteTarget();
   if (!target) return;
 
-  // Fil d'Ariane + bascule « inclure les sous-zones »
-  const bar = document.createElement('div');
-  bar.className = 'travaux-visite-bar';
-  const crumb = document.createElement('div');
-  crumb.className = 'travaux-visite-crumb';
-  crumb.textContent = '📍 ' + travauxZoneLabel(target.id);
-  bar.appendChild(crumb);
+  // Périmètre : la zone et ses ancêtres (héritage descendant) ; en option
+  // ses descendants, pour la vue d'ensemble d'un bâtiment ou d'un niveau.
   const hasKids = travauxZoneChildren(target.id).length > 0;
-  if (hasKids) {
-    const lbl = document.createElement('label');
-    lbl.className = 'travaux-deep-toggle' + (state.travauxVisiteDeep ? ' is-on' : '');
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.checked = !!state.travauxVisiteDeep;
-    cb.addEventListener('change', () => { state.travauxVisiteDeep = cb.checked; save(); renderTravauxVisiteBody(); });
-    lbl.appendChild(cb);
-    const t = document.createElement('span');
-    t.textContent = 'Inclure les sous-zones';
-    lbl.appendChild(t);
-    bar.appendChild(lbl);
-  }
-  body.appendChild(bar);
-
-  // Périmètre : la zone + ses ancêtres (héritage descendant), et
-  // optionnellement ses descendants (vue d'ensemble d'un bâtiment).
   const deep = hasKids && !!state.travauxVisiteDeep;
   const scope = travauxZoneAncestors(target.id);
   const descendants = new Set();
-  if (deep) for (const zid of getDescendantZones(target.id)) { if (zid !== target.id) { scope.add(zid); descendants.add(zid); } }
+  if (deep) for (const zid of getDescendantZones(target.id)) if (zid !== target.id) { scope.add(zid); descendants.add(zid); }
+  const q = travauxVisiteSearch.trim().toLowerCase();
   const applies = (p) => p.everywhere || Object.keys(p.zones || {}).some(z => scope.has(z));
   const viaSub = (p) => {
     if (p.everywhere) return '';
     const ids = Object.keys(p.zones || {});
     if (ids.some(z => !descendants.has(z) && scope.has(z))) return '';
     const sub = ids.find(z => descendants.has(z));
-    return sub ? travauxZoneName(sub) : '';
+    return sub ? travauxZoneLabel(sub) : '';
   };
 
-  const groups = buildTravauxCCTP();
-  let any = false;
-  for (const g of groups) {
+  // Ce qui est dû ici, avant filtre de lot (pour des compteurs stables).
+  const all = [];
+  for (const g of buildTravauxCCTP()) {
     const chaps = [];
     for (const chap of g.ouvrages) {
-      const arts = chap.articles.filter(a => applies(a.presc));
+      const arts = chap.articles.filter(a => {
+        const p = a.presc;
+        if (!applies(p)) return false;
+        if (travauxVisiteRemplOnly && !p.remplacement) return false;
+        if (q && !travauxArticleHaystack(p, chap.ouvrage.name || '', g.name, a.num).includes(q)) return false;
+        return true;
+      });
       if (arts.length) chaps.push({ chap, arts });
     }
-    if (!chaps.length) continue;
-    any = true;
-    body.appendChild(buildTravauxVisiteLotCard(g, chaps, viaSub));
+    if (chaps.length) all.push({ group: g, chaps });
   }
-  if (!any) {
+  const total = all.reduce((n, d) => n + d.chaps.reduce((m, c) => m + c.arts.length, 0), 0);
+
+  // Synthèse : combien de prestations, réparties sur quels lots.
+  const synth = document.createElement('div');
+  synth.className = 'tv-synth';
+  const strong = document.createElement('span');
+  strong.className = 'tv-synth-count';
+  strong.textContent = String(total);
+  synth.appendChild(strong);
+  const lbl = document.createElement('span');
+  lbl.textContent = ' prestation' + (total > 1 ? 's' : '') + ' due' + (total > 1 ? 's' : '')
+    + (deep ? ' ici et dans les sous-zones' : ' ici')
+    + (all.length ? ' · ' + all.length + ' lot' + (all.length > 1 ? 's' : '') : '');
+  synth.appendChild(lbl);
+  body.appendChild(synth);
+
+  if (lotsEl && all.length > 1) {
+    const mk = (id, label, color, count, active) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tv-lot-chip' + (active ? ' is-on' : '');
+      if (color) {
+        const dot = document.createElement('span');
+        dot.className = 'travaux-lot-dot';
+        dot.style.background = color;
+        btn.appendChild(dot);
+      }
+      const t = document.createElement('span');
+      t.className = 'tv-lot-chip-name';
+      t.textContent = label;
+      btn.appendChild(t);
+      const c = document.createElement('span');
+      c.className = 'tv-lot-count';
+      c.textContent = String(count);
+      btn.appendChild(c);
+      btn.addEventListener('click', () => { travauxVisiteLotId = id; renderTravauxVisiteBody(); });
+      lotsEl.appendChild(btn);
+    };
+    mk('', 'Tous', '', total, !travauxVisiteLotId);
+    for (const d of all) {
+      const co = d.group.companyName;
+      mk(d.group.id, d.group.num + ' · ' + d.group.name + (co ? ' — ' + co : ''), d.group.color,
+        d.chaps.reduce((m, c) => m + c.arts.length, 0), travauxVisiteLotId === d.group.id);
+    }
+  }
+
+  let shown = all;
+  if (travauxVisiteLotId) {
+    shown = all.filter(d => d.group.id === travauxVisiteLotId);
+    if (!shown.length) { travauxVisiteLotId = ''; shown = all; }
+  }
+  if (!total) {
     body.appendChild(travauxEmptyMsg(
-      'Rien de prescrit pour ce lieu' + (hasKids && !deep ? ' — essayez « Inclure les sous-zones ».' : '. Renseignez le Carnet.')));
+      (q || travauxVisiteRemplOnly) ? 'Aucune prestation ne correspond à ce filtre dans ce lieu.'
+        : 'Rien de prescrit pour ce lieu' + (hasKids && !deep ? ' — essayez « Sous-zones ».' : '. Renseignez le Carnet.')));
+    return;
   }
+  for (const d of shown) body.appendChild(buildTravauxVisiteLotCard(d, viaSub, q));
 }
-function buildTravauxVisiteLotCard(g, chaps, viaSub) {
+function buildTravauxVisiteLotCard(d, viaSub, q) {
+  const g = d.group;
   const card = document.createElement('section');
   card.className = 'travaux-visite-lot';
   card.style.setProperty('--lot-color', g.color);
-  const nbArts = chaps.reduce((n, c) => n + c.arts.length, 0);
+  const nbArts = d.chaps.reduce((n, c) => n + c.arts.length, 0);
 
   const head = document.createElement('div');
   head.className = 'travaux-visite-lot-head';
@@ -8751,26 +9085,35 @@ function buildTravauxVisiteLotCard(g, chaps, viaSub) {
   dot.className = 'travaux-lot-dot';
   dot.style.background = g.color;
   head.appendChild(dot);
+  const nmBox = document.createElement('div');
+  nmBox.className = 'travaux-visite-lot-id';
   const nm = document.createElement('span');
   nm.className = 'travaux-visite-lot-name';
   nm.textContent = 'LOT ' + g.num + ' · ' + g.name;
-  head.appendChild(nm);
+  nmBox.appendChild(nm);
+  if (g.companyName) {
+    const co = document.createElement('span');
+    co.className = 'travaux-visite-lot-co';
+    co.textContent = g.companyName;
+    nmBox.appendChild(co);
+  }
+  head.appendChild(nmBox);
   const cnt = document.createElement('span');
   cnt.className = 'travaux-visite-lot-count';
   cnt.textContent = nbArts + ' prest.';
   head.appendChild(cnt);
   card.appendChild(head);
 
-  for (const { chap, arts } of chaps) {
+  for (const { chap, arts } of d.chaps) {
     const ch = document.createElement('div');
     ch.className = 'travaux-visite-chap';
     ch.textContent = chap.num + ' - ' + (chap.ouvrage.name || 'Chapitre').toUpperCase();
     card.appendChild(ch);
-    for (const a of arts) card.appendChild(buildTravauxVisiteLine(a, viaSub));
+    for (const a of arts) card.appendChild(buildTravauxVisiteLine(a, viaSub, q));
   }
   return card;
 }
-function buildTravauxVisiteLine(a, viaSub) {
+function buildTravauxVisiteLine(a, viaSub, q) {
   const p = a.presc;
   const line = document.createElement('div');
   line.className = 'travaux-visite-line';
@@ -8783,7 +9126,7 @@ function buildTravauxVisiteLine(a, viaSub) {
   top.appendChild(num);
   const txt = document.createElement('span');
   txt.className = 'travaux-sheet-text';
-  txt.textContent = travauxArticleTitle(p);
+  travauxHiliteInto(txt, travauxArticleTitle(p), q);
   top.appendChild(txt);
   if (p.remplacement) {
     const tag = document.createElement('span');
@@ -8800,21 +9143,45 @@ function buildTravauxVisiteLine(a, viaSub) {
     v.textContent = '↳ uniquement : ' + via;
     line.appendChild(v);
   }
-  const chips = buildTravauxSpecChips(p);
+  const chips = buildTravauxSpecChips(p, q);
   if (chips) line.appendChild(chips);
 
   const bodyTxt = travauxArticleBody(p).trim();
   const note = (p.localisation || '').trim();
-  if (bodyTxt || note) {
-    const det = document.createElement('details');
-    det.className = 'travaux-art-detail';
-    const sum = document.createElement('summary');
-    sum.textContent = 'Détail de la prestation';
-    det.appendChild(sum);
+  const hasDetail = !!(bodyTxt || note);
+  const open = travauxVisiteExpandAll || travauxVisiteExpanded.has(p.id);
+
+  const actions = document.createElement('div');
+  actions.className = 'tv-line-actions';
+  if (hasDetail) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'tv-line-btn tv-line-more' + (open ? ' is-on' : '');
+    more.textContent = open ? 'Masquer le détail' : 'Détail';
+    more.addEventListener('click', () => {
+      if (travauxVisiteExpanded.has(p.id)) travauxVisiteExpanded.delete(p.id);
+      else travauxVisiteExpanded.add(p.id);
+      travauxVisiteExpandAll = false;
+      renderTravauxVisiteTools();
+      renderTravauxVisiteBody();
+    });
+    actions.appendChild(more);
+  }
+  const goto = document.createElement('button');
+  goto.type = 'button';
+  goto.className = 'tv-line-btn';
+  goto.textContent = 'Article complet →';
+  goto.addEventListener('click', () => travauxGotoArticle(p.id));
+  actions.appendChild(goto);
+  line.appendChild(actions);
+
+  if (hasDetail && open) {
+    const det = document.createElement('div');
+    det.className = 'tv-line-detail';
     if (bodyTxt) {
       const b = document.createElement('div');
       b.className = 'travaux-art-body';
-      b.textContent = bodyTxt;
+      travauxHiliteInto(b, bodyTxt, q);
       det.appendChild(b);
     }
     if (note) {
@@ -8826,13 +9193,124 @@ function buildTravauxVisiteLine(a, viaSub) {
       n.appendChild(h);
       const t = document.createElement('p');
       t.className = 'travaux-loca-note';
-      t.textContent = note;
+      travauxHiliteInto(t, note, q);
       n.appendChild(t);
       det.appendChild(n);
     }
     line.appendChild(det);
   }
   return line;
+}
+// Fiche de visite en texte : ce que l'on envoie depuis le chantier.
+function travauxVisiteAsText() {
+  const target = getTravauxVisiteTarget();
+  if (!target) return '';
+  const lines = ['FICHE DE VISITE — ' + travauxZoneLabel(target.id), ''];
+  const cards = document.querySelectorAll('#travauxvisitebody .travaux-visite-lot');
+  if (!cards.length) return lines.join('\n') + 'Aucune prestation due.';
+  // On repart des données (et non du DOM) pour inclure les détails masqués.
+  const scope = travauxZoneAncestors(target.id);
+  const deep = !!state.travauxVisiteDeep && travauxZoneChildren(target.id).length > 0;
+  if (deep) for (const zid of getDescendantZones(target.id)) scope.add(zid);
+  const q = travauxVisiteSearch.trim().toLowerCase();
+  for (const g of buildTravauxCCTP()) {
+    if (travauxVisiteLotId && g.id !== travauxVisiteLotId) continue;
+    const chunks = [];
+    for (const chap of g.ouvrages) {
+      const arts = chap.articles.filter(a => {
+        const p = a.presc;
+        if (!(p.everywhere || Object.keys(p.zones || {}).some(z => scope.has(z)))) return false;
+        if (travauxVisiteRemplOnly && !p.remplacement) return false;
+        if (q && !travauxArticleHaystack(p, chap.ouvrage.name || '', g.name, a.num).includes(q)) return false;
+        return true;
+      });
+      if (!arts.length) continue;
+      chunks.push('  ' + chap.num + ' - ' + (chap.ouvrage.name || 'Chapitre').toUpperCase());
+      for (const a of arts) chunks.push('    ' + travauxArticleAsText(a).split('\n').join('\n    '));
+    }
+    if (!chunks.length) continue;
+    lines.push('LOT ' + g.num + ' · ' + g.name + (g.companyName ? ' — ' + g.companyName : ''));
+    lines.push(chunks.join('\n'), '');
+  }
+  return lines.join('\n');
+}
+
+// ---------------------- Sélecteur de lieu (modale arborescente) ----------------------
+let travauxZoneModalFilter = '';
+function openTravauxZoneModal() {
+  const m = document.getElementById('travauxzonemodal');
+  if (!m) return;
+  travauxZoneModalFilter = '';
+  const inp = document.getElementById('travauxzonemodalsearch');
+  if (inp) inp.value = '';
+  m.hidden = false;
+  renderTravauxZoneModal();
+  if (inp) requestAnimationFrame(() => inp.focus());
+}
+function closeTravauxZoneModal() {
+  const m = document.getElementById('travauxzonemodal');
+  if (m) m.hidden = true;
+}
+function renderTravauxZoneModal() {
+  const list = document.getElementById('travauxzonepicklist');
+  if (!list) return;
+  list.innerHTML = '';
+  const q = travauxZoneModalFilter.trim().toLowerCase();
+  const ordered = getZonesOrdered();
+  // On garde le chemin d'accès des zones trouvées, pour ne jamais afficher
+  // une zone orpheline de son bâtiment.
+  let visible = null;
+  if (q) {
+    visible = new Set();
+    const byId = new Map(state.zones.map(z => [z.id, z]));
+    for (const { zone } of ordered) {
+      if (!(zone.name || '').toLowerCase().includes(q)) continue;
+      let cur = zone, guard = 0;
+      while (cur && guard++ < 40) { visible.add(cur.id); cur = cur.parentId ? byId.get(cur.parentId) : null; }
+    }
+  }
+  const currentId = (getTravauxVisiteTarget() || {}).id;
+  let shown = 0;
+  for (const { zone, depth } of ordered) {
+    if (visible && !visible.has(zone.id)) continue;
+    shown++;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tv-zonepick-row tv-zonepick-d' + Math.min(depth, 6)
+      + (zone.id === currentId ? ' is-on' : '');
+    const nm = document.createElement('span');
+    nm.className = 'tv-zonepick-name';
+    travauxHiliteInto(nm, zone.name || '(zone)', q);
+    btn.appendChild(nm);
+    const nb = travauxCountPrescriptionsForZone(zone.id);
+    if (nb) {
+      const c = document.createElement('span');
+      c.className = 'tv-lot-count';
+      c.textContent = String(nb);
+      btn.appendChild(c);
+    }
+    btn.addEventListener('click', () => {
+      closeTravauxZoneModal();
+      travauxGotoZone(zone.id);
+    });
+    list.appendChild(btn);
+  }
+  if (!shown) {
+    const e = document.createElement('p');
+    e.className = 'carnet-hint';
+    e.textContent = state.zones.length ? 'Aucune zone ne correspond.' : 'Créez vos zones dans Données → Zones.';
+    list.appendChild(e);
+  }
+}
+// Nombre de prestations dues dans une zone (héritage compris) — affiché
+// dans le sélecteur pour repérer les lieux chargés.
+function travauxCountPrescriptionsForZone(zoneId) {
+  const scope = travauxZoneAncestors(zoneId);
+  let n = 0;
+  for (const p of getTravauxPrescriptions()) {
+    if (p.everywhere || Object.keys(p.zones || {}).some(z => scope.has(z))) n++;
+  }
+  return n;
 }
 
 // ---------------------- Vue Carnet (éditeur de CCTP) ----------------------
@@ -14521,15 +14999,60 @@ function init() {
     });
   }
 
-  // ----- Travaux : recherche dans le CCTP -----
-  // L'input reste dans le DOM (jamais re-rendu) : le focus et le curseur
-  // de saisie sont préservés pendant la frappe.
-  const travauxSearchInput = document.getElementById('travauxsearch');
-  if (travauxSearchInput) {
-    travauxSearchInput.addEventListener('input', () => {
-      travauxSearchQuery = travauxSearchInput.value;
-      renderTravauxCctpBody();
-    });
+  // ----- Travaux : barres d'outils des vues Visite et CCTP -----
+  // Les champs et boutons vivent dans le HTML et ne sont jamais recréés :
+  // la saisie ne perd donc jamais le focus, et l'état visuel est piloté par
+  // les fonctions de rendu (classe « is-on »).
+  const onInput = (id, fn) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', () => fn(el));
+  };
+  const onClick = (id, fn) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('click', () => fn(el));
+  };
+
+  // CCTP : recherche, filtres rapides, sommaire (mobile)
+  onInput('travauxsearch', (el) => {
+    travauxSearchQuery = el.value;
+    renderTravauxCctpLots();
+    renderTravauxCctpBody();
+  });
+  onClick('travauxcctprempl', () => { travauxCctpRempl = !travauxCctpRempl; renderTravauxCCTP(); });
+  onClick('travauxcctpnoloca', () => { travauxCctpNoLoca = !travauxCctpNoLoca; renderTravauxCCTP(); });
+  onClick('travauxcctpsomm', (el) => {
+    const wrap = document.querySelector('.cctp');
+    if (!wrap) return;
+    const open = wrap.classList.toggle('is-nav-open');
+    el.classList.toggle('is-on', open);
+  });
+
+  // Visite : recherche dans le lieu, filtres, dépliage, partage
+  onInput('travauxvisitesearch', (el) => { travauxVisiteSearch = el.value; renderTravauxVisiteBody(); });
+  onClick('travauxvisiterempl', () => { travauxVisiteRemplOnly = !travauxVisiteRemplOnly; renderTravauxVisite(); });
+  onClick('travauxvisitedeep', () => {
+    state.travauxVisiteDeep = !state.travauxVisiteDeep;
+    save();
+    renderTravauxVisite();
+  });
+  onClick('travauxvisiteexpand', () => {
+    travauxVisiteExpandAll = !travauxVisiteExpandAll;
+    travauxVisiteExpanded.clear();
+    renderTravauxVisiteTools();
+    renderTravauxVisiteBody();
+  });
+  onClick('travauxvisiteshare', () => {
+    const target = getTravauxVisiteTarget();
+    if (!target) { showToast('Aucun lieu sélectionné', 'error'); return; }
+    travauxShareOrCopy('Fiche de visite — ' + travauxZoneLabel(target.id), travauxVisiteAsText());
+  });
+
+  // Sélecteur de lieu (modale)
+  onInput('travauxzonemodalsearch', (el) => { travauxZoneModalFilter = el.value; renderTravauxZoneModal(); });
+  onClick('travauxzonemodalclose', closeTravauxZoneModal);
+  const zoneModal = document.getElementById('travauxzonemodal');
+  if (zoneModal) {
+    zoneModal.addEventListener('click', (e) => { if (e.target === zoneModal) closeTravauxZoneModal(); });
   }
 
   // ----- Devis : barre de défilement des onglets + délégation -----

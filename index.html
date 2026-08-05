@@ -491,22 +491,47 @@
         <button class="seg-btn" data-group="travaux" data-sub="carnet" role="tab">Carnet</button>
       </div>
 
-      <!-- Sous-page : Visite (par lieu) -->
+      <!-- Sous-page : Visite (fiche du lieu où l'on se trouve) -->
       <div class="sub-page active" id="sub-visite" data-group="travaux">
-        <p class="section-help">Descendez dans l'arborescence jusqu'au lieu où vous êtes : toutes les prestations dues s'affichent, classées par lot.</p>
-        <div class="travaux-loc-picker" id="travauxvisitepicker"></div>
+        <div class="tv-locbar" id="travauxlocbar"></div>
+        <div class="tv-hop" id="travauxlochop"></div>
+        <div class="tv-toolbar">
+          <div class="tv-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5Zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14Z"/></svg>
+            <input type="search" id="travauxvisitesearch" placeholder="Filtrer les prestations de ce lieu…" autocomplete="off">
+          </div>
+          <div class="tv-tools">
+            <button type="button" class="tv-tool" id="travauxvisitedeep">Sous-zones</button>
+            <button type="button" class="tv-tool" id="travauxvisiterempl">Remplacements</button>
+            <button type="button" class="tv-tool" id="travauxvisiteexpand">Tout déplier</button>
+            <button type="button" class="tv-tool" id="travauxvisiteshare">Partager</button>
+          </div>
+        </div>
+        <div class="tv-lot-chips" id="travauxvisitelots"></div>
         <div id="travauxvisitebody"></div>
       </div>
 
-      <!-- Sous-page : CCTP (par lot, articles numérotés) -->
+      <!-- Sous-page : CCTP (le document, par lot, articles numérotés) -->
       <div class="sub-page" id="sub-cctp" data-group="travaux">
-        <p class="section-help">Le CCTP du chantier : choisissez un lot ou cherchez une prestation pour retrouver son article complet et sa localisation.</p>
-        <div class="travaux-search">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5Zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14Z"/></svg>
-          <input type="search" id="travauxsearch" placeholder="Rechercher une prestation, un détail, une localisation…" autocomplete="off">
+        <div class="tv-toolbar">
+          <div class="tv-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5Zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14Z"/></svg>
+            <input type="search" id="travauxsearch" placeholder="Rechercher une prestation, un détail, une localisation…" autocomplete="off">
+          </div>
+          <div class="tv-tools">
+            <button type="button" class="tv-tool tv-tool-somm" id="travauxcctpsomm">Sommaire</button>
+            <button type="button" class="tv-tool" id="travauxcctprempl">Remplacements</button>
+            <button type="button" class="tv-tool" id="travauxcctpnoloca">Sans localisation</button>
+          </div>
         </div>
-        <div class="travaux-lot-chips" id="travauxcctplots"></div>
-        <div id="travauxcctpbody"></div>
+        <div class="tv-lot-chips" id="travauxcctplots"></div>
+        <div class="cctp">
+          <aside class="cctp-nav" id="travauxcctpnav"></aside>
+          <div class="cctp-doc">
+            <div class="cctp-context" id="travauxcctpcontext" hidden></div>
+            <div id="travauxcctpbody"></div>
+          </div>
+        </div>
       </div>
 
       <!-- Sous-page : Carnet (paramétrage) -->
@@ -588,6 +613,23 @@
   <div class="toast" id="toast" hidden></div>
 
   <!-- ============== Modale CACES ============== -->
+  <!-- Sélecteur de lieu de la vue Visite (arborescence complète + recherche) -->
+  <div class="modal-overlay" id="travauxzonemodal" hidden>
+    <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="travauxzonemodaltitle">
+      <div class="modal-header">
+        <h3 class="modal-title" id="travauxzonemodaltitle">Où êtes-vous ?</h3>
+        <button class="modal-close" id="travauxzonemodalclose" type="button" aria-label="Fermer">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="tv-search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5Zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14Z"/></svg>
+          <input type="search" id="travauxzonemodalsearch" placeholder="Bâtiment, niveau, logement…" autocomplete="off">
+        </div>
+        <div class="tv-zonepick" id="travauxzonepicklist"></div>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-overlay" id="cacesmodal" hidden>
     <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="cacesmodaltitle">
       <div class="modal-header">

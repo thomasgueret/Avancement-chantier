@@ -5001,8 +5001,20 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   white-space: pre-wrap;
 }
 .travaux-loca-all { margin: 0; font-size: 13.5px; font-weight: 700; color: var(--accent-2); }
-.travaux-loca-list { margin: 5px 0 0; padding-left: 18px; }
-.travaux-loca-list li { font-size: 13px; color: var(--text-2); line-height: 1.5; }
+/* Zones cliquables : elles ouvrent la vue Visite sur le lieu concerné. */
+.travaux-loca-zones { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-top: 6px; }
+.travaux-loca-zone {
+  max-width: 100%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  border-radius: 8px;
+  padding: 4px 11px;
+  font-size: 12.5px; font-weight: 600;
+  text-align: left;
+}
+.travaux-loca-zone::before { content: '📍 '; }
+.travaux-loca-zone:hover { color: var(--accent-2); border-color: var(--border-strong); }
 
 .travaux-art-body {
   margin-top: 8px;
@@ -5010,108 +5022,197 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   white-space: pre-wrap;
 }
 
-/* ---------- Vue CCTP (consultation par lot) ---------- */
-.travaux-search {
-  position: relative;
-  display: flex; align-items: center;
+/* ---------- Barres d'outils communes aux vues Visite et CCTP ---------- */
+.tv-toolbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   margin-bottom: 10px;
 }
-.travaux-search svg {
+.tv-search { position: relative; display: flex; align-items: center; flex: 1 1 260px; min-width: 0; }
+.tv-search svg {
   position: absolute; left: 12px;
-  width: 18px; height: 18px; fill: var(--text-3);
+  width: 17px; height: 17px; fill: var(--text-3);
   pointer-events: none;
 }
-.travaux-search input {
+.tv-search input {
   flex: 1; min-width: 0;
   border: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--text);
   border-radius: 999px;
-  padding: 11px 14px 11px 38px;
+  padding: 10px 14px 10px 37px;
   font-size: 14px;
 }
-.travaux-search input:focus { outline: none; border-color: var(--accent); background: var(--surface-2); }
-.travaux-search input::placeholder { color: var(--text-3); }
+.tv-search input:focus { outline: none; border-color: var(--accent); background: var(--surface-2); }
+.tv-search input::placeholder { color: var(--text-3); }
 
-.travaux-lot-chips {
-  display: flex; gap: 8px; flex-wrap: wrap;
-  margin-bottom: 14px;
+.tv-tools { display: flex; gap: 6px; flex-wrap: wrap; }
+.tv-tool {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-2);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 12.5px; font-weight: 700;
+  white-space: nowrap;
 }
-.travaux-lot-chip {
+.tv-tool:hover { color: var(--accent); border-color: var(--accent); }
+.tv-tool.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tv-tool[hidden] { display: none; }
+/* Le bouton « Sommaire » n'a de sens que là où le sommaire est replié. */
+@media (min-width: 940px) { .tv-tool-somm { display: none; } }
+
+.tv-lot-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.tv-lot-chip {
   display: inline-flex; align-items: center; gap: 7px;
+  max-width: 100%;
   border: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--text-2);
   border-radius: 999px;
   padding: 7px 13px;
   font-size: 13px; font-weight: 700;
-  cursor: pointer;
 }
-.travaux-lot-chip.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
-.travaux-lot-count {
+.tv-lot-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tv-lot-chip.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tv-lot-count {
+  flex-shrink: 0;
   background: var(--surface-3); color: var(--text-3);
   border-radius: 999px; padding: 1px 7px;
   font-size: 11px; font-weight: 800;
 }
-.travaux-lot-chip.is-on .travaux-lot-count { background: rgba(0,0,0,0.25); color: #fff; }
+.tv-lot-chip.is-on .tv-lot-count { background: rgba(0,0,0,0.25); color: #fff; }
 
-.travaux-sommaire {
+/* Sur téléphone, outils et lots défilent horizontalement plutôt que de
+   s'empiler : la fiche reste immédiatement visible sous la barre. */
+@media (max-width: 700px) {
+  .tv-tools, .tv-lot-chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 3px;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tv-tool, .tv-lot-chip { flex: 0 0 auto; }
+  .tv-lot-chip-name { max-width: 42vw; }
+}
+
+.tv-mark {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+.tv-result-info { margin: 2px 0 12px; font-size: 13px; font-weight: 700; color: var(--text-3); }
+
+/* ---------- Vue CCTP : sommaire figé + document ---------- */
+.cctp { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
+@media (min-width: 940px) {
+  .cctp { grid-template-columns: minmax(240px, 300px) 1fr; }
+  .cctp.is-search { grid-template-columns: 1fr; }
+  .cctp.is-search .cctp-nav { display: none; }
+}
+.cctp-nav {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 14px;
-  margin-bottom: 16px;
-  overflow: hidden;
+  padding: 8px;
+  min-width: 0;
 }
-.travaux-sommaire > summary {
-  padding: 11px 15px;
-  background: var(--surface-2);
-  font-size: 12px; font-weight: 800; letter-spacing: 0.06em;
-  text-transform: uppercase; color: var(--text-2);
-  cursor: pointer;
-  list-style: none;
+@media (min-width: 940px) {
+  .cctp-nav {
+    position: sticky;
+    top: calc(var(--header-h) + 12px);
+    max-height: calc(100vh - var(--header-h) - var(--tabbar-h) - 32px);
+    overflow-y: auto;
+  }
 }
-.travaux-sommaire > summary::-webkit-details-marker { display: none; }
-.travaux-sommaire > summary::before { content: '▸ '; color: var(--accent); }
-.travaux-sommaire[open] > summary::before { content: '▾ '; }
-.travaux-sommaire-list { padding: 8px 6px 10px; }
-.travaux-sommaire-chap {
-  padding: 9px 10px 4px;
-  font-size: 12px; font-weight: 800; letter-spacing: 0.04em;
-  color: var(--text-3);
+/* Sur mobile, le sommaire est replié derrière le bouton « Sommaire ». */
+@media (max-width: 939px) {
+  .cctp-nav { display: none; }
+  .cctp.is-nav-open .cctp-nav { display: block; }
+  .cctp.is-search .cctp-nav { display: none; }
 }
-.travaux-sommaire-art {
-  display: flex; align-items: baseline; gap: 9px;
-  width: 100%; text-align: left;
+.cctp-nav-lot { margin-bottom: 8px; }
+.cctp-nav-lot-head {
+  border-left: 3px solid var(--lot-color, var(--accent));
+  padding: 6px 8px 2px;
+  font-size: 11px; font-weight: 800; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text);
+}
+.cctp-nav-lot-co {
+  padding: 0 8px 6px 11px;
+  font-size: 11px; font-weight: 700; color: var(--accent-2);
+}
+.cctp-nav-chap {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%;
   border: none; background: transparent;
-  color: var(--text-2);
-  font-size: 13.5px; line-height: 1.4;
-  padding: 6px 10px;
   border-radius: 8px;
-  cursor: pointer;
+  padding: 7px 8px;
+  text-align: left;
+  color: var(--text-2);
+  font-size: 12px; font-weight: 700;
+  line-height: 1.3;
 }
-.travaux-sommaire-art:hover { background: var(--surface-2); color: var(--text); }
-.travaux-sommaire-num {
+.cctp-nav-chap:hover { background: var(--surface-2); color: var(--text); }
+.cctp-nav-chap.is-active { background: var(--accent-soft); color: var(--accent-2); box-shadow: inset 0 0 0 1px #4a2c18; }
+.cctp-nav-num {
   flex-shrink: 0;
-  color: var(--accent-2); font-weight: 800; font-size: 12px;
+  color: var(--accent-2);
+  font-size: 11px; font-weight: 800;
   font-variant-numeric: tabular-nums;
-  min-width: 44px;
+  min-width: 34px;
 }
+.cctp-nav-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Les articles du chapitre courant se révèlent seuls : aucun re-rendu
+   pendant le défilement, c'est le sélecteur CSS qui suit. */
+.cctp-nav-arts { display: none; padding-left: 12px; }
+.cctp-nav-chap.is-active + .cctp-nav-arts { display: block; }
+.cctp-nav-art {
+  display: flex; align-items: baseline; gap: 8px;
+  width: 100%;
+  border: none; background: transparent;
+  border-radius: 7px;
+  padding: 5px 8px;
+  text-align: left;
+  color: var(--text-3);
+  font-size: 11.5px; font-weight: 600;
+  line-height: 1.35;
+}
+.cctp-nav-art:hover { background: var(--surface-2); color: var(--text-2); }
+
+.cctp-doc { min-width: 0; }
+/* Repère de lecture : rappelle en permanence où l'on se trouve. */
+.cctp-context {
+  position: sticky;
+  top: calc(var(--header-h) + env(safe-area-inset-top, 0px));
+  z-index: 5;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 0 0 10px 10px;
+  border-top: none;
+  padding: 7px 12px;
+  font-size: 11px; font-weight: 800; letter-spacing: 0.04em;
+  color: var(--accent-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cctp-context[hidden] { display: none; }
 
 .travaux-lot-head {
-  display: flex; align-items: baseline; gap: 10px;
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
   margin: 22px 0 6px;
   padding: 10px 14px;
   background: var(--surface-2);
   border-left: 4px solid var(--lot-color, var(--accent));
   border-radius: 0 10px 10px 0;
 }
-.travaux-lot-head-num {
-  font-size: 11px; font-weight: 800; letter-spacing: 0.08em;
-  color: var(--text-3);
-}
-.travaux-lot-head-name {
-  font-size: 15.5px; font-weight: 800; color: var(--text);
-  text-transform: uppercase;
+.travaux-lot-head-num { font-size: 11px; font-weight: 800; letter-spacing: 0.08em; color: var(--text-3); }
+.travaux-lot-head-name { font-size: 15.5px; font-weight: 800; color: var(--text); text-transform: uppercase; }
+.travaux-lot-head-co {
+  margin-left: auto;
+  background: var(--accent-soft); color: var(--accent-2);
+  border-radius: 999px; padding: 3px 11px;
+  font-size: 11.5px; font-weight: 800;
 }
 .travaux-chap-head {
   margin: 18px 0 8px;
@@ -5119,7 +5220,7 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   border-bottom: 1px solid var(--border-strong);
   font-size: 13.5px; font-weight: 800; letter-spacing: 0.03em;
   color: var(--accent-2);
-  scroll-margin-top: 12px;
+  scroll-margin-top: calc(var(--header-h) + 44px);
 }
 
 .travaux-art {
@@ -5128,7 +5229,7 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   border-radius: 12px;
   padding: 12px 14px;
   margin-bottom: 10px;
-  scroll-margin-top: 12px;
+  scroll-margin-top: calc(var(--header-h) + 44px);
   transition: box-shadow 0.4s, border-color 0.4s;
 }
 .travaux-art.is-flash { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
@@ -5140,52 +5241,93 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   text-transform: uppercase; letter-spacing: 0.01em;
   line-height: 1.35;
 }
+.travaux-art-copy {
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  border-radius: 8px;
+}
+.travaux-art-copy svg { width: 14px; height: 14px; fill: currentColor; }
+.travaux-art-copy:hover { color: var(--accent); border-color: var(--accent); }
 .travaux-art-crumb {
   display: flex; align-items: center; gap: 7px;
-  margin-top: 7px;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 999px;
+  padding: 4px 12px;
   font-size: 11.5px; font-weight: 700; color: var(--text-3);
+  max-width: 100%;
+  text-align: left;
 }
-.travaux-search-info {
-  margin: 2px 0 12px;
-  font-size: 13px; font-weight: 700; color: var(--text-3);
-}
+.travaux-art-crumb:hover { color: var(--accent-2); border-color: var(--border-strong); }
 
-/* ---------- Vue Visite (par lieu) ---------- */
-.travaux-loc-picker { margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px; }
-.travaux-loc-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.travaux-loc-level {
-  flex: 0 0 auto;
-  min-width: 68px;
+/* ---------- Vue Visite : la fiche du lieu ---------- */
+.tv-locbar {
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.tv-pin { flex-shrink: 0; font-size: 15px; }
+.tv-crumb {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+}
+.tv-crumb-sep { color: var(--border-strong); font-size: 13px; }
+.tv-crumb-btn {
+  border: none; background: transparent;
+  color: var(--text-3);
+  padding: 4px 3px;
+  font-size: 14px; font-weight: 700;
+  border-bottom: 1px solid transparent;
+}
+.tv-crumb-btn:hover { color: var(--accent-2); border-bottom-color: var(--border-strong); }
+.tv-crumb-btn.is-last { color: var(--text); font-weight: 800; }
+.tv-locpick {
+  flex-shrink: 0;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-2);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 12.5px; font-weight: 700;
+}
+.tv-locpick:hover { color: var(--accent); border-color: var(--accent); }
+
+.tv-hop { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; min-width: 0; }
+.tv-hop:empty { display: none; }
+.tv-hop-label {
+  flex-shrink: 0;
   font-size: 10.5px; font-weight: 800; letter-spacing: 0.06em;
   text-transform: uppercase; color: var(--text-3);
 }
-.travaux-loc-btn {
+/* Défilement horizontal : tient quel que soit le nombre de logements. */
+.tv-hop-row {
+  flex: 1; min-width: 0;
+  display: flex; gap: 7px;
+  overflow-x: auto;
+  padding-bottom: 3px;
+  scrollbar-width: thin;
+}
+.tv-hop-btn {
   flex: 0 0 auto;
   border: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--text-2);
-  border-radius: 12px;
-  padding: 10px 15px;
-  font-size: 14px; font-weight: 700;
-  cursor: pointer; -webkit-tap-highlight-color: transparent;
+  border-radius: 999px;
+  padding: 8px 15px;
+  font-size: 13.5px; font-weight: 700;
+  white-space: nowrap;
 }
-.travaux-loc-btn.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
-.travaux-loc-btn-sub { padding: 7px 13px; font-size: 13px; border-radius: 999px; }
+.tv-hop-btn.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
 
-.travaux-visite-bar {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  margin: 4px 0 14px;
+.tv-synth {
+  margin: 2px 0 12px;
+  font-size: 13px; color: var(--text-3); font-weight: 600;
 }
-.travaux-visite-crumb { flex: 1; min-width: 180px; font-size: 13.5px; font-weight: 700; color: var(--text-2); }
-.travaux-deep-toggle {
-  display: inline-flex; align-items: center; gap: 8px;
-  font-size: 12.5px; font-weight: 600; color: var(--text-2);
-  cursor: pointer;
-  padding: 5px 11px; border-radius: 999px;
-  border: 1px solid var(--border-strong); background: var(--surface-2);
-}
-.travaux-deep-toggle input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
-.travaux-deep-toggle.is-on { border-color: var(--accent); color: var(--accent-2); }
+.tv-synth-count { font-size: 20px; font-weight: 800; color: var(--text); margin-right: 2px; }
 
 .travaux-visite-lot {
   background: var(--surface);
@@ -5201,7 +5343,9 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
 }
-.travaux-visite-lot-name { flex: 1; min-width: 0; font-size: 14px; font-weight: 800; color: var(--text); }
+.travaux-visite-lot-id { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.travaux-visite-lot-name { font-size: 14px; font-weight: 800; color: var(--text); }
+.travaux-visite-lot-co { font-size: 11.5px; font-weight: 700; color: var(--accent-2); }
 .travaux-visite-lot-count {
   flex-shrink: 0;
   background: var(--surface-3); color: var(--text-3);
@@ -5220,16 +5364,45 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 .travaux-visite-line:last-child { border-bottom: none; }
 .travaux-visite-line-top { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; font-size: 14px; line-height: 1.45; }
 .travaux-visite-via { margin-top: 5px; font-size: 12px; font-weight: 700; color: var(--warning); }
-.travaux-art-detail { margin-top: 8px; }
-.travaux-art-detail > summary {
-  display: inline-block;
-  font-size: 12px; font-weight: 700; color: var(--text-3);
-  cursor: pointer; list-style: none;
-  padding: 2px 0;
+.tv-line-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 9px; }
+.tv-line-btn {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 11.5px; font-weight: 700;
 }
-.travaux-art-detail > summary::-webkit-details-marker { display: none; }
-.travaux-art-detail > summary::before { content: '▸ '; color: var(--accent); }
-.travaux-art-detail[open] > summary::before { content: '▾ '; }
+.tv-line-btn:hover { color: var(--accent-2); border-color: var(--border-strong); }
+.tv-line-more.is-on { color: var(--accent-2); border-color: #4a2c18; background: var(--accent-soft); }
+.tv-line-detail {
+  margin-top: 9px;
+  padding-left: 11px;
+  border-left: 2px solid var(--border-strong);
+}
+
+/* ---------- Sélecteur de lieu (modale) ---------- */
+.tv-zonepick { margin-top: 10px; max-height: 52vh; overflow-y: auto; }
+.tv-zonepick-row {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%;
+  border: none; background: transparent;
+  border-radius: 8px;
+  padding: 9px 10px;
+  text-align: left;
+  color: var(--text-2);
+  font-size: 13.5px; font-weight: 600;
+}
+.tv-zonepick-row:hover { background: var(--surface-2); color: var(--text); }
+.tv-zonepick-row.is-on { background: var(--accent); color: #fff; }
+.tv-zonepick-row.is-on .tv-lot-count { background: rgba(0,0,0,0.25); color: #fff; }
+.tv-zonepick-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tv-zonepick-d1 { font-weight: 800; color: var(--text); }
+.tv-zonepick-d2 { padding-left: 24px; }
+.tv-zonepick-d3 { padding-left: 40px; }
+.tv-zonepick-d4 { padding-left: 56px; }
+.tv-zonepick-d5 { padding-left: 72px; }
+.tv-zonepick-d6 { padding-left: 88px; }
 
 /* ---------- Vue Carnet : éditeur maître / détail ---------- */
 /* Deux panneaux sur PC (structure figée à gauche, éditeur à droite), un
