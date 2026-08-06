@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.54';
+const APP_VERSION = '1.55';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -40,7 +40,7 @@ const CHART_COLORS = [
   '#455a64'  // ardoise
 ];
 const TOTAL_KEY = '__total__';
-const TOTAL_COLOR = '#f3efe9';
+const TOTAL_COLOR = '#1f1b16';
 
 // ---------- State ----------
 const state = {
@@ -54,6 +54,7 @@ const state = {
   zoneUpdated: {},        // { [zoneId]: timestamp (ms) — dernière modif d'avancement }
   avancementZoneId: null, // zone affichée dans l'onglet Avancement
   recapBuildingId: null,  // zone racine sélectionnée dans Avancement → Récapitulatif
+  zonePickerCollapsed: {}, // { [zoneId]: true } — branches repliées dans les sélecteurs de zone (UI)
   // Tableau de bord Avancement : un point d'historique par jour, pour la
   // courbe d'avancement et le calcul du rythme.
   // { 'YYYY-MM-DD': { pct, hDone, hBudget } }
@@ -190,6 +191,7 @@ function load() {
     if (data.zoneCollapsed) state.zoneCollapsed = data.zoneCollapsed;
     if (data.taskProgress) state.taskProgress = data.taskProgress;
     if (data.zoneUpdated) state.zoneUpdated = data.zoneUpdated;
+    if (data.zonePickerCollapsed && typeof data.zonePickerCollapsed === 'object') state.zonePickerCollapsed = data.zonePickerCollapsed;
     if (data.avancementHistory && typeof data.avancementHistory === 'object') state.avancementHistory = data.avancementHistory;
     if (data.avancementZoneId) state.avancementZoneId = data.avancementZoneId;
     if (data.recapBuildingId) state.recapBuildingId = data.recapBuildingId;
@@ -311,6 +313,7 @@ function buildPersistedData() {
     zoneCollapsed: state.zoneCollapsed,
     taskProgress: state.taskProgress,
     zoneUpdated: state.zoneUpdated,
+    zonePickerCollapsed: state.zonePickerCollapsed,
     avancementHistory: state.avancementHistory,
     avancementZoneId: state.avancementZoneId,
     recapBuildingId: state.recapBuildingId,
@@ -2271,18 +2274,6 @@ function getTaskZonesInOrder() {
   return result;
 }
 
-function drillDown(zoneId) {
-  let current = zoneId;
-  const seen = new Set();
-  while (current && !seen.has(current)) {
-    seen.add(current);
-    if (zoneIsTaskBearing(current)) return current;
-    const children = state.zones.filter(z => z.parentId === current);
-    if (children.length === 0) return current;
-    current = children[0].id;
-  }
-  return current;
-}
 
 function getProgress(zoneId, taskId) {
   return state.taskProgress[zoneId]?.[taskId] || 0;
@@ -2415,6 +2406,246 @@ function resolveAvancementZone() {
   return list[0];
 }
 
+// ========================================================================
+// SÉLECTEUR DE ZONE DÉPLIABLE — composant partagé
+// Une seule arborescence, repliable branche par branche, réutilisée par
+// tous les écrans qui demandent de choisir une (ou des) zone(s) :
+// Avancement, Travaux → Visite, Travaux → Carnet.
+// L'état replié/déplié est per-device (jamais synchronisé) : chacun
+// organise sa lecture comme il l'entend.
+// ========================================================================
+function getZonePickerCollapsed() {
+  if (!state.zonePickerCollapsed || typeof state.zonePickerCollapsed !== 'object') state.zonePickerCollapsed = {};
+  return state.zonePickerCollapsed;
+}
+// Ouvre le chemin menant à une zone (à l'ouverture d'un sélecteur, on veut
+// voir la sélection courante sans avoir à déplier soi-même).
+function expandZonePickerPath(zoneId) {
+  const col = getZonePickerCollapsed();
+  for (const id of travauxZoneAncestors(zoneId)) delete col[id];
+}
+function toggleZonePickerNode(zoneId) {
+  const col = getZonePickerCollapsed();
+  if (col[zoneId]) delete col[zoneId];
+  else col[zoneId] = true;
+  save();
+}
+// Replie / déplie tout l'arbre d'un coup.
+function setZonePickerAllCollapsed(collapsed) {
+  const col = getZonePickerCollapsed();
+  for (const k of Object.keys(col)) delete col[k];
+  if (collapsed) for (const z of state.zones) if (travauxZoneChildren(z.id).length) col[z.id] = true;
+  save();
+}
+function zonePickerAllCollapsed() {
+  const col = getZonePickerCollapsed();
+  const parents = state.zones.filter(z => travauxZoneChildren(z.id).length);
+  return parents.length > 0 && parents.every(z => col[z.id]);
+}
+
+// opts :
+//   mode        'select' (une zone) | 'check' (cases à cocher)
+//   selectedId  zone active en mode select
+//   isChecked / isInherited / isSelectable   prédicats optionnels
+//   badge(zone) texte de la pastille de droite (ou null)
+//   onSelect(zone) / onToggle(zone, checked)
+//   filter      texte de recherche (les branches menant à un résultat
+//               restent visibles et dépliées)
+//   rerender()  appelé après un pli/dépli
+function buildZonePickerTree(opts) {
+  const col = getZonePickerCollapsed();
+  const q = (opts.filter || '').trim().toLowerCase();
+  // En recherche, on ne garde que les zones trouvées et leur chemin d'accès.
+  let visible = null;
+  if (q) {
+    visible = new Set();
+    const byId = new Map(state.zones.map(z => [z.id, z]));
+    for (const z of state.zones) {
+      if (!(z.name || '').toLowerCase().includes(q)) continue;
+      let cur = z, guard = 0;
+      while (cur && guard++ < 40) { visible.add(cur.id); cur = cur.parentId ? byId.get(cur.parentId) : null; }
+    }
+  }
+  const tree = document.createElement('div');
+  tree.className = 'zp-tree';
+  let shown = 0;
+
+  const walk = (parentId, depth) => {
+    for (const z of travauxZoneChildren(parentId)) {
+      if (visible && !visible.has(z.id)) continue;
+      const kids = travauxZoneChildren(z.id).filter(k => !visible || visible.has(k.id));
+      // Une recherche en cours force le dépli : sinon les résultats
+      // resteraient cachés sous une branche repliée.
+      const collapsed = kids.length > 0 && !!col[z.id] && !q;
+      shown++;
+
+      const row = document.createElement('div');
+      row.className = 'zp-row';
+      row.style.setProperty('--d', String(Math.min(depth, 6)));
+
+      if (kids.length) {
+        const caret = document.createElement('button');
+        caret.type = 'button';
+        caret.className = 'zp-caret' + (collapsed ? '' : ' is-open');
+        caret.setAttribute('aria-label', collapsed ? 'Déplier' : 'Replier');
+        caret.setAttribute('aria-expanded', String(!collapsed));
+        caret.addEventListener('click', (e) => {
+          e.stopPropagation();
+          toggleZonePickerNode(z.id);
+          opts.rerender();
+        });
+        row.appendChild(caret);
+      } else {
+        const sp = document.createElement('span');
+        sp.className = 'zp-caret zp-caret-void';
+        row.appendChild(sp);
+      }
+
+      const selectable = opts.isSelectable ? opts.isSelectable(z) : true;
+      const badge = opts.badge ? opts.badge(z) : null;
+
+      if (opts.mode === 'check') {
+        const checked = opts.isChecked ? opts.isChecked(z) : false;
+        const inherited = !checked && opts.isInherited ? opts.isInherited(z) : false;
+        const lbl = document.createElement('label');
+        lbl.className = 'zp-item zp-check' + (checked ? ' is-on' : '') + (inherited ? ' is-inherited' : '');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = checked || inherited;
+        cb.disabled = inherited;
+        cb.addEventListener('change', () => opts.onToggle(z, cb.checked));
+        lbl.appendChild(cb);
+        const nm = document.createElement('span');
+        nm.className = 'zp-name';
+        travauxHiliteInto(nm, z.name || '(zone)', q);
+        lbl.appendChild(nm);
+        if (inherited) {
+          const tag = document.createElement('span');
+          tag.className = 'zp-tag';
+          tag.textContent = 'hérité';
+          lbl.appendChild(tag);
+        }
+        row.appendChild(lbl);
+      } else {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'zp-item'
+          + (opts.selectedId === z.id ? ' is-on' : '')
+          + (selectable ? '' : ' is-structural');
+        const nm = document.createElement('span');
+        nm.className = 'zp-name';
+        travauxHiliteInto(nm, z.name || '(zone)', q);
+        btn.appendChild(nm);
+        if (badge != null) {
+          const b = document.createElement('span');
+          b.className = 'zp-badge';
+          b.textContent = badge;
+          btn.appendChild(b);
+        }
+        btn.addEventListener('click', () => {
+          // Une zone « de structure » (sans tâches) sert de branche : la
+          // toucher la déplie plutôt que de ne rien faire.
+          if (!selectable) {
+            if (kids.length) { toggleZonePickerNode(z.id); opts.rerender(); }
+            return;
+          }
+          opts.onSelect(z);
+        });
+        row.appendChild(btn);
+      }
+      tree.appendChild(row);
+      if (kids.length && !collapsed) walk(z.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+
+  if (!shown) {
+    const e = document.createElement('p');
+    e.className = 'zp-empty';
+    e.textContent = state.zones.length ? 'Aucune zone ne correspond.' : 'Créez vos zones dans Données → Zones.';
+    tree.appendChild(e);
+  }
+  return tree;
+}
+// Barre « tout replier / tout déplier » commune aux sélecteurs.
+function buildZonePickerFoldBar(rerender, extra) {
+  const bar = document.createElement('div');
+  bar.className = 'zp-bar';
+  const allFolded = zonePickerAllCollapsed();
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'zp-fold';
+  btn.textContent = allFolded ? 'Tout déplier' : 'Tout replier';
+  btn.addEventListener('click', () => { setZonePickerAllCollapsed(!allFolded); rerender(); });
+  bar.appendChild(btn);
+  if (extra) bar.appendChild(extra);
+  return bar;
+}
+
+
+// Sélecteur de zone de l'onglet Avancement : ligne de chemin repliée par
+// défaut, arbre complet au clic. L'état d'ouverture est purement d'écran.
+let avancementPickerOpen = false;
+function buildAvancementZonePicker(zone) {
+  const wrap = document.createElement('div');
+  wrap.className = 'zp' + (avancementPickerOpen ? ' is-open' : '');
+
+  const head = document.createElement('button');
+  head.type = 'button';
+  head.className = 'zp-head';
+  head.setAttribute('aria-expanded', String(avancementPickerOpen));
+  const pin = document.createElement('span');
+  pin.className = 'zp-pin';
+  pin.textContent = '📍';
+  head.appendChild(pin);
+  const crumb = document.createElement('span');
+  crumb.className = 'zp-crumb';
+  const path = getZonePath(zone.id);
+  path.forEach((z, i) => {
+    if (i) {
+      const sep = document.createElement('span');
+      sep.className = 'zp-crumb-sep';
+      sep.textContent = '›';
+      crumb.appendChild(sep);
+    }
+    const seg = document.createElement('span');
+    seg.className = 'zp-crumb-seg' + (i === path.length - 1 ? ' is-last' : '');
+    seg.textContent = z.name || '(zone)';
+    crumb.appendChild(seg);
+  });
+  head.appendChild(crumb);
+  const chevron = document.createElement('span');
+  chevron.className = 'zp-chevron';
+  head.appendChild(chevron);
+  head.addEventListener('click', () => {
+    avancementPickerOpen = !avancementPickerOpen;
+    if (avancementPickerOpen) expandZonePickerPath(zone.id);
+    renderAvancement();
+  });
+  wrap.appendChild(head);
+
+  if (avancementPickerOpen) {
+    const panel = document.createElement('div');
+    panel.className = 'zp-panel';
+    panel.appendChild(buildZonePickerFoldBar(() => renderAvancement()));
+    panel.appendChild(buildZonePickerTree({
+      mode: 'select',
+      selectedId: zone.id,
+      isSelectable: (z) => zoneIsTaskBearing(z.id),
+      badge: (z) => zoneIsTaskBearing(z.id) ? formatPct(getZoneProgress(z.id)) + ' %' : null,
+      onSelect: (z) => {
+        state.avancementZoneId = z.id;
+        avancementPickerOpen = false;
+        save();
+        renderAvancement();
+      },
+      rerender: () => renderAvancement(),
+    }));
+    wrap.appendChild(panel);
+  }
+  return wrap;
+}
+
 function renderAvancement() {
   renderRecap();
   const pickers = document.getElementById('zonepickers');
@@ -2448,36 +2679,10 @@ function renderAvancement() {
   }
   empty.classList.remove('show');
 
-  // Sélecteurs en cascade : un par niveau du chemin
-  const path = getZonePath(zone.id);
-  let parentId = null;
-  for (let d = 0; d < path.length; d++) {
-    const siblings = state.zones.filter(z => z.parentId === parentId);
-    if (siblings.length === 0) break;
-
-    const wrap = document.createElement('div');
-    wrap.className = 'zone-picker';
-    wrap.innerHTML = `
-      <span class="zone-picker-label">Niveau ${d + 1}</span>
-      <select></select>
-    `;
-    const select = wrap.querySelector('select');
-    for (const sib of siblings) {
-      const opt = document.createElement('option');
-      opt.value = sib.id;
-      opt.textContent = sib.name || '(sans nom)';
-      if (sib.id === path[d].id) opt.selected = true;
-      select.appendChild(opt);
-    }
-    select.addEventListener('change', () => {
-      state.avancementZoneId = drillDown(select.value);
-      save();
-      renderAvancement();
-    });
-    pickers.appendChild(wrap);
-
-    parentId = path[d].id;
-  }
+  // Sélecteur de zone : le chemin courant, et l'arborescence dépliable qui
+  // s'ouvre à la demande. Une enfilade de menus natifs devient illisible
+  // dès qu'un niveau compte trente logements.
+  pickers.appendChild(buildAvancementZonePicker(zone));
 
   // Fiche : en-tête (flèches + titre) + liste de tâches
   fiche.hidden = false;
@@ -9806,6 +10011,10 @@ function openTravauxZoneModal() {
   const m = document.getElementById('travauxzonemodal');
   if (!m) return;
   travauxZoneModalFilter = '';
+  // On déplie le chemin du lieu courant : la sélection doit être visible
+  // dès l'ouverture, même si la branche avait été repliée ailleurs.
+  const cur = getTravauxVisiteTarget();
+  if (cur) expandZonePickerPath(cur.id);
   const inp = document.getElementById('travauxzonemodalsearch');
   if (inp) inp.value = '';
   m.hidden = false;
@@ -9820,52 +10029,19 @@ function renderTravauxZoneModal() {
   const list = document.getElementById('travauxzonepicklist');
   if (!list) return;
   list.innerHTML = '';
-  const q = travauxZoneModalFilter.trim().toLowerCase();
-  const ordered = getZonesOrdered();
-  // On garde le chemin d'accès des zones trouvées, pour ne jamais afficher
-  // une zone orpheline de son bâtiment.
-  let visible = null;
-  if (q) {
-    visible = new Set();
-    const byId = new Map(state.zones.map(z => [z.id, z]));
-    for (const { zone } of ordered) {
-      if (!(zone.name || '').toLowerCase().includes(q)) continue;
-      let cur = zone, guard = 0;
-      while (cur && guard++ < 40) { visible.add(cur.id); cur = cur.parentId ? byId.get(cur.parentId) : null; }
-    }
-  }
   const currentId = (getTravauxVisiteTarget() || {}).id;
-  let shown = 0;
-  for (const { zone, depth } of ordered) {
-    if (visible && !visible.has(zone.id)) continue;
-    shown++;
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'tv-zonepick-row tv-zonepick-d' + Math.min(depth, 6)
-      + (zone.id === currentId ? ' is-on' : '');
-    const nm = document.createElement('span');
-    nm.className = 'tv-zonepick-name';
-    travauxHiliteInto(nm, zone.name || '(zone)', q);
-    btn.appendChild(nm);
-    const nb = travauxCountPrescriptionsForZone(zone.id);
-    if (nb) {
-      const c = document.createElement('span');
-      c.className = 'tv-lot-count';
-      c.textContent = String(nb);
-      btn.appendChild(c);
-    }
-    btn.addEventListener('click', () => {
-      closeTravauxZoneModal();
-      travauxGotoZone(zone.id);
-    });
-    list.appendChild(btn);
-  }
-  if (!shown) {
-    const e = document.createElement('p');
-    e.className = 'carnet-hint';
-    e.textContent = state.zones.length ? 'Aucune zone ne correspond.' : 'Créez vos zones dans Données → Zones.';
-    list.appendChild(e);
-  }
+  list.appendChild(buildZonePickerFoldBar(renderTravauxZoneModal));
+  list.appendChild(buildZonePickerTree({
+    mode: 'select',
+    selectedId: currentId,
+    filter: travauxZoneModalFilter,
+    badge: (z) => {
+      const n = travauxCountPrescriptionsForZone(z.id);
+      return n ? String(n) : null;
+    },
+    onSelect: (z) => { closeTravauxZoneModal(); travauxGotoZone(z.id); },
+    rerender: renderTravauxZoneModal,
+  }));
 }
 // Nombre de prestations dues dans une zone (héritage compris) — affiché
 // dans le sélecteur pour repérer les lieux chargés.
@@ -10602,6 +10778,8 @@ function buildCarnetZonePanel(p) {
   };
   toggle.addEventListener('click', () => {
     travauxZonesOpen = !travauxZonesOpen;
+    // Idem : on ouvre les branches des zones déjà cochées.
+    if (travauxZonesOpen) for (const zid of Object.keys(p.zones || {})) expandZonePickerPath(zid);
     refreshOpen();
     if (travauxZonesOpen) requestAnimationFrame(() => treeBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
   });
@@ -10656,67 +10834,22 @@ function renderCarnetZoneTree(p, box, onChange) {
   search.appendChild(inp);
   box.appendChild(search);
 
-  const q = travauxZoneFilter.trim().toLowerCase();
-  const ordered = getZonesOrdered();
-  // Une zone reste visible si elle correspond au filtre, ou si l'un de ses
-  // descendants y correspond (on garde le chemin d'accès).
-  let visible = null;
-  if (q) {
-    visible = new Set();
-    const byId = new Map(state.zones.map(z => [z.id, z]));
-    for (const { zone } of ordered) {
-      if (!(zone.name || '').toLowerCase().includes(q)) continue;
-      let cur = zone, guard = 0;
-      while (cur && guard++ < 40) { visible.add(cur.id); cur = cur.parentId ? byId.get(cur.parentId) : null; }
-    }
-  }
   const checked = p.zones || {};
-  const coveredBy = travauxCoveringAncestors(checked);
-
-  const tree = document.createElement('div');
-  tree.className = 'ztree';
-  let shown = 0;
-  for (const { zone, depth } of ordered) {
-    if (visible && !visible.has(zone.id)) continue;
-    shown++;
-    const row = document.createElement('div');
-    row.className = 'ztree-row';
-    row.style.setProperty('--d', String(Math.min(depth, 6) - 1));
-    const lbl = document.createElement('label');
-    const isChecked = !!checked[zone.id];
-    const inherited = !isChecked && coveredBy.has(zone.id);
-    lbl.className = 'ztree-lbl' + (isChecked ? ' is-on' : '') + (inherited ? ' is-inherited' : '');
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.checked = isChecked || inherited;
-    cb.disabled = inherited;
-    cb.addEventListener('change', () => {
-      if (cb.checked) checkedSet(p, zone.id, true);
-      else checkedSet(p, zone.id, false);
+  const covered = travauxCoveringAncestors(checked);
+  box.appendChild(buildZonePickerFoldBar(() => renderCarnetZoneTree(p, box, onChange)));
+  const tree = buildZonePickerTree({
+    mode: 'check',
+    filter: travauxZoneFilter,
+    isChecked: (z) => !!checked[z.id],
+    isInherited: (z) => covered.has(z.id),
+    onToggle: (z, on) => {
+      checkedSet(p, z.id, on);
       carnetRefreshArtRow(p);
       renderCarnetZoneTree(p, box, onChange);
       onChange();
-    });
-    lbl.appendChild(cb);
-    const nm = document.createElement('span');
-    nm.className = 'ztree-name';
-    nm.textContent = zone.name || '(zone)';
-    lbl.appendChild(nm);
-    if (inherited) {
-      const tag = document.createElement('span');
-      tag.className = 'ztree-tag';
-      tag.textContent = 'hérité';
-      lbl.appendChild(tag);
-    }
-    row.appendChild(lbl);
-    tree.appendChild(row);
-  }
-  if (!shown) {
-    const e = document.createElement('p');
-    e.className = 'carnet-hint';
-    e.textContent = 'Aucune zone ne correspond.';
-    tree.appendChild(e);
-  }
+    },
+    rerender: () => renderCarnetZoneTree(p, box, onChange),
+  });
   box.appendChild(tree);
   const note = document.createElement('p');
   note.className = 'carnet-hint';
@@ -14699,6 +14832,7 @@ const SYNC_EXCLUDED_KEYS = new Set([
   'travauxSelectedZoneId',           // zone affichée dans Travaux (UI)
   'travauxLotFilter',                // filtre de lots dans Travaux (UI)
   'travauxVisitePath', 'travauxVisiteDeep', // lieu sélectionné dans la vue Visite (UI)
+  'zonePickerCollapsed',             // branches repliées des sélecteurs de zone (UI)
   'syncStatus', 'syncTimestamp', 'syncLastPulled', 'syncLastSeenRemoteTs',
   'protoPlan', 'protoPlanW', 'protoPlanH' // champs hérités migrés
 ]);
