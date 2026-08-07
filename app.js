@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.55';
+const APP_VERSION = '1.56';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -15830,6 +15830,34 @@ function init() {
       window.location.reload();
     });
   }
+
+  // Filet de sécurité manuel : purge complète du cache et rechargement sur
+  // la dernière version publiée. Les données (localStorage) sont intactes.
+  const forceUpdateBtn = document.getElementById('forceupdatebtn');
+  if (forceUpdateBtn) forceUpdateBtn.addEventListener('click', forceAppUpdate);
+}
+
+async function forceAppUpdate() {
+  const btn = document.getElementById('forceupdatebtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Mise à jour en cours…'; }
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r => r.unregister().catch(() => {})));
+    }
+    if (window.caches) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k).catch(() => {})));
+    }
+    // Vider les caches du service worker ne suffit pas : le cache HTTP du
+    // navigateur garde sa propre copie. Un fetch en « reload » la contourne
+    // ET la remplace, si bien que le rechargement qui suit repart du serveur.
+    await Promise.all(['./', 'index.html', 'app.js', 'style.css', 'manifest.json']
+      .map(u => fetch(u, { cache: 'reload' }).catch(() => {})));
+  } catch (e) {
+    console.warn('[MAJ] purge partielle', e);
+  }
+  window.location.reload();
 }
 
 document.addEventListener('DOMContentLoaded', init);
