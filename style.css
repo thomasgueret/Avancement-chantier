@@ -4105,6 +4105,127 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 /* Conteneur de l'aperçu Avancements sous les notes libres */
 .cr-avanc-preview { margin-top: 8px; }
 
+/* ============ CR : WIDGET D'AVANCEMENT MANUEL ============ */
+/* Même forme que l'aperçu automatique, mais saisi à la main. Deux états :
+   le formulaire (brouillon) et la forme finale une fois validé. */
+.cr-widget {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  box-shadow: var(--shadow-sm);
+}
+.cr-widget.is-draft {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+/* ----- Forme finale ----- */
+.cr-widget-actions {
+  position: absolute; top: 8px; right: 8px;
+  display: flex; gap: 4px;
+}
+.cr-widget-edit, .cr-widget-x {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  border-radius: 7px;
+  font-size: 16px; line-height: 1;
+  padding: 0;
+}
+.cr-widget-edit svg { width: 12px; height: 12px; fill: currentColor; }
+.cr-widget-edit:hover { color: var(--accent); border-color: var(--accent); }
+.cr-widget-x:hover { color: var(--danger); border-color: var(--danger); }
+.cr-widget-card { padding-right: 62px; }
+.cr-widget-card .cr-avanc-task { list-style: none; }
+
+/* Quantités sous la barre — ce que l'aperçu automatique ne peut pas donner */
+.cr-widget-qty {
+  display: flex; flex-wrap: wrap; gap: 6px 14px;
+  margin-top: 6px;
+  font-size: 11.5px;
+}
+.cr-widget-qty-item { display: inline-flex; align-items: baseline; gap: 5px; }
+.cr-widget-qty-label { color: var(--text-3); }
+.cr-widget-qty-val { font-weight: 800; font-variant-numeric: tabular-nums; }
+.cr-widget-qty-item.is-done  .cr-widget-qty-val { color: var(--success-2); }
+.cr-widget-qty-item.is-doing .cr-widget-qty-val { color: var(--warning); }
+.cr-widget-qty-item.is-todo  .cr-widget-qty-val { color: var(--text-2); }
+
+/* ----- Formulaire (brouillon) ----- */
+.cr-widget-form-head {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 10px;
+}
+.cr-widget-form-title {
+  flex: 1; min-width: 0;
+  font-size: 10.5px; font-weight: 800; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--accent-2);
+}
+.cr-widget-live {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.cr-widget-live .cr-avanc-task { list-style: none; }
+.cr-widget-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.cr-widget-label {
+  font-size: 10.5px; font-weight: 800; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--text-3);
+}
+.cr-widget-input {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  font-family: inherit; font-size: 14px;
+  padding: 9px 11px;
+  min-height: 40px;
+}
+.cr-widget-input:focus { outline: none; border-color: var(--accent); }
+.cr-widget-input::placeholder { color: var(--text-3); font-style: italic; }
+.cr-widget-title-input { font-weight: 700; }
+.cr-widget-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 10px;
+}
+@media (min-width: 720px) { .cr-widget-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.cr-widget-grid .cr-widget-input { font-variant-numeric: tabular-nums; }
+.cr-widget-hint { margin: 2px 0 12px; font-size: 11px; color: var(--text-3); font-style: italic; }
+.cr-widget-form-actions { display: flex; justify-content: flex-end; }
+.cr-widget-validate { min-width: 140px; }
+
+/* ----- Menu du bouton « + » de la rubrique Avancements ----- */
+.cr-add-menu {
+  position: fixed; z-index: 200;
+  min-width: 250px; max-width: calc(100vw - 16px);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  padding: 6px;
+  animation: fadein 0.12s ease-out;
+}
+.cr-add-menu-item {
+  display: flex; flex-direction: column; gap: 2px;
+  width: 100%;
+  border: none; background: transparent;
+  border-radius: 9px;
+  padding: 10px 12px;
+  text-align: left;
+}
+.cr-add-menu-item:hover { background: var(--surface-2); }
+.cr-add-menu-label { font-size: 14px; font-weight: 700; color: var(--text); }
+.cr-add-menu-hint { font-size: 11.5px; color: var(--text-3); line-height: 1.35; }
+
 /* ----- CR : bouton ✕ rouge pour supprimer la semaine active ----- */
 .cr-company-head-wrap {
   display: flex; align-items: stretch;

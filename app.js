@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.56';
+const APP_VERSION = '1.57';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -5264,14 +5264,28 @@ function addCRWeek(companyId) {
       // CR suivants. crOrigin préservé pour tracer la naissance d'une tâche.
       newSecs[secKey] = prevSecs[secKey]
         .filter(e => !e.done)
-        .map(e => ({
-          id: uid(),
-          text: e.text || '',
-          crOrigin: e.crOrigin || prev.label,
-          echeance: e.echeance || null,
-          responsable: e.responsable || null,
-          done: false
-        }));
+        .map(e => {
+          // Un widget d'avancement se reporte tel quel, déjà validé : on
+          // repart des quantités de la semaine précédente et on les met à
+          // jour. Le transformer en note viderait la saisie.
+          if (isCRWidgetEntry(e)) {
+            return {
+              id: uid(), kind: 'widget', draft: false,
+              title: e.title || '',
+              unit: e.unit || '',
+              qtyTotal: e.qtyTotal, qtyDone: e.qtyDone, qtyDoing: e.qtyDoing,
+              crOrigin: e.crOrigin || prev.label
+            };
+          }
+          return {
+            id: uid(),
+            text: e.text || '',
+            crOrigin: e.crOrigin || prev.label,
+            echeance: e.echeance || null,
+            responsable: e.responsable || null,
+            done: false
+          };
+        });
     }
     state.crEntries[companyId][newWeek.id] = newSecs;
   }
@@ -5543,10 +5557,75 @@ async function exportCRToPDF(companyId, weekId) {
     y += rowH;
   };
 
+  // Dessin d'une tâche d'avancement (titre, plans, barre empilée, légende).
+  // Partagé par l'aperçu automatique et par les widgets manuels : la sortie
+  // PDF est donc strictement identique pour les deux.
+  const drawAvancTask = (task) => {
+    ensureSpace(11);
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10);
+    pdf.text(task.title || '(sans intitulé)', MARGIN + 8, y);
+    // Libellé de droite : quantités du widget manuel, aligné à droite.
+    if (task.metaText) {
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(90);
+      pdf.text(task.metaText, MARGIN + CONTENT_W, y, { align: 'right' });
+      pdf.setTextColor(0); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10);
+    }
+    y += 2;
+    if (Array.isArray(task.planNames) && task.planNames.length > 0) {
+      pdf.setFont('helvetica', 'italic'); pdf.setFontSize(8.5); pdf.setTextColor(120);
+      const lines = pdf.splitTextToSize(task.planNames.join(' · '), CONTENT_W - 12);
+      for (const ln of lines) {
+        ensureSpace(3.2);
+        pdf.text(ln, MARGIN + 8, y + 1.8);
+        y += 3.2;
+      }
+      pdf.setTextColor(0); pdf.setFontSize(10);
+      y += 0.5;
+    }
+    const barX = MARGIN + 8;
+    const barW = CONTENT_W - 8;
+    const barH = 2.4;
+    const pctSum = (task.pct.done || 0) + (task.pct.doing || 0) + (task.pct.todo || 0);
+    const norm = pctSum > 0 ? pctSum : 1;
+    const wDone  = barW * (task.pct.done  / norm);
+    const wDoing = barW * (task.pct.doing / norm);
+    const wTodo  = barW * (task.pct.todo  / norm);
+    pdf.setFillColor(220, 220, 220);
+    pdf.rect(barX, y, barW, barH, 'F');
+    let bx = barX;
+    if (wDone  > 0) { pdf.setFillColor(46, 125, 50);  pdf.rect(bx, y, wDone,  barH, 'F'); bx += wDone;  }
+    if (wDoing > 0) { pdf.setFillColor(237, 108, 2);  pdf.rect(bx, y, wDoing, barH, 'F'); bx += wDoing; }
+    if (wTodo  > 0) { pdf.setFillColor(211, 47, 47);  pdf.rect(bx, y, wTodo,  barH, 'F'); }
+    y += barH + 3.5;
+    pdf.setFontSize(8.5);
+    let legX = MARGIN + 8;
+    const labels = { done: 'Réalisée', doing: 'En cours', todo: 'À faire' };
+    const palette = { done: [46,125,50], doing: [237,108,2], todo: [211,47,47] };
+    for (const k of ['done', 'doing', 'todo']) {
+      if (task.pct[k] <= 0.01) continue;
+      pdf.setFillColor(...palette[k]);
+      pdf.circle(legX, y - 1.0, 0.9, 'F');
+      pdf.setFont('helvetica', 'bold');
+      pdf.text(`${Math.round(task.pct[k])} %`, legX + 2.2, y);
+      const pctTxtW = pdf.getTextWidth(`${Math.round(task.pct[k])} %`);
+      pdf.setFont('helvetica', 'normal'); pdf.setTextColor(110);
+      pdf.text(labels[k], legX + 2.2 + pctTxtW + 1.5, y);
+      const lblW = pdf.getTextWidth(labels[k]);
+      pdf.setTextColor(0);
+      legX += 2.2 + pctTxtW + 1.5 + lblW + 7;
+    }
+    pdf.setFontSize(10);
+    y += 3.5;
+  };
+
   let secNum = 0;
   for (const sec of getCRSections()) {
     secNum++;
-    const entries = getCREntries(companyId, weekId, sec.key);
+    const allEntries = getCREntries(companyId, weekId, sec.key);
+    // Les widgets manuels ne sont pas des lignes de tableau : ils se
+    // dessinent sous la rubrique, à l'identique de l'aperçu automatique.
+    const entries = allEntries.filter(e => !isCRWidgetEntry(e));
+    const widgets = allEntries.filter(isCRWidgetEntry).filter(e => !e.draft);
     const showAvancPreview = sec.key === 'avancement' && isCRAvancementVisible(companyId, weekId);
     const showAdminPreview = sec.key === 'admin'      && isCRAdminVisible(companyId, weekId);
     const showEffPreview   = sec.key === 'effectifs'  && isCREffectifsVisible(companyId, weekId);
@@ -5559,6 +5638,16 @@ async function exportCRToPDF(companyId, weekId) {
     } else {
       let i = 0;
       for (const e of entries) { drawTableRow(e, i % 2 === 1); i++; }
+    }
+
+    // Widgets d'avancement saisis à la main
+    if (widgets.length > 0) {
+      y += 6;
+      for (const w of widgets) {
+        const v = computeCRWidget(w);
+        drawAvancTask({ title: w.title, metaText: crWidgetMetaText(v), pct: v.pct });
+      }
+      y += 1;
     }
 
     // Aperçu Avancements (conditionné à l'interrupteur app)
@@ -5577,59 +5666,7 @@ async function exportCRToPDF(companyId, weekId) {
           pdf.rect(MARGIN + 4, y - 3, 2.2, 4, 'F');
           pdf.text(lot.name.toUpperCase(), MARGIN + 8, y);
           y += 5;
-          for (const task of lot.tasks) {
-            ensureSpace(11);
-            pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10);
-            pdf.text(task.title || '(sans intitulé)', MARGIN + 8, y);
-            y += 2;
-            // Liste des plans concernés (sous le titre, gris italique)
-            if (Array.isArray(task.planNames) && task.planNames.length > 0) {
-              pdf.setFont('helvetica', 'italic'); pdf.setFontSize(8.5); pdf.setTextColor(120);
-              const txt = task.planNames.join(' · ');
-              const lines = pdf.splitTextToSize(txt, CONTENT_W - 12);
-              for (const ln of lines) {
-                ensureSpace(3.2);
-                pdf.text(ln, MARGIN + 8, y + 1.8);
-                y += 3.2;
-              }
-              pdf.setTextColor(0); pdf.setFontSize(10);
-              y += 0.5;
-            }
-            const barX = MARGIN + 8;
-            const barW = CONTENT_W - 8;
-            const barH = 2.4;
-            const pctSum = (task.pct.done || 0) + (task.pct.doing || 0) + (task.pct.todo || 0);
-            const norm = pctSum > 0 ? pctSum : 1;
-            const wDone  = barW * (task.pct.done  / norm);
-            const wDoing = barW * (task.pct.doing / norm);
-            const wTodo  = barW * (task.pct.todo  / norm);
-            pdf.setFillColor(220, 220, 220);
-            pdf.rect(barX, y, barW, barH, 'F');
-            let bx = barX;
-            if (wDone  > 0) { pdf.setFillColor(46, 125, 50);  pdf.rect(bx, y, wDone,  barH, 'F'); bx += wDone;  }
-            if (wDoing > 0) { pdf.setFillColor(237, 108, 2);  pdf.rect(bx, y, wDoing, barH, 'F'); bx += wDoing; }
-            if (wTodo  > 0) { pdf.setFillColor(211, 47, 47);  pdf.rect(bx, y, wTodo,  barH, 'F'); }
-            y += barH + 3.5;
-            pdf.setFontSize(8.5);
-            let legX = MARGIN + 8;
-            const labels = { done: 'Réalisée', doing: 'En cours', todo: 'À faire' };
-            const palette = { done: [46,125,50], doing: [237,108,2], todo: [211,47,47] };
-            for (const k of ['done', 'doing', 'todo']) {
-              if (task.pct[k] <= 0.01) continue;
-              pdf.setFillColor(...palette[k]);
-              pdf.circle(legX, y - 1.0, 0.9, 'F');
-              pdf.setFont('helvetica', 'bold');
-              pdf.text(`${Math.round(task.pct[k])} %`, legX + 2.2, y);
-              const pctTxtW = pdf.getTextWidth(`${Math.round(task.pct[k])} %`);
-              pdf.setFont('helvetica', 'normal'); pdf.setTextColor(110);
-              pdf.text(labels[k], legX + 2.2 + pctTxtW + 1.5, y);
-              const lblW = pdf.getTextWidth(labels[k]);
-              pdf.setTextColor(0);
-              legX += 2.2 + pctTxtW + 1.5 + lblW + 7;
-            }
-            pdf.setFontSize(10);
-            y += 3.5;
-          }
+          for (const task of lot.tasks) drawAvancTask(task);
           y += 1;
         }
       }
@@ -6094,7 +6131,9 @@ function buildCRSection(companyId, week, isLatest, sec) {
   const head = document.createElement('div');
   head.className = 'cr-section-head';
   const toggleBtn = `<button type="button" class="cr-section-toggle" data-cr-action="toggle-section" data-company-id="${companyId}" data-week-id="${weekId}" data-section-key="${sec.key}" aria-label="${collapsed ? 'Déplier' : 'Replier'}">${collapsed ? '+' : '−'}</button>`;
-  const addBtn    = `<button type="button" class="cr-add-entry" data-cr-action="add-entry" data-company-id="${companyId}" data-week-id="${weekId}" data-section-key="${sec.key}" aria-label="Ajouter une note">+</button>`;
+  const addAction = sec.key === 'avancement' ? 'add-choose' : 'add-entry';
+  const addLabel  = sec.key === 'avancement' ? 'Ajouter une tâche ou un widget' : 'Ajouter une note';
+  const addBtn    = `<button type="button" class="cr-add-entry" data-cr-action="${addAction}" data-company-id="${companyId}" data-week-id="${weekId}" data-section-key="${sec.key}" aria-label="${addLabel}">+</button>`;
   // Avancements : aperçu read-only + interrupteur ; mais on garde aussi le
   // bouton « + » pour permettre d'ajouter des notes libres au-dessus
   // de l'aperçu (cohérent avec les autres rubriques).
@@ -6146,7 +6185,11 @@ function buildCRSection(companyId, week, isLatest, sec) {
   const hasPreview = sec.key === 'avancement' || sec.key === 'admin' || sec.key === 'effectifs';
   const entries = getCREntries(companyId, weekId, sec.key);
   if (entries.length > 0) {
-    for (const entry of entries) body.appendChild(buildCREntry(companyId, weekId, sec.key, entry));
+    for (const entry of entries) {
+      body.appendChild(isCRWidgetEntry(entry)
+        ? buildCRWidgetEntry(companyId, weekId, sec.key, entry)
+        : buildCREntry(companyId, weekId, sec.key, entry));
+    }
   } else if (!hasPreview) {
     const placeholder = document.createElement('p');
     placeholder.className = 'cr-section-empty';
@@ -6451,7 +6494,9 @@ function buildCRAvancTaskRow(task) {
   head.appendChild(title);
   const meta = document.createElement('span');
   meta.className = 'cr-avanc-task-meta';
-  meta.textContent = fmtRecapVolume(task.type, task.total);
+  // metaText : libellé imposé (widget manuel, dont l'unité est libre) ;
+  // sinon on retombe sur le volume calculé depuis les plans.
+  meta.textContent = task.metaText != null ? task.metaText : fmtRecapVolume(task.type, task.total);
   head.appendChild(meta);
   li.appendChild(head);
   // Liste des plans qui contribuent à cette tâche (utile quand plusieurs
@@ -6492,6 +6537,297 @@ function buildCRAvancTaskRow(task) {
   }
   if (lg.childNodes.length > 0) li.appendChild(lg);
   return li;
+}
+
+// ====================================================================
+//   CR — WIDGET D'AVANCEMENT MANUEL
+//   Même forme que l'aperçu automatique alimenté par l'onglet Suivi, mais
+//   les quantités sont saisies à la main. Le widget vit dans le MÊME
+//   tableau d'entrées que les notes (crEntries[...][sectionKey]) et se
+//   distingue par kind: 'widget' — les notes existantes, qui n'ont pas ce
+//   champ, restent lues exactement comme avant.
+//   Champs propres au widget : title, unit, qtyTotal, qtyDone, qtyDoing.
+//   (On n'utilise surtout pas « done », déjà pris par la case « Faite »
+//   des notes.)
+// ====================================================================
+const CR_WIDGET_UNITS = ['m²', 'ml', 'u', 'm³', 'kg', 'T', '%'];
+
+function isCRWidgetEntry(e) { return !!e && e.kind === 'widget'; }
+function parseCRQty(v) {
+  const n = parseFloat(String(v == null ? '' : v).replace(',', '.').replace(/\s/g, ''));
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+// Quantités écrêtées + pourcentages, dérivés à l'affichage (jamais stockés).
+function computeCRWidget(e) {
+  const total = parseCRQty(e.qtyTotal);
+  let done = parseCRQty(e.qtyDone);
+  let doing = parseCRQty(e.qtyDoing);
+  if (total > 0) {
+    done = Math.min(done, total);
+    doing = Math.min(doing, total - done);
+  }
+  const todo = Math.max(0, total - done - doing);
+  const base = total > 0 ? total : (done + doing);
+  const pct = base > 0
+    ? { done: (done / base) * 100, doing: (doing / base) * 100, todo: (todo / base) * 100 }
+    : { done: 0, doing: 0, todo: 0 };
+  return { total, done, doing, todo, pct, unit: (e.unit || '').trim() };
+}
+function crWidgetMetaText(v) {
+  const u = v.unit ? ' ' + v.unit : '';
+  if (v.total > 0) return formatQty(v.done) + ' / ' + formatQty(v.total) + u;
+  return formatQty(v.done) + u;
+}
+
+function addCRWidget(companyId, weekId, sectionKey) {
+  const list = ensureCRBucket(companyId, weekId, sectionKey);
+  const wk = getCRWeeks(companyId).find(w => w.id === weekId);
+  const entry = {
+    id: uid(),
+    kind: 'widget',
+    draft: true,                  // en cours de saisie → formulaire
+    title: '',
+    unit: 'm²',
+    qtyTotal: '',
+    qtyDone: '',
+    qtyDoing: '',
+    crOrigin: wk ? wk.label : ''
+  };
+  list.push(entry);
+  if (state.crCollapsed[companyId] && state.crCollapsed[companyId][weekId]) {
+    delete state.crCollapsed[companyId][weekId][sectionKey];
+  }
+  save();
+  renderCR();
+  requestAnimationFrame(() => {
+    const el = document.querySelector(`.cr-widget[data-entry-id="${cssEscape(entry.id)}"] .cr-widget-title-input`);
+    if (el) { el.focus(); el.scrollIntoView({ block: 'center' }); }
+  });
+}
+function getCRWidgetEntry(companyId, weekId, sectionKey, entryId) {
+  return getCREntries(companyId, weekId, sectionKey).find(e => e.id === entryId && isCRWidgetEntry(e)) || null;
+}
+function setCRWidgetField(companyId, weekId, sectionKey, entryId, field, value) {
+  const e = getCRWidgetEntry(companyId, weekId, sectionKey, entryId);
+  if (!e) return null;
+  e[field] = value;
+  save();
+  return e;
+}
+function setCRWidgetDraft(companyId, weekId, sectionKey, entryId, draft) {
+  const e = getCRWidgetEntry(companyId, weekId, sectionKey, entryId);
+  if (!e) return;
+  if (!draft && !(e.title || '').trim()) {
+    showToast('Donnez un intitulé à la tâche', 'error');
+    const el = document.querySelector(`.cr-widget[data-entry-id="${cssEscape(entryId)}"] .cr-widget-title-input`);
+    if (el) el.focus();
+    return;
+  }
+  e.draft = !!draft;
+  save();
+  renderCR();
+}
+
+// ---------- Rendu : formulaire (brouillon) ou forme finale ----------
+function buildCRWidgetEntry(companyId, weekId, sectionKey, entry) {
+  const wrap = document.createElement('div');
+  wrap.className = 'cr-widget' + (entry.draft ? ' is-draft' : '');
+  wrap.dataset.companyId = companyId;
+  wrap.dataset.weekId = weekId;
+  wrap.dataset.sectionKey = sectionKey;
+  wrap.dataset.entryId = entry.id;
+  if (entry.draft) buildCRWidgetForm(wrap, companyId, weekId, sectionKey, entry);
+  else buildCRWidgetFinal(wrap, companyId, weekId, sectionKey, entry);
+  return wrap;
+}
+
+function buildCRWidgetForm(wrap, companyId, weekId, sectionKey, entry) {
+  const head = document.createElement('div');
+  head.className = 'cr-widget-form-head';
+  head.appendChild(crEl('span', 'cr-widget-form-title', 'Widget d\'avancement'));
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'cr-widget-x';
+  del.setAttribute('aria-label', 'Supprimer ce widget');
+  del.textContent = '×';
+  del.dataset.crAction = 'delete-entry';
+  del.dataset.companyId = companyId;
+  del.dataset.weekId = weekId;
+  del.dataset.sectionKey = sectionKey;
+  del.dataset.entryId = entry.id;
+  head.appendChild(del);
+  wrap.appendChild(head);
+
+  // Aperçu vivant : la barre se remplit au fur et à mesure de la saisie.
+  const preview = document.createElement('div');
+  preview.className = 'cr-widget-live';
+  wrap.appendChild(preview);
+  const refresh = () => renderCRWidgetPreview(preview, entry);
+
+  const mkField = (label, cls, value, placeholder, onInput, opts) => {
+    const box = document.createElement('div');
+    box.className = 'cr-widget-field' + (opts && opts.wide ? ' is-wide' : '');
+    box.appendChild(crEl('label', 'cr-widget-label', label));
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.className = 'cr-widget-input ' + cls;
+    inp.value = value == null ? '' : String(value);
+    inp.placeholder = placeholder || '';
+    if (opts && opts.numeric) inp.inputMode = 'decimal';
+    if (opts && opts.list) inp.setAttribute('list', opts.list);
+    if (opts && opts.maxLength) inp.maxLength = opts.maxLength;
+    inp.addEventListener('input', () => { onInput(inp.value); refresh(); });
+    box.appendChild(inp);
+    return box;
+  };
+
+  wrap.appendChild(mkField('Intitulé de la tâche', 'cr-widget-title-input', entry.title,
+    'Ex. Pose du bardage — façade Est',
+    (v) => setCRWidgetField(companyId, weekId, sectionKey, entry.id, 'title', v),
+    { wide: true, maxLength: 120 }));
+
+  const grid = document.createElement('div');
+  grid.className = 'cr-widget-grid';
+  grid.appendChild(mkField('Quantité totale', 'cr-widget-total', entry.qtyTotal, '0',
+    (v) => setCRWidgetField(companyId, weekId, sectionKey, entry.id, 'qtyTotal', v), { numeric: true }));
+  grid.appendChild(mkField('Unité', 'cr-widget-unit', entry.unit, 'm²',
+    (v) => setCRWidgetField(companyId, weekId, sectionKey, entry.id, 'unit', v),
+    { list: 'cr-widget-units', maxLength: 8 }));
+  grid.appendChild(mkField('Quantité réalisée', 'cr-widget-done', entry.qtyDone, '0',
+    (v) => setCRWidgetField(companyId, weekId, sectionKey, entry.id, 'qtyDone', v), { numeric: true }));
+  grid.appendChild(mkField('Quantité en cours', 'cr-widget-doing', entry.qtyDoing, '0',
+    (v) => setCRWidgetField(companyId, weekId, sectionKey, entry.id, 'qtyDoing', v), { numeric: true }));
+  wrap.appendChild(grid);
+
+  const hint = crEl('p', 'cr-widget-hint',
+    'Le reste à faire se calcule tout seul : total − réalisée − en cours.');
+  wrap.appendChild(hint);
+
+  const actions = document.createElement('div');
+  actions.className = 'cr-widget-form-actions';
+  const ok = document.createElement('button');
+  ok.type = 'button';
+  ok.className = 'btn-primary cr-widget-validate';
+  ok.textContent = 'Valider';
+  ok.dataset.crAction = 'validate-widget';
+  ok.dataset.companyId = companyId;
+  ok.dataset.weekId = weekId;
+  ok.dataset.sectionKey = sectionKey;
+  ok.dataset.entryId = entry.id;
+  actions.appendChild(ok);
+  wrap.appendChild(actions);
+
+  refresh();
+}
+// Aperçu de la barre pendant la saisie (sans reconstruire la page).
+function renderCRWidgetPreview(host, entry) {
+  host.innerHTML = '';
+  const v = computeCRWidget(entry);
+  host.appendChild(buildCRAvancTaskRow({
+    title: (entry.title || '').trim() || 'Intitulé à renseigner',
+    metaText: crWidgetMetaText(v),
+    pct: v.pct
+  }));
+  host.appendChild(buildCRWidgetQtyLine(v));
+}
+// Ligne de quantités sous la barre — c'est ce que le widget automatique ne
+// peut pas donner (il ne connaît que des pourcentages de surface de plan).
+function buildCRWidgetQtyLine(v) {
+  const line = document.createElement('div');
+  line.className = 'cr-widget-qty';
+  const u = v.unit ? ' ' + v.unit : '';
+  const parts = [['done', 'Réalisée', v.done], ['doing', 'En cours', v.doing], ['todo', 'Reste', v.todo]];
+  for (const [k, label, val] of parts) {
+    if (k === 'doing' && val <= 0) continue;
+    const item = document.createElement('span');
+    item.className = 'cr-widget-qty-item is-' + k;
+    item.appendChild(crEl('span', 'cr-widget-qty-label', label));
+    item.appendChild(crEl('span', 'cr-widget-qty-val', formatQty(val) + u));
+    line.appendChild(item);
+  }
+  return line;
+}
+
+function buildCRWidgetFinal(wrap, companyId, weekId, sectionKey, entry) {
+  const v = computeCRWidget(entry);
+  const actions = document.createElement('div');
+  actions.className = 'cr-widget-actions';
+  const mkBtn = (cls, action, label, html) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = cls;
+    b.setAttribute('aria-label', label);
+    b.title = label;
+    b.innerHTML = html;
+    b.dataset.crAction = action;
+    b.dataset.companyId = companyId;
+    b.dataset.weekId = weekId;
+    b.dataset.sectionKey = sectionKey;
+    b.dataset.entryId = entry.id;
+    return b;
+  };
+  actions.appendChild(mkBtn('cr-widget-edit', 'edit-widget', 'Modifier ce widget',
+    '<svg viewBox="0 0 24 24"><path d="M3 17v4h4l11-11-4-4L3 17Zm17.7-11.6-2.1-2.1a1 1 0 0 0-1.4 0l-1.8 1.8 3.5 3.5 1.8-1.8a1 1 0 0 0 0-1.4Z"/></svg>'));
+  actions.appendChild(mkBtn('cr-widget-x', 'delete-entry', 'Supprimer ce widget', '×'));
+  wrap.appendChild(actions);
+
+  const card = document.createElement('div');
+  card.className = 'cr-widget-card';
+  card.appendChild(buildCRAvancTaskRow({
+    title: entry.title,
+    metaText: crWidgetMetaText(v),
+    pct: v.pct
+  }));
+  card.appendChild(buildCRWidgetQtyLine(v));
+  wrap.appendChild(card);
+}
+
+// Petit menu au clic sur « + » : note classique ou widget d'avancement.
+function openCRAddMenu(btn, companyId, weekId, sectionKey) {
+  closeCRAddMenu();
+  const menu = document.createElement('div');
+  menu.className = 'cr-add-menu';
+  menu.id = 'cr-add-menu';
+  const mk = (label, hint, onClick) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'cr-add-menu-item';
+    b.appendChild(crEl('span', 'cr-add-menu-label', label));
+    b.appendChild(crEl('span', 'cr-add-menu-hint', hint));
+    b.addEventListener('click', (ev) => { ev.stopPropagation(); closeCRAddMenu(); onClick(); });
+    menu.appendChild(b);
+  };
+  mk('Tâche', 'Une ligne de texte avec échéance et responsable',
+    () => addCREntry(companyId, weekId, sectionKey));
+  mk('Widget d\'avancement', 'Intitulé et quantités saisis à la main',
+    () => addCRWidget(companyId, weekId, sectionKey));
+  document.body.appendChild(menu);
+
+  const r = btn.getBoundingClientRect();
+  const w = menu.offsetWidth;
+  let left = r.right - w;
+  left = Math.max(8, Math.min(left, window.innerWidth - w - 8));
+  let top = r.bottom + 6;
+  if (top + menu.offsetHeight > window.innerHeight - 8) top = Math.max(8, r.top - menu.offsetHeight - 6);
+  menu.style.left = left + 'px';
+  menu.style.top = top + 'px';
+
+  setTimeout(() => {
+    document.addEventListener('click', closeCRAddMenu, { once: true });
+    document.addEventListener('keydown', crAddMenuEsc);
+  }, 0);
+}
+function crAddMenuEsc(e) { if (e.key === 'Escape') closeCRAddMenu(); }
+function closeCRAddMenu() {
+  const m = document.getElementById('cr-add-menu');
+  if (m) m.remove();
+  document.removeEventListener('keydown', crAddMenuEsc);
+}
+function crEl(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text != null) el.textContent = text;
+  return el;
 }
 
 function buildCREntry(companyId, weekId, sectionKey, entry) {
@@ -15593,8 +15929,19 @@ function init() {
         if (addCRSection(proposed)) renderCR();
       } else if (action === 'add-entry') {
         addCREntry(companyId, weekId, sectionKey);
+      } else if (action === 'add-choose') {
+        e.stopPropagation();
+        openCRAddMenu(t, companyId, weekId, sectionKey);
+      } else if (action === 'validate-widget') {
+        setCRWidgetDraft(companyId, weekId, sectionKey, entryId, false);
+      } else if (action === 'edit-widget') {
+        setCRWidgetDraft(companyId, weekId, sectionKey, entryId, true);
       } else if (action === 'delete-entry') {
-        if (confirm('Supprimer cette note ?')) deleteCREntry(companyId, weekId, sectionKey, entryId);
+        const list = getCREntries(companyId, weekId, sectionKey);
+        const isWidget = isCRWidgetEntry(list.find(x => x.id === entryId));
+        if (confirm(isWidget ? 'Supprimer ce widget ?' : 'Supprimer cette note ?')) {
+          deleteCREntry(companyId, weekId, sectionKey, entryId);
+        }
       }
     });
     crPage.addEventListener('change', (e) => {
