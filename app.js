@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.58';
+const APP_VERSION = '1.59';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -3124,6 +3124,398 @@ function dbBar(pct, cls) {
   return wrap;
 }
 
+// ====================================================================
+//   Export PDF de la synthèse d'avancement (Avancement → Récapitulatif)
+//   Reprend la charte de l'export CR : A4 portrait, en-tête centré,
+//   rubriques numérotées à bandeau orange, pied de page daté et paginé.
+//   Le document reprend le tableau de bord de l'écran, dans l'ordre :
+//   indicateurs, courbe, bâtiments, ouvrages et tâches, points d'attention.
+// ====================================================================
+async function exportAvancementToPDF(scope, label) {
+  let jspdf;
+  try {
+    showToast('Génération du PDF…');
+    jspdf = await loadJsPdf();
+  } catch (e) {
+    showToast('Impossible de charger jsPDF (connexion requise au 1er usage)', 'error');
+    return;
+  }
+  const model = computeAvancementModel(scope);
+  const planning = computeAvancementPlanning(model.pct);
+  const velocity = computeAvancementVelocity();
+  const unit = model.weighting === 'heures' ? ' h' : '';
+
+  const pdf = hardenPdfText(new jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' }));
+  const PAGE_W = 210, PAGE_H = 297;
+  const MARGIN = 18;
+  const CONTENT_W = PAGE_W - 2 * MARGIN;
+  const ORANGE = [237, 108, 2];
+  const GREY_H = [232, 232, 232];
+  const ALT = [248, 248, 248];
+  const GREEN = [46, 125, 50], AMBER = [237, 108, 2], RED = [211, 47, 47], BLUE = [29, 127, 184];
+  let y = MARGIN;
+  let pageNum = 1;
+
+  const addFooter = () => {
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(120);
+    const d = new Date();
+    const stamp = `Édité le ${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()} ` +
+                  `à ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    pdf.text(stamp, MARGIN, PAGE_H - 10);
+    pdf.text(`Page ${pageNum}`, PAGE_W - MARGIN, PAGE_H - 10, { align: 'right' });
+    pdf.setTextColor(0);
+  };
+  const ensureSpace = (h) => {
+    if (y + h > PAGE_H - 18) { addFooter(); pdf.addPage(); pageNum++; y = MARGIN; }
+  };
+  let secNum = 0;
+  const banner = (title) => {
+    secNum++;
+    ensureSpace(16);
+    pdf.setFillColor(...ORANGE);
+    pdf.rect(MARGIN, y, CONTENT_W, 7.5, 'F');
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(11); pdf.setTextColor(255);
+    pdf.text(`${secNum}.  ${title}`, MARGIN + 4, y + 5.3);
+    pdf.setTextColor(0);
+    y += 13;
+  };
+  // Barre empilée réalisée / en cours / à faire — ici une simple jauge
+  // d'avancement (réalisé vs reste), la granularité du tableau de bord.
+  const gauge = (pct, x, w, h) => {
+    pdf.setFillColor(224, 224, 224);
+    pdf.rect(x, y, w, h, 'F');
+    const p = Math.max(0, Math.min(100, pct));
+    if (p > 0) {
+      pdf.setFillColor(...(p >= 99.95 ? GREEN : (p >= 50 ? AMBER : RED)));
+      pdf.rect(x, y, w * (p / 100), h, 'F');
+    }
+  };
+
+  // ----- En-tête -----
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(16);
+  pdf.text('SYNTHÈSE D\'AVANCEMENT', PAGE_W / 2, y, { align: 'center' });
+  y += 8;
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(11);
+  pdf.text(label || 'Tout le projet', PAGE_W / 2, y, { align: 'center' });
+  y += 5;
+  const d0 = new Date();
+  pdf.setFontSize(9); pdf.setTextColor(100);
+  pdf.text(`Édité le ${String(d0.getDate()).padStart(2,'0')}/${String(d0.getMonth()+1).padStart(2,'0')}/${d0.getFullYear()}`,
+    PAGE_W / 2, y, { align: 'center' });
+  pdf.setTextColor(0);
+  y += 6;
+  pdf.setDrawColor(60); pdf.setLineWidth(0.4);
+  pdf.line(MARGIN, y, PAGE_W - MARGIN, y);
+  y += 8;
+
+  // ----- 1. Indicateurs clés -----
+  banner('INDICATEURS CLÉS');
+  {
+    const cards = [
+      {
+        label: 'AVANCEMENT GLOBAL',
+        value: formatPct(Math.round(model.pct * 10) / 10) + ' %',
+        color: ORANGE,
+        sub: model.weighting === 'heures' ? 'pondéré par les heures budgétées'
+          : (model.weighting === 'quantites' ? 'pondéré par les quantités' : 'moyenne des tâches'),
+        pct: model.pct
+      },
+      planning ? {
+        label: 'ÉCART AU PLANNING',
+        value: (planning.ecart >= 0 ? '+' : '-') + formatPct(Math.abs(Math.round(planning.ecart * 10) / 10)) + ' pts',
+        color: planning.ecart >= 0 ? GREEN : RED,
+        sub: (planning.ecart >= 0 ? 'En avance' : 'En retard') + ' — attendu ' + formatPct(Math.round(planning.pctTemps * 10) / 10) + ' %'
+      } : { label: 'ÉCART AU PLANNING', value: '—', color: [140,140,140], sub: 'dates de chantier non renseignées' },
+      {
+        label: model.weighting === 'heures' ? 'HEURES DE MAIN-D\'ŒUVRE' : 'CHARGE PONDÉRÉE',
+        value: formatHours(model.hDone) + unit,
+        color: [40, 40, 40],
+        sub: 'sur ' + formatHours(model.hBudget) + unit + ' — reste ' + formatHours(Math.max(0, model.hBudget - model.hDone)) + unit
+      },
+      planning ? {
+        label: 'CALENDRIER',
+        value: planning.remainingDays + ' j',
+        color: BLUE,
+        sub: 'fin le ' + fmtFR(planning.end) + ' — ' + planning.elapsed + '/' + planning.totalDays + ' j écoulés'
+      } : { label: 'CALENDRIER', value: '—', color: [140,140,140], sub: 'dates de chantier non renseignées' },
+    ];
+    const gap = 3;
+    const cw = (CONTENT_W - gap * 3) / 4;
+    const ch = 26;
+    ensureSpace(ch + 4);
+    const top = y;
+    cards.forEach((c, i) => {
+      const x = MARGIN + i * (cw + gap);
+      pdf.setFillColor(250, 249, 247); pdf.setDrawColor(210); pdf.setLineWidth(0.2);
+      pdf.rect(x, top, cw, ch, 'FD');
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(6.5); pdf.setTextColor(120);
+      pdf.text(pdf.splitTextToSize(c.label, cw - 5)[0], x + 2.5, top + 5);
+      pdf.setFontSize(15); pdf.setTextColor(...c.color);
+      pdf.text(c.value, x + 2.5, top + 13);
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(6.5); pdf.setTextColor(110);
+      const lines = pdf.splitTextToSize(c.sub, cw - 5).slice(0, 2);
+      lines.forEach((ln, j) => pdf.text(ln, x + 2.5, top + 18.5 + j * 3));
+      pdf.setTextColor(0);
+    });
+    y = top + ch + 3;
+    // Jauge pleine largeur sous les cartes
+    ensureSpace(6);
+    gauge(model.pct, MARGIN, CONTENT_W, 3);
+    y += 6;
+    if (velocity) {
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(110);
+      pdf.text('Rythme observé : ' + formatPct(Math.round(velocity.perWeek * 10) / 10) + ' pts/semaine'
+        + (velocity.etaISO ? ' — fin projetée le ' + fmtFR(velocity.etaISO) : '')
+        + ' (sur ' + velocity.windowDays + ' jours)', MARGIN, y);
+      pdf.setTextColor(0);
+      y += 5;
+    }
+    y += 3;
+  }
+
+  // ----- 2. Courbe d'avancement -----
+  const hist = state.avancementHistory || {};
+  const hKeys = Object.keys(hist).sort();
+  if (hKeys.length > 0) {
+    banner('COURBE D\'AVANCEMENT');
+    const H = 52, PADL = 12, PADB = 7, PADT = 3;
+    ensureSpace(H + 8);
+    const gx = MARGIN, gy = y, gw = CONTENT_W, gh = H;
+    pdf.setFillColor(252, 251, 250); pdf.setDrawColor(215); pdf.setLineWidth(0.2);
+    pdf.rect(gx, gy, gw, gh, 'FD');
+    const day = 86400000;
+    const first = new Date(hKeys[0] + 'T00:00:00').getTime();
+    const last = new Date(hKeys[hKeys.length - 1] + 'T00:00:00').getTime();
+    const t0 = planning ? Math.min(first, new Date(planning.start + 'T00:00:00').getTime()) : first;
+    const t1 = planning ? Math.max(last, new Date(planning.end + 'T00:00:00').getTime()) : Math.max(last, t0 + day);
+    const span = Math.max(day, t1 - t0);
+    const px = (ms) => gx + PADL + ((ms - t0) / span) * (gw - PADL - 4);
+    const py = (p) => gy + PADT + (1 - Math.max(0, Math.min(100, p)) / 100) * (gh - PADT - PADB);
+    // Grille + graduations
+    pdf.setFontSize(6); pdf.setTextColor(140);
+    for (const p of [0, 25, 50, 75, 100]) {
+      pdf.setDrawColor(228); pdf.setLineWidth(0.15);
+      pdf.line(gx + PADL, py(p), gx + gw - 4, py(p));
+      pdf.text(p + '%', gx + PADL - 1.5, py(p) + 1, { align: 'right' });
+    }
+    // Trajectoire théorique (pointillés)
+    if (planning) {
+      const ps = new Date(planning.start + 'T00:00:00').getTime();
+      const pe = new Date(planning.end + 'T00:00:00').getTime();
+      pdf.setDrawColor(...BLUE); pdf.setLineWidth(0.5);
+      const x1 = px(ps), y1 = py(0), x2 = px(pe), y2 = py(100);
+      const steps = 46;
+      for (let i = 0; i < steps; i += 2) {
+        const a = i / steps, b2 = Math.min(1, (i + 1) / steps);
+        pdf.line(x1 + (x2 - x1) * a, y1 + (y2 - y1) * a, x1 + (x2 - x1) * b2, y1 + (y2 - y1) * b2);
+      }
+    }
+    // Courbe réelle
+    pdf.setDrawColor(...ORANGE); pdf.setLineWidth(0.7);
+    let prev = null;
+    for (const k of hKeys) {
+      const cur = { x: px(new Date(k + 'T00:00:00').getTime()), y: py(hist[k].pct) };
+      if (prev) pdf.line(prev.x, prev.y, cur.x, cur.y);
+      prev = cur;
+    }
+    if (prev) { pdf.setFillColor(...ORANGE); pdf.circle(prev.x, prev.y, 1, 'F'); }
+    // Repère « aujourd'hui »
+    const tx = px(new Date(todayISO() + 'T00:00:00').getTime());
+    if (tx >= gx + PADL && tx <= gx + gw - 4) {
+      pdf.setDrawColor(150); pdf.setLineWidth(0.2);
+      for (let yy = gy + PADT; yy < gy + gh - PADB; yy += 3) pdf.line(tx, yy, tx, Math.min(yy + 1.5, gy + gh - PADB));
+    }
+    // Dates aux extrémités
+    pdf.setTextColor(140); pdf.setFontSize(6);
+    pdf.text(fmtFR(new Date(t0).toISOString().slice(0, 10)), gx + PADL, gy + gh - 2);
+    pdf.text(fmtFR(new Date(t1).toISOString().slice(0, 10)), gx + gw - 4, gy + gh - 2, { align: 'right' });
+    pdf.setTextColor(0);
+    y = gy + gh + 4;
+    // Légende
+    pdf.setFontSize(7.5);
+    let lx = MARGIN;
+    const leg = [[ORANGE, 'Avancement réel']].concat(planning ? [[BLUE, 'Trajectoire théorique']] : []);
+    for (const [col, txt] of leg) {
+      pdf.setDrawColor(...col); pdf.setLineWidth(0.7);
+      pdf.line(lx, y - 1, lx + 5, y - 1);
+      pdf.setTextColor(110); pdf.text(txt, lx + 6.5, y);
+      lx += 6.5 + pdf.getTextWidth(txt) + 8;
+    }
+    pdf.setTextColor(0);
+    y += 7;
+  }
+
+  // ----- 3. Par bâtiment -----
+  if (model.buildings.length > 1) {
+    banner('AVANCEMENT PAR BÂTIMENT');
+    const rows = model.buildings.slice().sort((a, b) => b.pct - a.pct);
+    for (const b of rows) {
+      ensureSpace(12);
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(20);
+      pdf.text(b.name, MARGIN, y);
+      pdf.text(formatPct(Math.round(b.pct * 10) / 10) + ' %', MARGIN + CONTENT_W, y, { align: 'right' });
+      y += 1.5;
+      gauge(b.pct, MARGIN, CONTENT_W, 2.4);
+      y += 5.5;
+      const delta = b.pct - model.pct;
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(120);
+      let txt = formatHours(b.hDone) + ' / ' + formatHours(b.hBudget) + unit
+        + ' — ' + b.zones + ' zone' + (b.zones > 1 ? 's' : '');
+      pdf.text(txt, MARGIN, y);
+      if (Math.abs(delta) >= 0.05) {
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(...(delta >= 0 ? GREEN : RED));
+        pdf.text((delta >= 0 ? '+' : '-') + formatPct(Math.abs(Math.round(delta * 10) / 10)) + ' pts vs moyenne',
+          MARGIN + CONTENT_W, y, { align: 'right' });
+      }
+      pdf.setTextColor(0);
+      y += 6;
+    }
+    y += 2;
+  }
+
+  // ----- 4. Détail par ouvrage et par tâche -----
+  banner('DÉTAIL PAR OUVRAGE');
+  {
+    const cw = { task: CONTENT_W - 26 - 30 - 30 - 18, poids: 26, real: 30, reste: 30, pct: 18 };
+    const cx = {};
+    cx.task = MARGIN;
+    cx.poids = cx.task + cw.task;
+    cx.real = cx.poids + cw.poids;
+    cx.reste = cx.real + cw.real;
+    cx.pct = cx.reste + cw.reste;
+    const tableHead = () => {
+      ensureSpace(6);
+      pdf.setFillColor(...GREY_H);
+      pdf.rect(MARGIN, y, CONTENT_W, 5, 'F');
+      pdf.setDrawColor(190); pdf.setLineWidth(0.15);
+      pdf.rect(MARGIN, y, CONTENT_W, 5, 'S');
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(60);
+      pdf.text('Tâche', cx.task + 2, y + 3.4);
+      pdf.text('Poids', cx.poids + cw.poids - 2, y + 3.4, { align: 'right' });
+      pdf.text('Réalisé', cx.real + cw.real - 2, y + 3.4, { align: 'right' });
+      pdf.text('Reste', cx.reste + cw.reste - 2, y + 3.4, { align: 'right' });
+      pdf.text('%', cx.pct + cw.pct - 2, y + 3.4, { align: 'right' });
+      pdf.setTextColor(0);
+      y += 5;
+    };
+    for (const o of model.ouvrages) {
+      ensureSpace(24);
+      // Bandeau de l'ouvrage
+      const BOX_H = 15;
+      pdf.setFillColor(245, 243, 240); pdf.setDrawColor(205); pdf.setLineWidth(0.2);
+      pdf.rect(MARGIN, y, CONTENT_W, BOX_H, 'FD');
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(20);
+      pdf.text(pdf.splitTextToSize(o.name, CONTENT_W - 46)[0], MARGIN + 3, y + 5);
+      pdf.setFontSize(10); pdf.setTextColor(...ORANGE);
+      pdf.text(formatPct(Math.round(o.pct * 10) / 10) + ' %', MARGIN + CONTENT_W - 3, y + 5, { align: 'right' });
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.5); pdf.setTextColor(110);
+      pdf.text(formatQty(o.qtyDone) + ' / ' + formatQty(o.qtyTotal) + ' ' + o.unit
+        + ' — reste ' + formatQty(o.qtyRemaining) + ' ' + o.unit
+        + ' — poids ' + formatPct(Math.round(o.weight * 10) / 10) + ' % du projet', MARGIN + 3, y + 9);
+      pdf.setTextColor(0);
+      // Jauge sous la ligne de quantités, à l'intérieur de l'encadré.
+      const boxTop = y;
+      y = boxTop + 11.6;
+      gauge(o.pct, MARGIN + 3, CONTENT_W - 6, 1.6);
+      y = boxTop + BOX_H + 1.5;
+      // Tableau des tâches
+      tableHead();
+      let alt = false;
+      for (const t of o.tasks) {
+        ensureSpace(5.5);
+        if (alt) { pdf.setFillColor(...ALT); pdf.rect(MARGIN, y, CONTENT_W, 5, 'F'); }
+        alt = !alt;
+        pdf.setDrawColor(220); pdf.setLineWidth(0.12);
+        pdf.line(MARGIN, y + 5, MARGIN + CONTENT_W, y + 5);
+        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8);
+        pdf.setTextColor(t.excluded ? 140 : 30);
+        pdf.text(pdf.splitTextToSize(t.name + (t.excluded ? '  (hors ratio)' : ''), cw.task - 4)[0], cx.task + 2, y + 3.4);
+        const na = '-';
+        pdf.setTextColor(90);
+        pdf.text(t.excluded ? na : formatPct(Math.round(t.share * 1000) / 10) + ' %', cx.poids + cw.poids - 2, y + 3.4, { align: 'right' });
+        pdf.text(t.excluded ? na : formatQty(t.qtyDone) + ' ' + o.unit, cx.real + cw.real - 2, y + 3.4, { align: 'right' });
+        pdf.text(t.excluded ? na : formatQty(Math.max(0, t.qtyMax - t.qtyDone)) + ' ' + o.unit, cx.reste + cw.reste - 2, y + 3.4, { align: 'right' });
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(...(t.pct >= 99.95 ? GREEN : (t.pct > 0 ? [60,60,60] : [150,150,150])));
+        pdf.text(formatPct(Math.round(t.pct * 10) / 10) + ' %', cx.pct + cw.pct - 2, y + 3.4, { align: 'right' });
+        pdf.setTextColor(0);
+        y += 5;
+      }
+      y += 5;
+    }
+  }
+
+  // ----- 5. Points d'attention -----
+  banner('POINTS D\'ATTENTION');
+  {
+    const bullet = (txt, color) => {
+      const lines = pdf.splitTextToSize(txt, CONTENT_W - 6);
+      ensureSpace(lines.length * 4 + 1);
+      pdf.setFillColor(...(color || [140, 140, 140]));
+      pdf.circle(MARGIN + 1.4, y - 1.2, 0.9, 'F');
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(40);
+      lines.forEach((ln, i) => pdf.text(ln, MARGIN + 5, y + i * 4));
+      pdf.setTextColor(0);
+      y += lines.length * 4 + 0.5;
+    };
+    const subTitle = (txt) => {
+      ensureSpace(8);
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8); pdf.setTextColor(110);
+      pdf.text(txt.toUpperCase(), MARGIN, y);
+      pdf.setTextColor(0);
+      y += 4.5;
+    };
+
+    subTitle('Reste à faire le plus lourd');
+    const heavy = model.zones
+      .filter(z => z.hBudget > 0 && z.pct < 99.95)
+      .sort((a, b) => (b.hBudget * (100 - b.pct)) - (a.hBudget * (100 - a.pct)))
+      .slice(0, 6);
+    if (!heavy.length) bullet('Tout est terminé dans ce périmètre.', GREEN);
+    for (const z of heavy) {
+      bullet(z.label + ' — ' + formatHours(z.hBudget - z.hDone) + unit + ' restants (' + formatPct(Math.round(z.pct)) + ' %)', AMBER);
+    }
+    y += 2;
+
+    subTitle('Sans mise à jour depuis ' + AVANCEMENT_STALE_DAYS + ' jours');
+    const stale = model.issues.stale.slice(0, 6);
+    if (!stale.length) bullet('Toutes les zones en cours ont été mises à jour récemment.', GREEN);
+    for (const s of stale) {
+      bullet(s.label + ' — ' + (s.days == null ? 'jamais saisie' : s.days + ' jours') + ' (' + formatPct(Math.round(s.pct)) + ' %)', RED);
+    }
+    y += 2;
+
+    subTitle('Qualité des données');
+    const notes = [];
+    if (model.weighting !== 'heures') {
+      notes.push(['Aucun ratio de production saisi : l\'avancement est pondéré par '
+        + (model.weighting === 'quantites' ? 'les quantités.' : 'le nombre de tâches.'), AMBER]);
+    }
+    const noRatio = [...new Set(model.issues.noRatio.map(i => i.name))];
+    if (noRatio.length) notes.push([noRatio.length + ' ouvrage(s) sans ratio ne pèsent pas dans le global : ' + noRatio.slice(0, 5).join(', ') + '.', AMBER]);
+    const noQty = [...new Set(model.issues.noQty.map(i => i.setupName))];
+    if (noQty.length) notes.push([model.issues.noQty.length + ' affectation(s) sans quantité (' + noQty.slice(0, 5).join(', ') + ').', AMBER]);
+    if (!planning) notes.push(['Dates de chantier non renseignées : ni écart au planning, ni trajectoire théorique.', AMBER]);
+    if (!notes.length) notes.push(['Ratios, quantités et dates sont renseignés : le chiffre global est pleinement pondéré.', GREEN]);
+    for (const [txt, col] of notes) bullet(txt, col);
+    y += 2;
+    pdf.setFont('helvetica', 'italic'); pdf.setFontSize(8); pdf.setTextColor(120);
+    ensureSpace(5);
+    pdf.text(model.counts.zones + ' zones porteuses  ·  ' + model.counts.ouvrages + ' ouvrages  ·  '
+      + model.counts.taches + ' tâches  ·  ' + model.counts.zonesDone + ' zones terminées  ·  '
+      + model.counts.zonesToStart + ' non commencées', MARGIN, y);
+    pdf.setTextColor(0);
+  }
+
+  addFooter();
+  const slug = (label || 'projet').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '') || 'projet';
+  const dd = String(d0.getDate()).padStart(2, '0');
+  const mm = String(d0.getMonth() + 1).padStart(2, '0');
+  pdf.save(`Avancement_${slug}_${dd}-${mm}-${d0.getFullYear()}.pdf`);
+}
+
 // ======================= RENDU DU TABLEAU DE BORD =======================
 function renderRecap() {
   const pickerEl = document.getElementById('recappicker');
@@ -3162,11 +3554,11 @@ function renderRecap() {
   mkChip('', 'Tout le projet', full.pct);
   for (const b of full.buildings) mkChip(b.id, b.name, b.pct);
   pickerEl.appendChild(chips);
-  const exportBtn = dbEl('button', 'db-export', 'Exporter la synthèse');
+  const exportBtn = dbEl('button', 'db-export', 'Exporter en PDF');
   exportBtn.type = 'button';
   exportBtn.addEventListener('click', () => {
     const label = scope ? (buildings.find(b => b.id === scope) || {}).name : 'Tout le projet';
-    travauxShareOrCopy('Synthèse avancement — ' + label, buildAvancementSynthesisText(model, scope, label));
+    exportAvancementToPDF(scope, label);
   });
   pickerEl.appendChild(exportBtn);
 
@@ -3576,52 +3968,6 @@ function buildDbFocus(model, planning) {
   return card;
 }
 
-// ----- Export texte pour la réunion -----
-function buildAvancementSynthesisText(model, scope, label) {
-  const planning = computeAvancementPlanning(model.pct);
-  const velocity = computeAvancementVelocity();
-  const L = [];
-  L.push('SYNTHÈSE AVANCEMENT — ' + (label || 'Tout le projet'));
-  L.push('Au ' + fmtFR(todayISO()));
-  L.push('');
-  L.push('Avancement global : ' + formatPct(Math.round(model.pct * 10) / 10) + ' %'
-    + (model.weighting === 'heures' ? ' (pondéré par les heures budgétées)' : ''));
-  const unit = model.weighting === 'heures' ? ' h' : '';
-  L.push('Charge : ' + formatHours(model.hDone) + ' / ' + formatHours(model.hBudget) + unit
-    + ' — reste ' + formatHours(Math.max(0, model.hBudget - model.hDone)) + unit);
-  if (planning) {
-    L.push('Planning : ' + formatPct(Math.round(planning.pctTemps * 10) / 10) + ' % du temps écoulé, '
-      + planning.remainingDays + ' j restants (fin le ' + fmtFR(planning.end) + ')');
-    L.push('Écart : ' + (planning.ecart >= 0 ? '+' : '−') + formatPct(Math.abs(Math.round(planning.ecart * 10) / 10))
-      + ' pts — ' + (planning.ecart >= 0 ? 'en avance' : 'en retard'));
-  }
-  if (velocity) {
-    L.push('Rythme : ' + formatPct(Math.round(velocity.perWeek * 10) / 10) + ' pts/semaine'
-      + (velocity.etaISO ? ' — fin projetée le ' + fmtFR(velocity.etaISO) : ''));
-  }
-  if (!scope && model.buildings.length > 1) {
-    L.push('');
-    L.push('PAR BÂTIMENT');
-    for (const b of model.buildings.slice().sort((a, b2) => b2.pct - a.pct)) {
-      L.push('  ' + b.name + ' : ' + formatPct(Math.round(b.pct * 10) / 10) + ' % ('
-        + formatHours(b.hDone) + ' / ' + formatHours(b.hBudget) + ')');
-    }
-  }
-  L.push('');
-  L.push('PAR OUVRAGE');
-  for (const o of model.ouvrages) {
-    L.push('  ' + o.name + ' : ' + formatPct(Math.round(o.pct * 10) / 10) + ' % — '
-      + formatQty(o.qtyDone) + ' / ' + formatQty(o.qtyTotal) + ' ' + o.unit
-      + ' (poids ' + formatPct(Math.round(o.weight * 10) / 10) + ' %)');
-  }
-  const stale = model.issues.stale.slice(0, 5);
-  if (stale.length) {
-    L.push('');
-    L.push('SANS MISE À JOUR DEPUIS ' + AVANCEMENT_STALE_DAYS + ' JOURS');
-    for (const s of stale) L.push('  ' + s.label + ' — ' + (s.days == null ? 'jamais saisie' : s.days + ' j') + ' (' + formatPct(Math.round(s.pct)) + ' %)');
-  }
-  return L.join('\n');
-}
 
 // ---------- Administratif → Sécurité (documents par entreprise) ----------
 function getCompanyDocs(cid) { return state.adminDocs[cid] || []; }
@@ -5332,6 +5678,30 @@ function renameCRWeek(companyId, weekId, newLabel) {
 // Supprime une semaine + son contenu (entries, collapses, visibilité).
 // Si on supprime la semaine la plus récente, on « dégèle » la nouvelle
 // dernière (qui redevient live).
+// Avec les polices standard, jsPDF n'encode que le jeu WinAnsi. Un seul
+// caractère hors jeu — typiquement l'espace fine insécable (U+202F) que
+// toLocaleString('fr-FR') insère comme séparateur de milliers — le fait
+// basculer en encodage 16 bits : le texte ressort alors lettre par lettre
+// (« 2 5 0 / 1 0 0 0 »). On normalise donc TOUT texte à l'écriture, ce qui
+// protège aussi les mesures de largeur et les retours à la ligne.
+function pdfSafeText(v) {
+  return String(v == null ? '' : v)
+    .replace(/[\u00A0\u2000-\u200B\u202F\u205F\u3000]/g, ' ')
+    .replace(/[\u2010-\u2015\u2212]/g, '-')
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E]/g, '"')
+    .replace(/\u2026/g, '...');
+}
+function hardenPdfText(pdf) {
+  const t0 = pdf.text.bind(pdf);
+  const s0 = pdf.splitTextToSize.bind(pdf);
+  const w0 = pdf.getTextWidth.bind(pdf);
+  pdf.text = (t, x, y, o, tr) => t0(Array.isArray(t) ? t.map(pdfSafeText) : pdfSafeText(t), x, y, o, tr);
+  pdf.splitTextToSize = (t, w, o) => s0(pdfSafeText(t), w, o);
+  pdf.getTextWidth = (t) => w0(pdfSafeText(t));
+  return pdf;
+}
+
 // ====================================================================
 //   Export PDF d'un CR — Design A « Rapport classique sobre »
 //   A4 portrait, en-tête centré, rubriques numérotées, pagination
@@ -5356,24 +5726,7 @@ async function exportCRToPDF(companyId, weekId) {
     return;
   }
   const pdf = new jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-  // Avec les polices standard, jsPDF n'encode que le jeu WinAnsi. Un seul
-  // caractère hors jeu — typiquement l'espace fine insécable (U+202F) que
-  // toLocaleString('fr-FR') insère comme séparateur de milliers — le fait
-  // basculer en encodage 16 bits : le texte ressort alors lettre par lettre
-  // (« 2 5 0 / 1 0 0 0 »). On normalise donc TOUT texte à l'écriture, ce qui
-  // protège aussi les mesures de largeur et les retours à la ligne.
-  const pdfSafeText = (v) => String(v == null ? '' : v)
-    .replace(/[\u00A0\u2000-\u200B\u202F\u205F\u3000]/g, ' ')
-    .replace(/[\u2010-\u2015\u2212]/g, '-')
-    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
-    .replace(/[\u201C\u201D\u201E]/g, '"')
-    .replace(/\u2026/g, '...');
-  const _pdfText  = pdf.text.bind(pdf);
-  const _pdfSplit = pdf.splitTextToSize.bind(pdf);
-  const _pdfWidth = pdf.getTextWidth.bind(pdf);
-  pdf.text = (t, x, y2, o, tr) => _pdfText(Array.isArray(t) ? t.map(pdfSafeText) : pdfSafeText(t), x, y2, o, tr);
-  pdf.splitTextToSize = (t, w, o) => _pdfSplit(pdfSafeText(t), w, o);
-  pdf.getTextWidth = (t) => _pdfWidth(pdfSafeText(t));
+  hardenPdfText(pdf);
   const PAGE_W = 210, PAGE_H = 297;
   const MARGIN = 18;
   const CONTENT_W = PAGE_W - 2 * MARGIN;
