@@ -4720,16 +4720,156 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   gap: 18px;
   grid-auto-flow: row dense;
 }
-.dashboard-hero          { grid-column: 1 / -1; }
-.dashboard-companies-tall { grid-row: span 2; }
 .dashboard-buildings-wide { grid-column: 1 / -1; }
+/* Les points d'attention occupent deux colonnes, la courbe la troisième :
+   c'est la ligne qu'on lit juste après les indicateurs vitaux. */
+.dashboard-focus-wide    { grid-column: span 2; }
 @media (max-width: 1080px) {
   .dashboard-grid { grid-template-columns: 1fr 1fr; }
-  .dashboard-companies-tall { grid-row: auto; }
+  .dashboard-focus-wide { grid-column: 1 / -1; }
 }
 @media (max-width: 720px) {
   .dashboard-grid { grid-template-columns: 1fr; gap: 14px; }
+  .dashboard-focus-wide { grid-column: auto; }
 }
+
+/* ============ BANDEAU DES INDICATEURS VITAUX ============ */
+.dash-vitals-band {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 18px 22px 20px;
+  margin-bottom: 18px;
+  box-shadow: var(--shadow-sm);
+}
+.dash-vitals-head {
+  display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.dash-vitals-eyebrow {
+  font-size: 11px; font-weight: 800; letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--accent-2);
+}
+.dash-vitals-date { font-size: 13px; font-weight: 600; color: var(--text-3); }
+.dash-vitals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+.dash-vital {
+  display: flex; flex-direction: column; gap: 3px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 12px 14px 13px;
+  text-align: left;
+  min-width: 0;
+}
+.dash-vital:hover { border-color: var(--border-strong); }
+.dash-vital-label {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--text-3);
+}
+.dash-vital-value { display: flex; align-items: baseline; gap: 5px; flex-wrap: wrap; }
+.dash-vital-num {
+  font-size: 27px; font-weight: 800; line-height: 1.05;
+  color: var(--text); font-variant-numeric: tabular-nums;
+}
+.dash-vital-unit { font-size: 11.5px; font-weight: 700; color: var(--text-3); }
+.dash-vital.is-accent .dash-vital-num { color: var(--accent-2); }
+.dash-vital.is-ok     .dash-vital-num { color: var(--success-2); }
+.dash-vital.is-warn   .dash-vital-num { color: var(--warning); }
+.dash-vital.is-bad    .dash-vital-num { color: var(--danger); }
+.dash-vital.is-info   .dash-vital-num { color: var(--info); }
+.dash-vital.is-idle   .dash-vital-num { color: var(--text-4); }
+.dash-vital-gauge {
+  display: block; height: 5px; margin-top: 4px;
+  background: var(--surface-3); border-radius: 999px; overflow: hidden;
+}
+.dash-vital-gauge-fill { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+.dash-vital-gauge-fill.is-ok   { background: var(--success); }
+.dash-vital-gauge-fill.is-warn { background: var(--warning); }
+.dash-vital-gauge-fill.is-bad  { background: var(--danger); }
+.dash-vital-gauge-fill.is-info { background: var(--info); }
+.dash-vital-gauge-fill.is-idle { background: var(--border-strong); }
+.dash-vital-sub { font-size: 11px; color: var(--text-3); line-height: 1.35; }
+
+/* ============ POINTS D'ATTENTION CONSOLIDÉS ============ */
+.dash-focus { display: flex; flex-direction: column; gap: 6px; }
+.dash-focus-row {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  text-align: left;
+}
+.dash-focus-row:hover { border-color: var(--border-strong); }
+.dash-focus-num {
+  flex-shrink: 0;
+  min-width: 30px;
+  font-size: 19px; font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.dash-focus-row.is-danger  { background: var(--danger-soft);  border-color: var(--danger-border); }
+.dash-focus-row.is-warning { background: var(--warning-soft); border-color: var(--warning-border); }
+.dash-focus-row.is-danger  .dash-focus-num { color: var(--danger); }
+.dash-focus-row.is-warning .dash-focus-num { color: var(--warning); }
+.dash-focus-row.is-info    .dash-focus-num { color: var(--info); }
+.dash-focus-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.dash-focus-label { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.35; }
+.dash-focus-detail { font-size: 11px; color: var(--text-3); }
+.dash-focus-go { flex-shrink: 0; color: var(--text-4); font-size: 14px; font-weight: 700; }
+.dash-focus-row:hover .dash-focus-go { color: var(--accent); }
+
+/* ============ MINI-COURBE D'AVANCEMENT ============ */
+.dash-curve { display: flex; flex-direction: column; gap: 6px; }
+.dash-curve-svg { width: 100%; height: auto; display: block; }
+.dash-curve-grid { stroke: var(--border); stroke-width: 1; }
+.dash-curve-axis { fill: var(--text-4); font-size: 8px; font-family: inherit; }
+.dash-curve-theory { stroke: var(--info); stroke-width: 1.6; stroke-dasharray: 5 4; opacity: 0.85; }
+.dash-curve-line { stroke: var(--accent); stroke-width: 2; fill: none; stroke-linejoin: round; stroke-linecap: round; }
+.dash-curve-area { fill: var(--accent); opacity: 0.12; }
+.dash-curve-dot { fill: var(--accent); stroke: var(--surface); stroke-width: 1.5; }
+.dash-curve-today { stroke: var(--text-4); stroke-width: 1; stroke-dasharray: 2 3; }
+.dash-curve-legend { display: flex; gap: 14px; flex-wrap: wrap; }
+.dash-curve-leg { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-3); font-weight: 600; }
+.dash-curve-swatch { width: 14px; height: 3px; border-radius: 2px; background: var(--text-4); }
+.dash-curve-swatch.is-real { background: var(--accent); }
+.dash-curve-swatch.is-theory { background: var(--info); }
+
+/* ============ MINI-CARTES (CCTP, comptes-rendus) ============ */
+.dash-mini { flex: 1; display: flex; flex-direction: column; gap: 12px; }
+.dash-mini-main { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
+.dash-mini-num { font-size: 30px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1; }
+.dash-mini-unit { font-size: 12px; font-weight: 700; color: var(--text-3); }
+.dash-mini-sub { margin-top: 3px; font-size: 11.5px; color: var(--text-3); }
+.dash-mini-rows { display: flex; flex-direction: column; gap: 5px; }
+.dash-mini-row {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 5px 0;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+}
+.dash-mini-label { flex: 1; min-width: 0; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-mini-val { flex-shrink: 0; font-weight: 800; font-variant-numeric: tabular-nums; }
+.dash-mini-val.is-ok   { color: var(--success-2); }
+.dash-mini-val.is-warn { color: var(--warning); }
+.dash-mini-val.is-bad  { color: var(--danger); }
+.dash-mini-val.is-idle { color: var(--text-4); }
+
+/* Sous-ligne des bâtiments : charge et écart à la moyenne */
+.dash-building-sub {
+  display: flex; align-items: baseline; gap: 10px;
+  margin-top: 3px;
+  font-size: 11px; color: var(--text-3);
+}
+.dash-building-meta { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-building-delta { flex-shrink: 0; font-weight: 800; }
+.dash-building-delta.is-positive { color: var(--success-2); }
+.dash-building-delta.is-negative { color: var(--danger); }
 
 /* ----- Carte générique ----- */
 .dashboard-card {
@@ -4742,91 +4882,7 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   flex-direction: column;
   position: relative;
 }
-.dashboard-card.dash-hero-card {
-  background: linear-gradient(180deg, var(--surface), var(--surface-2));
-  padding: 24px 26px 22px;
-}
-
-/* ----- Header de carte (eyebrow + lien Ouvrir →) ----- */
-.dash-card-head {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 16px;
-}
-.dash-card-eyebrow {
-  font-size: 11.5px; font-weight: 700;
-  letter-spacing: 0.1em;
-  color: var(--text-3);
-  text-transform: uppercase;
-}
-.dash-card-link {
-  font-size: 12px; font-weight: 600;
-  color: var(--accent);
-  background: none; border: none;
-  cursor: pointer;
-  padding: 4px 0;
-  font-family: inherit;
-  -webkit-tap-highlight-color: transparent;
-}
-.dash-card-link:hover { color: var(--accent-2); }
-
-/* ============ HERO STRIP ============ */
-.dash-hero-head { margin-bottom: 18px; }
-.dash-hero-eyebrow {
-  font-size: 11.5px; font-weight: 700;
-  letter-spacing: 0.16em;
-  color: var(--accent);
-  margin-bottom: 6px;
-}
-.dash-hero-date {
-  font-size: 18px; font-weight: 600;
-  color: var(--text);
-  letter-spacing: -0.01em;
-}
-.dash-hero-strip {
-  display: grid;
-  grid-template-columns: 1.2fr 1px auto 1px auto;
-  align-items: center;
-  gap: 26px;
-}
-.dash-hero-sep {
-  width: 1px;
-  align-self: stretch;
-  background: var(--border);
-}
-.dash-hero-presence { min-width: 0; }
-.dash-presence-row {
-  display: flex; align-items: baseline; gap: 14px;
-}
-.dash-hero-num {
-  font-size: 64px; font-weight: 800;
-  color: var(--text);
-  line-height: 0.92;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.03em;
-}
-.dash-hero-meta { padding-bottom: 6px; }
-.dash-hero-meta-line {
-  font-size: 14px; font-weight: 600;
-  color: var(--text-2);
-}
-.dash-hero-meta-sub {
-  font-size: 12px; color: var(--text-4);
-  margin-top: 2px;
-}
-.dash-presence-bar {
-  height: 7px; border-radius: 5px;
-  background: var(--border);
-  margin-top: 16px;
-  max-width: 380px;
-  overflow: hidden;
-}
-.dash-presence-bar-fill {
-  height: 100%; border-radius: 5px;
-  background: linear-gradient(90deg, var(--accent), var(--accent-2));
-  transition: width 0.4s ease;
-}
-
-/* Donut (entreprises présentes ET budget EOTP) */
+.dashboard-card/* Donut du budget eOTP (état « aucun dépassement ») */
 .dash-donut {
   position: relative;
   width: 100px; height: 100px;
@@ -4844,7 +4900,6 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
 }
-.dash-hero-card .dash-donut-inner { background: var(--surface-2); }
 .dash-donut-num {
   font-size: 26px; font-weight: 800;
   color: var(--text);
@@ -4852,46 +4907,10 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   font-variant-numeric: tabular-nums;
 }
 .dash-donut-num-success { color: var(--success-2); font-size: 24px; }
-.dash-donut-den {
-  font-size: 14px; color: var(--text-4);
-  font-weight: 600;
-}
 .dash-donut-cap {
   font-size: 10.5px; color: var(--text-4);
   letter-spacing: 0.04em;
   margin-top: 2px;
-}
-
-/* Hero weather */
-.dash-hero-weather { text-align: center; }
-.dash-hero-weather-pill {
-  display: inline-flex; align-items: center; gap: 6px;
-  margin-top: 10px;
-  padding: 5px 12px;
-  border-radius: 999px;
-  font-size: 12px; font-weight: 600;
-}
-.dash-hero-weather-pill.is-ok {
-  background: var(--success-soft);
-  border: 1px solid var(--success-border);
-  color: var(--success-2);
-}
-.dash-hero-weather-pill.is-warn {
-  background: var(--warning-soft);
-  border: 1px solid var(--warning-border);
-  color: var(--warning);
-}
-.dash-pill-glyph { font-size: 13px; }
-
-/* Hero strip — responsive : passe en colonne sur mobile */
-@media (max-width: 720px) {
-  .dash-hero-strip {
-    grid-template-columns: 1fr 1fr;
-    gap: 18px;
-  }
-  .dash-hero-presence { grid-column: 1 / -1; }
-  .dash-hero-sep { display: none; }
-  .dash-hero-num { font-size: 52px; }
 }
 
 /* ============ ALERTES DOCUMENTS ============ */

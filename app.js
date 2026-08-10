@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.59';
+const APP_VERSION = '1.60';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -885,7 +885,9 @@ const STOCK_ALERT_THRESHOLD_DAYS = 7; // jours ouvrés avant épuisement
 
 function renderDashboard() {
   if (!document.getElementById('page-dashboard')) return;
-  renderDashboardToday();
+  renderDashboardVitals();
+  renderDashboardAlerts();
+  renderDashboardCurve();
   renderDashboardDocAlerts();
   renderDashboardStockAlerts();
   renderDashboardConsommable();
@@ -893,8 +895,427 @@ function renderDashboard() {
   renderDashboardHeures();
   renderDashboardDevis();
   renderDashboardST();
+  renderDashboardTravaux();
+  renderDashboardCR();
   renderDashboardCompaniesPresence();
   renderDashboardBuildings();
+}
+
+// ====================================================================
+//   SANTÉ DU PROJET — indicateurs vitaux et points d'attention
+//   Le tableau de bord ne recalcule rien pour son compte : il consomme
+//   les mêmes moteurs que les récapitulatifs (avancement pondéré par les
+//   heures, planning, rythme), pour qu'un chiffre lu ici soit exactement
+//   celui lu dans l'onglet correspondant.
+// ====================================================================
+
+// --- Bandeau des indicateurs vitaux ---
+function renderDashboardVitals() {
+  const el = document.getElementById('dashvitals');
+  if (!el) return;
+  el.innerHTML = '';
+  const model = computeAvancementModel('');
+  const planning = computeAvancementPlanning(model.pct);
+  const velocity = computeAvancementVelocity();
+  const alerts = computeProjectAlerts();
+  const worst = alerts.length ? alerts[0].sev : null;
+  const date = state.currentDate;
+  const presences = state.presences[date] || [];
+  const present = presences.reduce((s, e) => s + (e.count || 0), 0);
+  const presentCompanies = presences.filter(e => (e.count || 0) > 0).length;
+
+  const head = dashEl('div', 'dash-vitals-head');
+  head.appendChild(dashEl('span', 'dash-vitals-eyebrow', 'SANTÉ DU PROJET'));
+  const { full } = formatDateFR(date);
+  head.appendChild(dashEl('span', 'dash-vitals-date', full));
+  el.appendChild(head);
+
+  const strip = dashEl('div', 'dash-vitals');
+  const tile = (opts) => {
+    const t = dashEl('button', 'dash-vital' + (opts.tone ? ' is-' + opts.tone : ''));
+    t.type = 'button';
+    t.appendChild(dashEl('span', 'dash-vital-label', opts.label));
+    const v = dashEl('span', 'dash-vital-value');
+    v.appendChild(dashEl('span', 'dash-vital-num', opts.value));
+    if (opts.unit) v.appendChild(dashEl('span', 'dash-vital-unit', opts.unit));
+    t.appendChild(v);
+    if (opts.gauge != null) {
+      const g = dashEl('span', 'dash-vital-gauge');
+      const f = dashEl('span', 'dash-vital-gauge-fill' + (opts.tone ? ' is-' + opts.tone : ''));
+      f.style.width = Math.max(0, Math.min(100, opts.gauge)) + '%';
+      g.appendChild(f);
+      t.appendChild(g);
+    }
+    if (opts.sub) t.appendChild(dashEl('span', 'dash-vital-sub', opts.sub));
+    if (opts.page) t.addEventListener('click', () => { switchPage(opts.page); if (opts.sub2) switchSubPage(opts.sub2[0], opts.sub2[1]); });
+    strip.appendChild(t);
+  };
+
+  const pctTone = model.pct >= 99.95 ? 'ok' : (model.pct >= 50 ? 'accent' : (model.pct > 0 ? 'warn' : 'idle'));
+  tile({
+    label: 'Avancement', value: model.hBudget > 0 || model.pct > 0 ? formatPct(Math.round(model.pct * 10) / 10) : '—',
+    unit: '%', gauge: model.pct, tone: pctTone,
+    sub: model.weighting === 'heures' ? 'pondéré par les heures' : 'pondération de repli',
+    page: 'avancement', sub2: ['avancement', 'recap']
+  });
+  if (planning) {
+    tile({
+      label: 'Écart au planning',
+      value: (planning.ecart >= 0 ? '+' : '−') + formatPct(Math.abs(Math.round(planning.ecart * 10) / 10)),
+      unit: 'pts', tone: planning.ecart >= 0 ? 'ok' : 'bad',
+      sub: (planning.ecart >= 0 ? 'en avance' : 'en retard') + ' · attendu ' + formatPct(Math.round(planning.pctTemps * 10) / 10) + ' %',
+      page: 'avancement', sub2: ['avancement', 'recap']
+    });
+    tile({
+      label: 'Calendrier', value: String(planning.remainingDays), unit: 'j restants',
+      gauge: planning.pctTemps, tone: 'info',
+      sub: 'fin le ' + fmtFR(planning.end) + (velocity && velocity.etaISO ? ' · projetée ' + fmtFR(velocity.etaISO) : ''),
+      page: 'avancement', sub2: ['avancement', 'recap']
+    });
+  } else {
+    tile({ label: 'Calendrier', value: '—', tone: 'idle', sub: 'dates non renseignées (Données → Admin.)', page: 'donnees' });
+  }
+  const weatherCount = Object.keys(state.weather?.[date] || {}).length;
+  tile({
+    label: 'Effectif du jour', value: String(present), unit: present > 1 ? 'personnes' : 'personne',
+    tone: present > 0 ? 'accent' : 'idle',
+    sub: presentCompanies + '/' + state.companies.length + ' entreprise' + (state.companies.length > 1 ? 's' : '') + ' présente' + (presentCompanies > 1 ? 's' : '')
+      + (weatherCount ? ' · ' + weatherCount + ' en intempéries' : ' · aucune intempérie'),
+    page: 'effectifs'
+  });
+  const nAlert = alerts.reduce((s, a) => s + 1, 0);
+  tile({
+    label: 'Points d\'attention', value: String(nAlert),
+    unit: nAlert > 1 ? 'sujets' : 'sujet',
+    tone: worst === 'danger' ? 'bad' : (worst === 'warning' ? 'warn' : 'ok'),
+    sub: nAlert === 0 ? 'rien à signaler' : (worst === 'danger' ? 'dont des sujets bloquants' : 'à surveiller')
+  });
+  el.appendChild(strip);
+}
+
+// --- Agrégation des points d'attention, toutes sources confondues ---
+// Chaque entrée : { sev, n, label, detail, page, sub } — sev pilote le tri
+// et la couleur, page/sub le saut vers l'onglet concerné.
+function computeProjectAlerts() {
+  const out = [];
+  const push = (sev, n, label, detail, page, sub) => {
+    if (!n) return;
+    out.push({ sev, n, label, detail, page, sub });
+  };
+
+  // Administratif — documents obligatoires
+  let nExpired = 0, nDanger = 0, nWarning = 0;
+  for (const worker of state.workers) {
+    const empType = getWorkerDocs(worker.id).employmentType;
+    let maxIdx = -1;
+    for (const docId of getApplicableDocIds(empType)) {
+      if (!isDocRequired(docId)) continue;
+      const idx = STATUS_WORST_ORDER.indexOf(getDocStatus(worker.id, docId));
+      if (idx > maxIdx) maxIdx = idx;
+    }
+    const worst = maxIdx >= 0 ? STATUS_WORST_ORDER[maxIdx] : null;
+    if (worst === 'expired') nExpired++;
+    else if (worst === 'danger') nDanger++;
+    else if (worst === 'warning') nWarning++;
+  }
+  push('danger', nExpired, 'ouvrier(s) avec un document périmé', 'Administratif → eCheckIn', 'administratif');
+  push('warning', nDanger, 'ouvrier(s) dont un document expire sous 3 jours', 'Administratif → eCheckIn', 'administratif');
+  push('info', nWarning, 'ouvrier(s) dont un document expire sous 7 jours', 'Administratif → eCheckIn', 'administratif');
+
+  // Stock
+  let nOut = 0, nCrit = 0;
+  for (const item of getStockSummary()) {
+    const dep = getArticleDepletion(item.article, item.stock);
+    if (dep.days === null || dep.days < 0) continue;
+    if (dep.days <= 0) nOut++;
+    else if (dep.days <= STOCK_ALERT_THRESHOLD_DAYS) nCrit++;
+  }
+  push('danger', nOut, 'article(s) en rupture de stock', 'Stock', 'stock');
+  push('warning', nCrit, 'article(s) épuisés sous ' + STOCK_ALERT_THRESHOLD_DAYS + ' jours ouvrés', 'Stock', 'stock');
+
+  // Budget eOTP — dépassement projeté en fin de chantier
+  const elapsed = getProjectMonthsElapsed(), totalProj = getProjectMonthsTotal();
+  if (elapsed > 0 && totalProj > 0) {
+    const spentByCode = new Map();
+    for (const e of getConsommableEntries()) {
+      const code = (e.eOTP || '').trim();
+      if (!code) continue;
+      spentByCode.set(code, (spentByCode.get(code) || 0) + (Number(e.qty) || 0) * (Number(e.unitPrice) || 0));
+    }
+    let over = 0, near = 0;
+    for (const e of getEOTPs()) {
+      const code = (e.code || '').trim();
+      if (!code || !(e.budget > 0)) continue;
+      const fdc = (spentByCode.get(code) || 0) / elapsed * totalProj;
+      const ratio = fdc / e.budget;
+      if (ratio >= 1) over++;
+      else if (ratio >= 0.8) near++;
+    }
+    push('danger', over, 'ligne(s) eOTP en dépassement projeté', 'Consommable → Budget', 'consommable');
+    push('warning', near, 'ligne(s) eOTP au-delà de 80 % du budget', 'Consommable → Budget', 'consommable');
+  }
+
+  // Heures — écart au stade négatif
+  const selected = getEOTPs().filter(e => getHeuresRow(e.id).selected);
+  if (selected.length) {
+    let ecart = 0;
+    for (const e of selected) ecart += computeHeuresRow(getHeuresRow(e.id)).ecart;
+    if (ecart < 0) {
+      out.push({ sev: 'warning', n: fmtHeures(Math.abs(ecart)),
+        label: 'heures consommées au-delà du droit à dépenser',
+        detail: 'Suivi des heures — écart au stade', page: 'heures' });
+    }
+  }
+
+  // Avancement — zones sans mise à jour, ouvrages non pondérés
+  const model = computeAvancementModel('');
+  push('warning', model.issues.stale.length,
+    'zone(s) en cours sans mise à jour depuis ' + AVANCEMENT_STALE_DAYS + ' jours', 'Avancement → Récapitulatif',
+    'avancement', ['avancement', 'recap']);
+  const noRatio = [...new Set(model.issues.noRatio.map(i => i.name))];
+  push('info', noRatio.length, 'ouvrage(s) sans ratio ne pesant pas dans l\'avancement',
+    noRatio.slice(0, 3).join(', '), 'donnees');
+
+  // Travaux — articles de CCTP sans localisation
+  let noLoca = 0;
+  for (const p of getTravauxPrescriptions()) {
+    if (p.everywhere) continue;
+    if (Object.keys(p.zones || {}).length) continue;
+    if ((p.localisation || '').trim()) continue;
+    noLoca++;
+  }
+  push('info', noLoca, 'article(s) de CCTP sans localisation', 'Travaux → CCTP', 'travaux', ['travaux', 'cctp']);
+
+  // CR — tâches en retard d'échéance sur le dernier CR de chaque entreprise
+  let lateCR = 0;
+  const today = todayISO();
+  for (const c of state.companies) {
+    const weeks = getCRWeeks(c.id);
+    if (!weeks.length) continue;
+    const last = weeks[weeks.length - 1];
+    for (const sec of getCRSections()) {
+      for (const e of getCREntries(c.id, last.id, sec.key)) {
+        if (isCRWidgetEntry(e) || e.done) continue;
+        if (e.echeance && e.echeance !== 'PM' && e.echeance < today) lateCR++;
+      }
+    }
+  }
+  push('warning', lateCR, 'tâche(s) de compte-rendu en retard d\'échéance', 'CR', 'cr');
+
+  // Devis et ST — chiffres protégés par mot de passe
+  if (protectedUnlocked) {
+    const waiting = getDevisList().filter(d => d.etat === 'envoye').length;
+    push('info', waiting, 'devis envoyé(s) en attente de réponse', 'Devis', 'devis');
+    let overST = 0;
+    for (const c of state.companies) {
+      if (!ST_GROUPS.some(g => getSTEntries(c.id, g.key).length > 0)) continue;
+      const r = computeSTRecap(c.id);
+      if (r.budget > 0 && r.depenses > r.budget) overST++;
+    }
+    push('danger', overST, 'sous-traitant(s) au-delà du budget', 'ST', 'st');
+  }
+
+  const rank = { danger: 0, warning: 1, info: 2 };
+  out.sort((a, b) => rank[a.sev] - rank[b.sev] || (Number(b.n) || 0) - (Number(a.n) || 0));
+  return out;
+}
+
+// --- Carte « Points d'attention » consolidée ---
+function renderDashboardAlerts() {
+  const el = document.getElementById('dashalerts');
+  if (!el) return;
+  el.innerHTML = '';
+  el.appendChild(dashboardCardHeader('Points d\'attention', null));
+  const body = dashEl('div', 'dash-focus');
+  const alerts = computeProjectAlerts();
+  if (!alerts.length) {
+    body.innerHTML = '<div class="dash-empty-ok"><div class="dash-empty-icon">✓</div>'
+      + '<div class="dash-empty-text">Aucun point bloquant</div>'
+      + '<div class="dash-empty-sub">Documents, stock, budgets, avancement et comptes-rendus sont au vert.</div></div>';
+    el.appendChild(body);
+    return;
+  }
+  for (const a of alerts) {
+    const row = dashEl('button', 'dash-focus-row is-' + a.sev);
+    row.type = 'button';
+    row.appendChild(dashEl('span', 'dash-focus-num', String(a.n)));
+    const txt = dashEl('span', 'dash-focus-text');
+    txt.appendChild(dashEl('span', 'dash-focus-label', a.label));
+    if (a.detail) txt.appendChild(dashEl('span', 'dash-focus-detail', a.detail));
+    row.appendChild(txt);
+    row.appendChild(dashEl('span', 'dash-focus-go', '→'));
+    if (a.page) row.addEventListener('click', () => {
+      switchPage(a.page);
+      if (a.sub) switchSubPage(a.sub[0], a.sub[1]);
+    });
+    body.appendChild(row);
+  }
+  el.appendChild(body);
+}
+
+// --- Carte « Courbe d'avancement » (mini) ---
+function renderDashboardCurve() {
+  const el = document.getElementById('dashcurve');
+  if (!el) return;
+  el.innerHTML = '';
+  el.appendChild(dashboardCardHeader('Courbe d\'avancement', 'avancement'));
+  const body = dashEl('div', 'dash-curve');
+  const hist = state.avancementHistory || {};
+  const keys = Object.keys(hist).sort();
+  if (!keys.length) {
+    body.innerHTML = '<p class="dash-empty-text">La courbe se construit automatiquement : un point est enregistré chaque jour où l\'avancement évolue.</p>';
+    el.appendChild(body);
+    return;
+  }
+  const model = computeAvancementModel('');
+  const planning = computeAvancementPlanning(model.pct);
+  const W = 320, H = 130, PL = 24, PR = 6, PT = 8, PB = 16;
+  const day = 86400000;
+  const first = new Date(keys[0] + 'T00:00:00').getTime();
+  const last = new Date(keys[keys.length - 1] + 'T00:00:00').getTime();
+  const t0 = planning ? Math.min(first, new Date(planning.start + 'T00:00:00').getTime()) : first;
+  const t1 = planning ? Math.max(last, new Date(planning.end + 'T00:00:00').getTime()) : Math.max(last, t0 + day);
+  const span = Math.max(day, t1 - t0);
+  const x = (ms) => PL + ((ms - t0) / span) * (W - PL - PR);
+  const yy = (p) => PT + (1 - Math.max(0, Math.min(100, p)) / 100) * (H - PT - PB);
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('class', 'dash-curve-svg');
+  const mk = (tag, attrs) => {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  };
+  for (const p of [0, 50, 100]) {
+    svg.appendChild(mk('line', { x1: PL, x2: W - PR, y1: yy(p), y2: yy(p), class: 'dash-curve-grid' }));
+    const t = mk('text', { x: PL - 3, y: yy(p) + 3, class: 'dash-curve-axis', 'text-anchor': 'end' });
+    t.textContent = p + '%';
+    svg.appendChild(t);
+  }
+  if (planning) {
+    const ps = new Date(planning.start + 'T00:00:00').getTime();
+    const pe = new Date(planning.end + 'T00:00:00').getTime();
+    svg.appendChild(mk('line', { x1: x(ps), y1: yy(0), x2: x(pe), y2: yy(100), class: 'dash-curve-theory' }));
+  }
+  const pts = keys.map(k => ({ x: x(new Date(k + 'T00:00:00').getTime()), y: yy(hist[k].pct) }));
+  if (pts.length > 1) {
+    const d = pts.map((p, i) => (i ? 'L' : 'M') + p.x.toFixed(1) + ' ' + p.y.toFixed(1)).join(' ');
+    svg.appendChild(mk('path', { d: d + ` L${pts[pts.length - 1].x.toFixed(1)} ${yy(0)} L${pts[0].x.toFixed(1)} ${yy(0)} Z`, class: 'dash-curve-area' }));
+    svg.appendChild(mk('path', { d, class: 'dash-curve-line' }));
+  }
+  const lastPt = pts[pts.length - 1];
+  svg.appendChild(mk('circle', { cx: lastPt.x, cy: lastPt.y, r: 3, class: 'dash-curve-dot' }));
+  const tx = x(new Date(todayISO() + 'T00:00:00').getTime());
+  if (tx >= PL && tx <= W - PR) svg.appendChild(mk('line', { x1: tx, y1: PT, x2: tx, y2: H - PB, class: 'dash-curve-today' }));
+  const l0 = mk('text', { x: PL, y: H - 4, class: 'dash-curve-axis' });
+  l0.textContent = fmtFR(new Date(t0).toISOString().slice(0, 10));
+  svg.appendChild(l0);
+  const l1 = mk('text', { x: W - PR, y: H - 4, class: 'dash-curve-axis', 'text-anchor': 'end' });
+  l1.textContent = fmtFR(new Date(t1).toISOString().slice(0, 10));
+  svg.appendChild(l1);
+  body.appendChild(svg);
+  const legend = dashEl('div', 'dash-curve-legend');
+  const mkLeg = (cls, txt) => {
+    const s = dashEl('span', 'dash-curve-leg');
+    s.appendChild(dashEl('span', 'dash-curve-swatch ' + cls));
+    s.appendChild(dashEl('span', null, txt));
+    legend.appendChild(s);
+  };
+  mkLeg('is-real', 'Réel');
+  if (planning) mkLeg('is-theory', 'Théorique');
+  body.appendChild(legend);
+  el.appendChild(body);
+}
+
+// --- Carte « Travaux / CCTP » ---
+function renderDashboardTravaux() {
+  const el = document.getElementById('dashtravaux');
+  if (!el) return;
+  el.innerHTML = '';
+  el.appendChild(dashboardCardHeader('CCTP du chantier', 'travaux'));
+  const body = dashEl('div', 'dash-mini');
+  const arts = getTravauxPrescriptions();
+  if (!arts.length) {
+    body.innerHTML = '<p class="dash-empty-text">Aucun article. Renseignez le Carnet dans l\'onglet Travaux.</p>';
+    el.appendChild(body);
+    return;
+  }
+  const groups = buildTravauxCCTP().filter(g => g.ouvrages.some(c => c.articles.length));
+  const chapters = getTravauxOuvrages().length;
+  const localised = arts.filter(p => p.everywhere || Object.keys(p.zones || {}).length || (p.localisation || '').trim()).length;
+  const rempl = arts.filter(p => p.remplacement).length;
+  const pct = Math.round((localised / arts.length) * 100);
+  body.appendChild(dashMiniStat(String(arts.length), 'articles', chapters + ' chapitre' + (chapters > 1 ? 's' : '') + ' · ' + groups.length + ' lot' + (groups.length > 1 ? 's' : '')));
+  const row = dashEl('div', 'dash-mini-rows');
+  row.appendChild(dashMiniRow('Localisés', pct + ' %', pct >= 100 ? 'ok' : (pct >= 70 ? 'warn' : 'bad')));
+  row.appendChild(dashMiniRow('Remplacements', String(rempl), rempl ? 'warn' : 'idle'));
+  body.appendChild(row);
+  el.appendChild(body);
+}
+
+// --- Carte « Comptes-rendus » ---
+function renderDashboardCR() {
+  const el = document.getElementById('dashcr');
+  if (!el) return;
+  el.innerHTML = '';
+  el.appendChild(dashboardCardHeader('Comptes-rendus', 'cr'));
+  const body = dashEl('div', 'dash-mini');
+  const companies = state.companies.filter(c => getCRWeeks(c.id).length > 0);
+  if (!companies.length) {
+    body.innerHTML = '<p class="dash-empty-text">Aucun compte-rendu créé.</p>';
+    el.appendChild(body);
+    return;
+  }
+  const today = todayISO();
+  let open = 0, late = 0;
+  const rows = [];
+  for (const c of companies) {
+    const weeks = getCRWeeks(c.id);
+    const last = weeks[weeks.length - 1];
+    let o = 0, l = 0;
+    for (const sec of getCRSections()) {
+      for (const e of getCREntries(c.id, last.id, sec.key)) {
+        if (isCRWidgetEntry(e) || e.done) continue;
+        o++;
+        if (e.echeance && e.echeance !== 'PM' && e.echeance < today) l++;
+      }
+    }
+    open += o; late += l;
+    rows.push({ name: c.name, label: last.label, open: o, late: l });
+  }
+  body.appendChild(dashMiniStat(String(open), open > 1 ? 'tâches ouvertes' : 'tâche ouverte',
+    companies.length + ' entreprise' + (companies.length > 1 ? 's' : '') + ' suivie' + (companies.length > 1 ? 's' : '')));
+  const list = dashEl('div', 'dash-mini-rows');
+  for (const r of rows.slice(0, 4)) {
+    list.appendChild(dashMiniRow(r.name + ' · ' + r.label,
+      r.open + (r.late ? ' · ' + r.late + ' en retard' : ''),
+      r.late ? 'bad' : (r.open ? 'warn' : 'ok')));
+  }
+  body.appendChild(list);
+  el.appendChild(body);
+}
+
+function dashEl(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text != null) el.textContent = text;
+  return el;
+}
+function dashMiniStat(num, unit, sub) {
+  const box = dashEl('div', 'dash-mini-head');
+  const line = dashEl('div', 'dash-mini-main');
+  line.appendChild(dashEl('span', 'dash-mini-num', num));
+  line.appendChild(dashEl('span', 'dash-mini-unit', unit));
+  box.appendChild(line);
+  if (sub) box.appendChild(dashEl('div', 'dash-mini-sub', sub));
+  return box;
+}
+function dashMiniRow(label, value, tone) {
+  const r = dashEl('div', 'dash-mini-row');
+  r.appendChild(dashEl('span', 'dash-mini-label', label));
+  r.appendChild(dashEl('span', 'dash-mini-val is-' + (tone || 'idle'), value));
+  return r;
 }
 
 // Carte verrouillée (Devis / ST) : ces onglets sont protégés par mot de
@@ -1036,69 +1457,6 @@ function dashboardCardHeader(title, gotoPage) {
     h.appendChild(link);
   }
   return h;
-}
-
-// --- Widget « Aujourd'hui » (hero) ---
-// Bandeau présentation : eyebrow AUJOURD'HUI + date + 3 stats côte à côte
-// (présents | entreprises présentes en donut | intempéries) séparées par
-// des barres verticales. Source : state.presences + state.weather.
-function renderDashboardToday() {
-  const el = document.getElementById('dashtoday');
-  if (!el) return;
-  el.innerHTML = '';
-  const date = state.currentDate;
-  const presences = state.presences[date] || [];
-  const total = presences.reduce((s, e) => s + (e.count || 0), 0);
-  const presentCount = presences.filter(e => (e.count || 0) > 0).length;
-  const weatherCount = Object.keys(state.weather?.[date] || {}).length;
-  const totalCompanies = state.companies.length;
-  const { full } = formatDateFR(date);
-  // Capacité indicative : on plafonne à max(total, 60) pour montrer un
-  // remplissage proportionnel sans laisser le designer figer un seuil.
-  const capacity = Math.max(60, total);
-  const presencePct = capacity > 0 ? Math.min(100, (total / capacity) * 100) : 0;
-  const compPct = totalCompanies > 0 ? (presentCount / totalCompanies) * 100 : 0;
-
-  el.classList.add('dash-hero-card');
-  el.innerHTML = `
-    <div class="dash-hero-head">
-      <div>
-        <div class="dash-hero-eyebrow">AUJOURD'HUI SUR LE CHANTIER</div>
-        <div class="dash-hero-date">${escapeHtml(full)}</div>
-      </div>
-    </div>
-    <div class="dash-hero-strip">
-      <div class="dash-hero-presence">
-        <div class="dash-presence-row">
-          <div class="dash-hero-num">${total}</div>
-          <div class="dash-hero-meta">
-            <div class="dash-hero-meta-line">${total > 1 ? 'personnes présentes' : 'personne présente'}</div>
-            <div class="dash-hero-meta-sub">capacité indicative · ${Math.round(presencePct)} %</div>
-          </div>
-        </div>
-        <div class="dash-presence-bar"><div class="dash-presence-bar-fill" style="width:${presencePct}%"></div></div>
-      </div>
-      <div class="dash-hero-sep"></div>
-      <div class="dash-hero-donut-wrap">
-        <div class="dash-donut" style="--pct:${compPct}%">
-          <div class="dash-donut-inner">
-            <div class="dash-donut-num">${presentCount}<span class="dash-donut-den">/${totalCompanies}</span></div>
-            <div class="dash-donut-cap">entreprises</div>
-          </div>
-        </div>
-      </div>
-      <div class="dash-hero-sep"></div>
-      <div class="dash-hero-weather">
-        <div class="dash-hero-num">${weatherCount}</div>
-        <div class="dash-hero-weather-pill ${weatherCount === 0 ? 'is-ok' : 'is-warn'}">
-          <span class="dash-pill-glyph">${weatherCount === 0 ? '✓' : '🌧'}</span>
-          <span>${weatherCount === 0 ? 'aucune intempérie' : (weatherCount > 1 ? `${weatherCount} en intempéries` : '1 en intempéries')}</span>
-        </div>
-      </div>
-    </div>
-  `;
-  el.style.cursor = 'pointer';
-  el.onclick = () => switchPage('effectifs');
 }
 
 // --- Widget « Alertes documents » (eCheckIn) ---
@@ -1445,43 +1803,51 @@ function renderDashboardBuildings() {
   el.innerHTML = '';
   el.appendChild(dashboardCardHeader('Avancement par bâtiment', 'avancement'));
 
-  const buildings = getBuildings();
+  // Même moteur que le récapitulatif : pondération par les heures
+  // budgétées. Un bâtiment de 3 000 h ne pèse pas comme un de 300 h, et le
+  // total affiché ici est donc exactement celui du récapitulatif.
+  const model = computeAvancementModel('');
   const body = document.createElement('div');
   body.className = 'dash-buildings';
-  if (buildings.length === 0) {
+  if (model.buildings.length === 0) {
     body.innerHTML = '<p class="dash-empty-text">Aucun bâtiment (zone racine) défini.</p>';
-  } else {
-    const validPcts = [];
-    for (const b of buildings) {
-      const pct = getBuildingOverallProgress(b.id);
-      const row = document.createElement('div');
-      row.className = 'dash-building-row';
-      const pctText = pct === null ? '—' : `${formatPct(Math.round(pct * 10) / 10)} %`;
-      const barPct = pct === null ? 0 : Math.max(0, Math.min(100, pct));
-      const hasProgress = pct !== null && pct > 0;
-      row.innerHTML = `
-        <div class="dash-building-line">
-          <span class="dash-building-name"></span>
-          <span class="dash-building-pct ${hasProgress ? '' : 'is-dim'}"></span>
-        </div>
-        <div class="dash-building-bar"><div class="dash-building-bar-fill ${hasProgress ? '' : 'is-empty'}" style="width:${Math.max(barPct, 1.5)}%"></div></div>
-      `;
-      row.querySelector('.dash-building-name').textContent = b.name || '(zone sans nom)';
-      row.querySelector('.dash-building-pct').textContent = pctText;
-      if (pct !== null && pct >= 100) row.classList.add('is-done');
-      if (pct !== null) validPcts.push(pct);
-      body.appendChild(row);
-    }
-    if (validPcts.length > 0) {
-      const avg = validPcts.reduce((s, p) => s + p, 0) / validPcts.length;
-      const totalRow = document.createElement('div');
-      totalRow.className = 'dash-buildings-total';
-      totalRow.innerHTML = `
-        <span class="dash-buildings-total-lbl">Avancement global</span>
-        <span class="dash-buildings-total-val">${formatPct(Math.round(avg * 10) / 10)} %</span>`;
-      body.appendChild(totalRow);
-    }
+    el.appendChild(body);
+    return;
   }
+  const unit = model.weighting === 'heures' ? ' h' : '';
+  for (const b of model.buildings.slice().sort((x, z) => z.pct - x.pct)) {
+    const row = document.createElement('div');
+    row.className = 'dash-building-row';
+    const has = b.hBudget > 0;
+    const pct = has ? b.pct : 0;
+    row.innerHTML = `
+      <div class="dash-building-line">
+        <span class="dash-building-name"></span>
+        <span class="dash-building-pct ${has && pct > 0 ? '' : 'is-dim'}"></span>
+      </div>
+      <div class="dash-building-bar"><div class="dash-building-bar-fill ${pct > 0 ? '' : 'is-empty'}" style="width:${Math.max(pct, 1.5)}%"></div></div>
+      <div class="dash-building-sub"><span class="dash-building-meta"></span><span class="dash-building-delta"></span></div>
+    `;
+    row.querySelector('.dash-building-name').textContent = b.name;
+    row.querySelector('.dash-building-pct').textContent = has ? formatPct(Math.round(pct * 10) / 10) + ' %' : '—';
+    row.querySelector('.dash-building-meta').textContent =
+      has ? formatHours(b.hDone) + ' / ' + formatHours(b.hBudget) + unit + ' · ' + b.zones + ' zone' + (b.zones > 1 ? 's' : '')
+          : 'aucune quantité renseignée';
+    const delta = b.pct - model.pct;
+    const dEl = row.querySelector('.dash-building-delta');
+    if (has && model.buildings.length > 1 && Math.abs(delta) >= 0.05) {
+      dEl.textContent = (delta >= 0 ? '+' : '−') + formatPct(Math.abs(Math.round(delta * 10) / 10)) + ' pts';
+      dEl.classList.add(delta >= 0 ? 'is-positive' : 'is-negative');
+    }
+    if (pct >= 99.95) row.classList.add('is-done');
+    body.appendChild(row);
+  }
+  const totalRow = document.createElement('div');
+  totalRow.className = 'dash-buildings-total';
+  totalRow.innerHTML = `
+    <span class="dash-buildings-total-lbl">Avancement global</span>
+    <span class="dash-buildings-total-val">${model.hBudget > 0 ? formatPct(Math.round(model.pct * 10) / 10) + ' %' : '—'}</span>`;
+  body.appendChild(totalRow);
   el.appendChild(body);
 }
 

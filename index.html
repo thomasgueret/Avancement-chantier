@@ -23,17 +23,23 @@
   <main class="app-body">
     <!-- ============== ONGLET : TABLEAU DE BORD ============== -->
     <section class="page" id="page-dashboard">
+      <!-- Bandeau des indicateurs vitaux, hors grille : c'est la première
+           lecture, elle doit tenir sur une ligne. -->
+      <div class="dash-vitals-band" id="dashvitals"></div>
       <div class="dashboard-grid">
-        <div class="dashboard-card dashboard-hero" id="dashtoday"></div>
-        <div class="dashboard-card dashboard-companies-tall" id="dashcompanies"></div>
-        <div class="dashboard-card" id="dashdocalerts"></div>
-        <div class="dashboard-card" id="dashconsommable"></div>
-        <div class="dashboard-card" id="dashstockalerts"></div>
-        <div class="dashboard-card" id="dasheotpalerts"></div>
+        <div class="dashboard-card dashboard-focus-wide" id="dashalerts"></div>
+        <div class="dashboard-card" id="dashcurve"></div>
+        <div class="dashboard-card" id="dashcompanies"></div>
+        <div class="dashboard-card dashboard-buildings-wide" id="dashbuildings"></div>
         <div class="dashboard-card" id="dashheures"></div>
+        <div class="dashboard-card" id="dashdocalerts"></div>
+        <div class="dashboard-card" id="dashstockalerts"></div>
+        <div class="dashboard-card" id="dashconsommable"></div>
+        <div class="dashboard-card" id="dasheotpalerts"></div>
+        <div class="dashboard-card" id="dashtravaux"></div>
+        <div class="dashboard-card" id="dashcr"></div>
         <div class="dashboard-card" id="dashdevis"></div>
         <div class="dashboard-card" id="dashst"></div>
-        <div class="dashboard-card dashboard-buildings-wide" id="dashbuildings"></div>
       </div>
     </section>
 
