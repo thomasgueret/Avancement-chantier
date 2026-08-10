@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.57';
+const APP_VERSION = '1.58';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -5356,6 +5356,24 @@ async function exportCRToPDF(companyId, weekId) {
     return;
   }
   const pdf = new jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  // Avec les polices standard, jsPDF n'encode que le jeu WinAnsi. Un seul
+  // caractère hors jeu — typiquement l'espace fine insécable (U+202F) que
+  // toLocaleString('fr-FR') insère comme séparateur de milliers — le fait
+  // basculer en encodage 16 bits : le texte ressort alors lettre par lettre
+  // (« 2 5 0 / 1 0 0 0 »). On normalise donc TOUT texte à l'écriture, ce qui
+  // protège aussi les mesures de largeur et les retours à la ligne.
+  const pdfSafeText = (v) => String(v == null ? '' : v)
+    .replace(/[\u00A0\u2000-\u200B\u202F\u205F\u3000]/g, ' ')
+    .replace(/[\u2010-\u2015\u2212]/g, '-')
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E]/g, '"')
+    .replace(/\u2026/g, '...');
+  const _pdfText  = pdf.text.bind(pdf);
+  const _pdfSplit = pdf.splitTextToSize.bind(pdf);
+  const _pdfWidth = pdf.getTextWidth.bind(pdf);
+  pdf.text = (t, x, y2, o, tr) => _pdfText(Array.isArray(t) ? t.map(pdfSafeText) : pdfSafeText(t), x, y2, o, tr);
+  pdf.splitTextToSize = (t, w, o) => _pdfSplit(pdfSafeText(t), w, o);
+  pdf.getTextWidth = (t) => _pdfWidth(pdfSafeText(t));
   const PAGE_W = 210, PAGE_H = 297;
   const MARGIN = 18;
   const CONTENT_W = PAGE_W - 2 * MARGIN;
@@ -5557,19 +5575,51 @@ async function exportCRToPDF(companyId, weekId) {
     y += rowH;
   };
 
-  // Dessin d'une tâche d'avancement (titre, plans, barre empilée, légende).
-  // Partagé par l'aperçu automatique et par les widgets manuels : la sortie
-  // PDF est donc strictement identique pour les deux.
+  // Barre empilée + légende en %, à une position et une largeur données.
+  // Partagée par l'aperçu automatique et par les widgets manuels : le rendu
+  // est donc strictement identique pour les deux.
+  const AVANC_LABELS  = { done: 'Réalisée', doing: 'En cours', todo: 'À faire' };
+  const AVANC_PALETTE = { done: [46,125,50], doing: [237,108,2], todo: [211,47,47] };
+  const AVANC_BAR_H = 2.4;
+  const drawAvancBar = (pct, barX, barW) => {
+    const sum = (pct.done || 0) + (pct.doing || 0) + (pct.todo || 0);
+    const norm = sum > 0 ? sum : 1;
+    pdf.setFillColor(220, 220, 220);
+    pdf.rect(barX, y, barW, AVANC_BAR_H, 'F');
+    let bx = barX;
+    for (const k of ['done', 'doing', 'todo']) {
+      const w = barW * ((pct[k] || 0) / norm);
+      if (w <= 0) continue;
+      pdf.setFillColor(...AVANC_PALETTE[k]);
+      pdf.rect(bx, y, w, AVANC_BAR_H, 'F');
+      bx += w;
+    }
+    y += AVANC_BAR_H + 3.5;
+    pdf.setFontSize(8.5);
+    let legX = barX;
+    for (const k of ['done', 'doing', 'todo']) {
+      if ((pct[k] || 0) <= 0.01) continue;
+      pdf.setFillColor(...AVANC_PALETTE[k]);
+      pdf.circle(legX, y - 1.0, 0.9, 'F');
+      pdf.setFont('helvetica', 'bold'); pdf.setTextColor(0);
+      const pctTxt = `${Math.round(pct[k])} %`;
+      pdf.text(pctTxt, legX + 2.2, y);
+      const pctTxtW = pdf.getTextWidth(pctTxt);
+      pdf.setFont('helvetica', 'normal'); pdf.setTextColor(110);
+      pdf.text(AVANC_LABELS[k], legX + 2.2 + pctTxtW + 1.5, y);
+      const lblW = pdf.getTextWidth(AVANC_LABELS[k]);
+      pdf.setTextColor(0);
+      legX += 2.2 + pctTxtW + 1.5 + lblW + 7;
+    }
+    pdf.setFontSize(10);
+    y += 3.5;
+  };
+
+  // Tâche de l'aperçu automatique : titre, plans concernés, barre.
   const drawAvancTask = (task) => {
     ensureSpace(11);
     pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10);
     pdf.text(task.title || '(sans intitulé)', MARGIN + 8, y);
-    // Libellé de droite : quantités du widget manuel, aligné à droite.
-    if (task.metaText) {
-      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(90);
-      pdf.text(task.metaText, MARGIN + CONTENT_W, y, { align: 'right' });
-      pdf.setTextColor(0); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10);
-    }
     y += 2;
     if (Array.isArray(task.planNames) && task.planNames.length > 0) {
       pdf.setFont('helvetica', 'italic'); pdf.setFontSize(8.5); pdf.setTextColor(120);
@@ -5582,40 +5632,39 @@ async function exportCRToPDF(companyId, weekId) {
       pdf.setTextColor(0); pdf.setFontSize(10);
       y += 0.5;
     }
-    const barX = MARGIN + 8;
-    const barW = CONTENT_W - 8;
-    const barH = 2.4;
-    const pctSum = (task.pct.done || 0) + (task.pct.doing || 0) + (task.pct.todo || 0);
-    const norm = pctSum > 0 ? pctSum : 1;
-    const wDone  = barW * (task.pct.done  / norm);
-    const wDoing = barW * (task.pct.doing / norm);
-    const wTodo  = barW * (task.pct.todo  / norm);
-    pdf.setFillColor(220, 220, 220);
-    pdf.rect(barX, y, barW, barH, 'F');
-    let bx = barX;
-    if (wDone  > 0) { pdf.setFillColor(46, 125, 50);  pdf.rect(bx, y, wDone,  barH, 'F'); bx += wDone;  }
-    if (wDoing > 0) { pdf.setFillColor(237, 108, 2);  pdf.rect(bx, y, wDoing, barH, 'F'); bx += wDoing; }
-    if (wTodo  > 0) { pdf.setFillColor(211, 47, 47);  pdf.rect(bx, y, wTodo,  barH, 'F'); }
-    y += barH + 3.5;
-    pdf.setFontSize(8.5);
-    let legX = MARGIN + 8;
-    const labels = { done: 'Réalisée', doing: 'En cours', todo: 'À faire' };
-    const palette = { done: [46,125,50], doing: [237,108,2], todo: [211,47,47] };
-    for (const k of ['done', 'doing', 'todo']) {
-      if (task.pct[k] <= 0.01) continue;
-      pdf.setFillColor(...palette[k]);
-      pdf.circle(legX, y - 1.0, 0.9, 'F');
-      pdf.setFont('helvetica', 'bold');
-      pdf.text(`${Math.round(task.pct[k])} %`, legX + 2.2, y);
-      const pctTxtW = pdf.getTextWidth(`${Math.round(task.pct[k])} %`);
-      pdf.setFont('helvetica', 'normal'); pdf.setTextColor(110);
-      pdf.text(labels[k], legX + 2.2 + pctTxtW + 1.5, y);
-      const lblW = pdf.getTextWidth(labels[k]);
-      pdf.setTextColor(0);
-      legX += 2.2 + pctTxtW + 1.5 + lblW + 7;
+    drawAvancBar(task.pct, MARGIN + 8, CONTENT_W - 8);
+  };
+
+  // Widget manuel : encadré aligné sur le tableau de la rubrique, pour
+  // qu'il se lise comme un bloc de cette rubrique et non comme un élément
+  // flottant entre deux sections.
+  const PAD = 4;
+  const drawManualWidget = (w) => {
+    const v = computeCRWidget(w);
+    const metaTxt = crWidgetMetaText(v);
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9);
+    const metaW = metaTxt ? pdf.getTextWidth(metaTxt) + 6 : 0;
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10);
+    const titleLines = pdf.splitTextToSize(w.title || '(sans intitulé)', CONTENT_W - PAD * 2 - metaW);
+    const lineH = 4;
+    const boxH = PAD + titleLines.length * lineH + 1.5 + AVANC_BAR_H + 3.5 + 3.5 + PAD - 2;
+    ensureSpace(boxH + 2);
+    const boxY = y;
+    pdf.setFillColor(248, 246, 243);
+    pdf.setDrawColor(210); pdf.setLineWidth(0.2);
+    pdf.rect(MARGIN, boxY, CONTENT_W, boxH, 'FD');
+    y = boxY + PAD + 1;
+    // Intitulé à gauche, quantités à droite, sur la même ligne de base.
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(20);
+    for (let i = 0; i < titleLines.length; i++) pdf.text(titleLines[i], MARGIN + PAD, y + i * lineH);
+    if (metaTxt) {
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(90);
+      pdf.text(metaTxt, MARGIN + CONTENT_W - PAD, y, { align: 'right' });
     }
-    pdf.setFontSize(10);
-    y += 3.5;
+    pdf.setTextColor(0); pdf.setFontSize(10);
+    y += (titleLines.length - 1) * lineH + 1.5;
+    drawAvancBar(v.pct, MARGIN + PAD, CONTENT_W - PAD * 2);
+    y = boxY + boxH;
   };
 
   let secNum = 0;
@@ -5640,14 +5689,11 @@ async function exportCRToPDF(companyId, weekId) {
       for (const e of entries) { drawTableRow(e, i % 2 === 1); i++; }
     }
 
-    // Widgets d'avancement saisis à la main
+    // Widgets d'avancement saisis à la main : accolés au tableau de la
+    // rubrique, séparés entre eux d'un filet d'un millimètre.
     if (widgets.length > 0) {
-      y += 6;
-      for (const w of widgets) {
-        const v = computeCRWidget(w);
-        drawAvancTask({ title: w.title, metaText: crWidgetMetaText(v), pct: v.pct });
-      }
-      y += 1;
+      for (const w of widgets) { drawManualWidget(w); y += 1; }
+      y += 2;
     }
 
     // Aperçu Avancements (conditionné à l'interrupteur app)
