@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.60';
+const APP_VERSION = '1.61';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -998,9 +998,11 @@ function renderDashboardVitals() {
 // et la couleur, page/sub le saut vers l'onglet concerné.
 function computeProjectAlerts() {
   const out = [];
-  const push = (sev, n, label, detail, page, sub) => {
+  // Le libellé s'accorde au compteur : « 6 ouvriers », « 1 ouvrier ».
+  // Un « (s) » systématique passe mal dans un document de pilotage.
+  const push = (sev, n, one, many, detail, page, sub) => {
     if (!n) return;
-    out.push({ sev, n, label, detail, page, sub });
+    out.push({ sev, n, label: (Number(n) > 1 ? many : one), detail, page, sub });
   };
 
   // Administratif — documents obligatoires
@@ -1018,9 +1020,9 @@ function computeProjectAlerts() {
     else if (worst === 'danger') nDanger++;
     else if (worst === 'warning') nWarning++;
   }
-  push('danger', nExpired, 'ouvrier(s) avec un document périmé', 'Administratif → eCheckIn', 'administratif');
-  push('warning', nDanger, 'ouvrier(s) dont un document expire sous 3 jours', 'Administratif → eCheckIn', 'administratif');
-  push('info', nWarning, 'ouvrier(s) dont un document expire sous 7 jours', 'Administratif → eCheckIn', 'administratif');
+  push('danger', nExpired, 'ouvrier avec un document périmé', 'ouvriers avec un document périmé', 'Administratif → eCheckIn', 'administratif');
+  push('warning', nDanger, 'ouvrier dont un document expire sous 3 jours', 'ouvriers dont un document expire sous 3 jours', 'Administratif → eCheckIn', 'administratif');
+  push('info', nWarning, 'ouvrier dont un document expire sous 7 jours', 'ouvriers dont un document expire sous 7 jours', 'Administratif → eCheckIn', 'administratif');
 
   // Stock
   let nOut = 0, nCrit = 0;
@@ -1030,8 +1032,8 @@ function computeProjectAlerts() {
     if (dep.days <= 0) nOut++;
     else if (dep.days <= STOCK_ALERT_THRESHOLD_DAYS) nCrit++;
   }
-  push('danger', nOut, 'article(s) en rupture de stock', 'Stock', 'stock');
-  push('warning', nCrit, 'article(s) épuisés sous ' + STOCK_ALERT_THRESHOLD_DAYS + ' jours ouvrés', 'Stock', 'stock');
+  push('danger', nOut, 'article en rupture de stock', 'articles en rupture de stock', 'Stock', 'stock');
+  push('warning', nCrit, 'article épuisé sous ' + STOCK_ALERT_THRESHOLD_DAYS + ' jours ouvrés', 'articles épuisés sous ' + STOCK_ALERT_THRESHOLD_DAYS + ' jours ouvrés', 'Stock', 'stock');
 
   // Budget eOTP — dépassement projeté en fin de chantier
   const elapsed = getProjectMonthsElapsed(), totalProj = getProjectMonthsTotal();
@@ -1051,8 +1053,8 @@ function computeProjectAlerts() {
       if (ratio >= 1) over++;
       else if (ratio >= 0.8) near++;
     }
-    push('danger', over, 'ligne(s) eOTP en dépassement projeté', 'Consommable → Budget', 'consommable');
-    push('warning', near, 'ligne(s) eOTP au-delà de 80 % du budget', 'Consommable → Budget', 'consommable');
+    push('danger', over, 'ligne eOTP en dépassement projeté', 'lignes eOTP en dépassement projeté', 'Consommable → Budget', 'consommable');
+    push('warning', near, 'ligne eOTP au-delà de 80 % du budget', 'lignes eOTP au-delà de 80 % du budget', 'Consommable → Budget', 'consommable');
   }
 
   // Heures — écart au stade négatif
@@ -1070,11 +1072,12 @@ function computeProjectAlerts() {
   // Avancement — zones sans mise à jour, ouvrages non pondérés
   const model = computeAvancementModel('');
   push('warning', model.issues.stale.length,
-    'zone(s) en cours sans mise à jour depuis ' + AVANCEMENT_STALE_DAYS + ' jours', 'Avancement → Récapitulatif',
-    'avancement', ['avancement', 'recap']);
+    'zone en cours sans mise à jour depuis ' + AVANCEMENT_STALE_DAYS + ' jours',
+    'zones en cours sans mise à jour depuis ' + AVANCEMENT_STALE_DAYS + ' jours',
+    'Avancement → Récapitulatif', 'avancement', ['avancement', 'recap']);
   const noRatio = [...new Set(model.issues.noRatio.map(i => i.name))];
-  push('info', noRatio.length, 'ouvrage(s) sans ratio ne pesant pas dans l\'avancement',
-    noRatio.slice(0, 3).join(', '), 'donnees');
+  push('info', noRatio.length, 'ouvrage sans ratio ne pesant pas dans l\'avancement',
+    'ouvrages sans ratio ne pesant pas dans l\'avancement', noRatio.slice(0, 3).join(', '), 'donnees');
 
   // Travaux — articles de CCTP sans localisation
   let noLoca = 0;
@@ -1084,7 +1087,7 @@ function computeProjectAlerts() {
     if ((p.localisation || '').trim()) continue;
     noLoca++;
   }
-  push('info', noLoca, 'article(s) de CCTP sans localisation', 'Travaux → CCTP', 'travaux', ['travaux', 'cctp']);
+  push('info', noLoca, 'article de CCTP sans localisation', 'articles de CCTP sans localisation', 'Travaux → CCTP', 'travaux', ['travaux', 'cctp']);
 
   // CR — tâches en retard d'échéance sur le dernier CR de chaque entreprise
   let lateCR = 0;
@@ -1100,19 +1103,19 @@ function computeProjectAlerts() {
       }
     }
   }
-  push('warning', lateCR, 'tâche(s) de compte-rendu en retard d\'échéance', 'CR', 'cr');
+  push('warning', lateCR, 'tâche de compte-rendu en retard d\'échéance', 'tâches de compte-rendu en retard d\'échéance', 'CR', 'cr');
 
   // Devis et ST — chiffres protégés par mot de passe
   if (protectedUnlocked) {
     const waiting = getDevisList().filter(d => d.etat === 'envoye').length;
-    push('info', waiting, 'devis envoyé(s) en attente de réponse', 'Devis', 'devis');
+    push('info', waiting, 'devis envoyé en attente de réponse', 'devis envoyés en attente de réponse', 'Devis', 'devis');
     let overST = 0;
     for (const c of state.companies) {
       if (!ST_GROUPS.some(g => getSTEntries(c.id, g.key).length > 0)) continue;
       const r = computeSTRecap(c.id);
       if (r.budget > 0 && r.depenses > r.budget) overST++;
     }
-    push('danger', overST, 'sous-traitant(s) au-delà du budget', 'ST', 'st');
+    push('danger', overST, 'sous-traitant au-delà du budget', 'sous-traitants au-delà du budget', 'ST', 'st');
   }
 
   const rank = { danger: 0, warning: 1, info: 2 };
@@ -1121,6 +1124,15 @@ function computeProjectAlerts() {
 }
 
 // --- Carte « Points d'attention » consolidée ---
+// Filtre d'écran : '' = tout, sinon une gravité.
+let dashFocusFilter = '';
+// « à surveiller » et « à noter » sont invariables : seul « critique »
+// prend la marque du pluriel.
+const DASH_SEV_LABEL = {
+  danger:  { one: 'critique', many: 'critiques' },
+  warning: { one: 'à surveiller', many: 'à surveiller' },
+  info:    { one: 'à noter', many: 'à noter' },
+};
 function renderDashboardAlerts() {
   const el = document.getElementById('dashalerts');
   if (!el) return;
@@ -1135,7 +1147,30 @@ function renderDashboardAlerts() {
     el.appendChild(body);
     return;
   }
-  for (const a of alerts) {
+  // Bandeau de synthèse : combien de sujets par gravité, et filtre au clic.
+  const counts = { danger: 0, warning: 0, info: 0 };
+  for (const a of alerts) counts[a.sev]++;
+  if (!counts[dashFocusFilter]) dashFocusFilter = '';
+  const sum = dashEl('div', 'dash-focus-sum');
+  const chip = (sev, label, n, on) => {
+    const b = dashEl('button', 'dash-focus-chip' + (sev ? ' is-' + sev : '') + (on ? ' is-on' : ''));
+    b.type = 'button';
+    const strong = document.createElement('b');
+    strong.textContent = String(n);
+    b.appendChild(strong);
+    b.appendChild(dashEl('span', null, label));
+    b.addEventListener('click', () => { dashFocusFilter = sev; renderDashboardAlerts(); });
+    sum.appendChild(b);
+  };
+  chip('', 'au total', alerts.length, !dashFocusFilter);
+  for (const sev of ['danger', 'warning', 'info']) {
+    if (counts[sev]) chip(sev, counts[sev] > 1 ? DASH_SEV_LABEL[sev].many : DASH_SEV_LABEL[sev].one, counts[sev], dashFocusFilter === sev);
+  }
+  body.appendChild(sum);
+
+  const list = dashEl('div', 'dash-focus-list');
+  const shown = dashFocusFilter ? alerts.filter(a => a.sev === dashFocusFilter) : alerts;
+  for (const a of shown) {
     const row = dashEl('button', 'dash-focus-row is-' + a.sev);
     row.type = 'button';
     row.appendChild(dashEl('span', 'dash-focus-num', String(a.n)));
@@ -1143,13 +1178,14 @@ function renderDashboardAlerts() {
     txt.appendChild(dashEl('span', 'dash-focus-label', a.label));
     if (a.detail) txt.appendChild(dashEl('span', 'dash-focus-detail', a.detail));
     row.appendChild(txt);
-    row.appendChild(dashEl('span', 'dash-focus-go', '→'));
+    row.appendChild(dashEl('span', 'dash-focus-go', '›'));
     if (a.page) row.addEventListener('click', () => {
       switchPage(a.page);
       if (a.sub) switchSubPage(a.sub[0], a.sub[1]);
     });
-    body.appendChild(row);
+    list.appendChild(row);
   }
+  body.appendChild(list);
   el.appendChild(body);
 }
 
@@ -1169,7 +1205,7 @@ function renderDashboardCurve() {
   }
   const model = computeAvancementModel('');
   const planning = computeAvancementPlanning(model.pct);
-  const W = 320, H = 130, PL = 24, PR = 6, PT = 8, PB = 16;
+  const W = 320, H = 160, PL = 24, PR = 6, PT = 8, PB = 16;
   const day = 86400000;
   const first = new Date(keys[0] + 'T00:00:00').getTime();
   const last = new Date(keys[keys.length - 1] + 'T00:00:00').getTime();
@@ -1225,6 +1261,29 @@ function renderDashboardCurve() {
   mkLeg('is-real', 'Réel');
   if (planning) mkLeg('is-theory', 'Théorique');
   body.appendChild(legend);
+
+  // Ce que la courbe montre, écrit noir sur blanc.
+  const stats = dashEl('div', 'dash-curve-stats');
+  const stat = (label, value, tone) => {
+    const b = dashEl('div', 'dash-curve-stat');
+    b.appendChild(dashEl('span', 'dash-curve-stat-lbl', label));
+    b.appendChild(dashEl('span', 'dash-curve-stat-val' + (tone ? ' is-' + tone : ''), value));
+    stats.appendChild(b);
+  };
+  stat('Réel', formatPct(Math.round(model.pct * 10) / 10) + ' %');
+  stat('Théorique', planning ? formatPct(Math.round(planning.pctTemps * 10) / 10) + ' %' : '—', planning ? 'info' : null);
+  stat('Écart', planning
+    ? (planning.ecart >= 0 ? '+' : '−') + formatPct(Math.abs(Math.round(planning.ecart * 10) / 10)) + ' pts'
+    : '—', planning ? (planning.ecart >= 0 ? 'pos' : 'neg') : null);
+  body.appendChild(stats);
+
+  const velocity = computeAvancementVelocity();
+  if (velocity) {
+    const foot = dashEl('div', 'dash-curve-foot');
+    foot.innerHTML = 'Rythme <strong>' + escapeHtml(formatPct(Math.round(velocity.perWeek * 10) / 10)) + ' pts/semaine</strong>'
+      + (velocity.etaISO ? ' · fin projetée le <strong>' + escapeHtml(fmtFR(velocity.etaISO)) + '</strong>' : '');
+    body.appendChild(foot);
+  }
   el.appendChild(body);
 }
 
