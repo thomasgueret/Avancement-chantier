@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.63';
+const APP_VERSION = '1.64';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -1124,11 +1124,9 @@ function computeProjectAlerts() {
 }
 
 // --- Carte « Points d'attention » consolidée ---
-// Une carte teintée par sujet, triée par gravité. La liste est plafonnée :
-// une carte qui grandit avec le nombre d'alertes écrase le reste de la
-// grille, alors que toutes les autres tiennent dans le même gabarit.
-const DASH_FOCUS_VISIBLE = 4;
-let dashFocusExpanded = false;
+// Tous les sujets sont rendus ; la liste défile dans la carte. La hauteur
+// de la carte ne dépend donc pas du nombre d'alertes, et aucun bouton
+// déplier/replier ne s'intercale entre l'utilisateur et l'information.
 function renderDashboardAlerts() {
   const el = document.getElementById('dashalerts');
   if (!el) return;
@@ -1143,9 +1141,8 @@ function renderDashboardAlerts() {
     el.appendChild(body);
     return;
   }
-  const hidden = Math.max(0, alerts.length - DASH_FOCUS_VISIBLE);
-  const shown = dashFocusExpanded ? alerts : alerts.slice(0, DASH_FOCUS_VISIBLE);
-  for (const a of shown) {
+  const list = dashEl('div', 'dash-focus-list');
+  for (const a of alerts) {
     const row = dashEl('button', 'dash-focus-row is-' + a.sev);
     row.type = 'button';
     row.appendChild(dashEl('span', 'dash-focus-num', String(a.n)));
@@ -1158,18 +1155,18 @@ function renderDashboardAlerts() {
       switchPage(a.page);
       if (a.sub) switchSubPage(a.sub[0], a.sub[1]);
     });
-    body.appendChild(row);
+    list.appendChild(row);
   }
-  if (hidden > 0) {
-    const more = dashEl('button', 'dash-focus-more');
-    more.type = 'button';
-    more.textContent = dashFocusExpanded
-      ? 'Réduire'
-      : 'Voir les ' + hidden + ' autre' + (hidden > 1 ? 's' : '') + ' point' + (hidden > 1 ? 's' : '');
-    more.addEventListener('click', () => { dashFocusExpanded = !dashFocusExpanded; renderDashboardAlerts(); });
-    body.appendChild(more);
-  }
+  body.appendChild(list);
   el.appendChild(body);
+  // Le dégradé de bas de liste ne s'affiche que s'il reste à faire défiler.
+  requestAnimationFrame(() => {
+    body.classList.toggle('has-more', list.scrollHeight - list.clientHeight > 4);
+    list.addEventListener('scroll', () => {
+      const bottom = list.scrollHeight - list.clientHeight - list.scrollTop;
+      body.classList.toggle('has-more', bottom > 4);
+    }, { passive: true });
+  });
 }
 
 // --- Carte « Courbe d'avancement » (mini) ---
@@ -1188,7 +1185,9 @@ function renderDashboardCurve() {
   }
   const model = computeAvancementModel('');
   const planning = computeAvancementPlanning(model.pct);
-  const W = 320, H = 150, PL = 24, PR = 6, PT = 8, PB = 16;
+  // Format large : la carte occupe deux colonnes, la courbe se lit
+  // dans le sens de la durée du chantier.
+  const W = 720, H = 190, PL = 30, PR = 10, PT = 10, PB = 20;
   const day = 86400000;
   const first = new Date(keys[0] + 'T00:00:00').getTime();
   const last = new Date(keys[keys.length - 1] + 'T00:00:00').getTime();
@@ -1206,9 +1205,9 @@ function renderDashboardCurve() {
     for (const k in attrs) e.setAttribute(k, attrs[k]);
     return e;
   };
-  for (const p of [0, 50, 100]) {
+  for (const p of [0, 25, 50, 75, 100]) {
     svg.appendChild(mk('line', { x1: PL, x2: W - PR, y1: yy(p), y2: yy(p), class: 'dash-curve-grid' }));
-    const t = mk('text', { x: PL - 3, y: yy(p) + 3, class: 'dash-curve-axis', 'text-anchor': 'end' });
+    const t = mk('text', { x: PL - 4, y: yy(p) + 3, class: 'dash-curve-axis', 'text-anchor': 'end' });
     t.textContent = p + '%';
     svg.appendChild(t);
   }
@@ -1224,13 +1223,13 @@ function renderDashboardCurve() {
     svg.appendChild(mk('path', { d, class: 'dash-curve-line' }));
   }
   const lastPt = pts[pts.length - 1];
-  svg.appendChild(mk('circle', { cx: lastPt.x, cy: lastPt.y, r: 3, class: 'dash-curve-dot' }));
+  svg.appendChild(mk('circle', { cx: lastPt.x, cy: lastPt.y, r: 4, class: 'dash-curve-dot' }));
   const tx = x(new Date(todayISO() + 'T00:00:00').getTime());
   if (tx >= PL && tx <= W - PR) svg.appendChild(mk('line', { x1: tx, y1: PT, x2: tx, y2: H - PB, class: 'dash-curve-today' }));
-  const l0 = mk('text', { x: PL, y: H - 4, class: 'dash-curve-axis' });
+  const l0 = mk('text', { x: PL, y: H - 5, class: 'dash-curve-axis' });
   l0.textContent = fmtFR(new Date(t0).toISOString().slice(0, 10));
   svg.appendChild(l0);
-  const l1 = mk('text', { x: W - PR, y: H - 4, class: 'dash-curve-axis', 'text-anchor': 'end' });
+  const l1 = mk('text', { x: W - PR, y: H - 5, class: 'dash-curve-axis', 'text-anchor': 'end' });
   l1.textContent = fmtFR(new Date(t1).toISOString().slice(0, 10));
   svg.appendChild(l1);
   body.appendChild(svg);
