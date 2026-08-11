@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.62';
+const APP_VERSION = '1.63';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -1124,8 +1124,11 @@ function computeProjectAlerts() {
 }
 
 // --- Carte « Points d'attention » consolidée ---
-// Une carte teintée par sujet, triée par gravité : la lecture se fait à la
-// couleur, sans filtre intermédiaire à manipuler.
+// Une carte teintée par sujet, triée par gravité. La liste est plafonnée :
+// une carte qui grandit avec le nombre d'alertes écrase le reste de la
+// grille, alors que toutes les autres tiennent dans le même gabarit.
+const DASH_FOCUS_VISIBLE = 4;
+let dashFocusExpanded = false;
 function renderDashboardAlerts() {
   const el = document.getElementById('dashalerts');
   if (!el) return;
@@ -1140,7 +1143,9 @@ function renderDashboardAlerts() {
     el.appendChild(body);
     return;
   }
-  for (const a of alerts) {
+  const hidden = Math.max(0, alerts.length - DASH_FOCUS_VISIBLE);
+  const shown = dashFocusExpanded ? alerts : alerts.slice(0, DASH_FOCUS_VISIBLE);
+  for (const a of shown) {
     const row = dashEl('button', 'dash-focus-row is-' + a.sev);
     row.type = 'button';
     row.appendChild(dashEl('span', 'dash-focus-num', String(a.n)));
@@ -1154,6 +1159,15 @@ function renderDashboardAlerts() {
       if (a.sub) switchSubPage(a.sub[0], a.sub[1]);
     });
     body.appendChild(row);
+  }
+  if (hidden > 0) {
+    const more = dashEl('button', 'dash-focus-more');
+    more.type = 'button';
+    more.textContent = dashFocusExpanded
+      ? 'Réduire'
+      : 'Voir les ' + hidden + ' autre' + (hidden > 1 ? 's' : '') + ' point' + (hidden > 1 ? 's' : '');
+    more.addEventListener('click', () => { dashFocusExpanded = !dashFocusExpanded; renderDashboardAlerts(); });
+    body.appendChild(more);
   }
   el.appendChild(body);
 }
