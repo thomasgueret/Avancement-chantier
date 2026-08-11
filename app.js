@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.61';
+const APP_VERSION = '1.62';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -1124,15 +1124,8 @@ function computeProjectAlerts() {
 }
 
 // --- Carte « Points d'attention » consolidée ---
-// Filtre d'écran : '' = tout, sinon une gravité.
-let dashFocusFilter = '';
-// « à surveiller » et « à noter » sont invariables : seul « critique »
-// prend la marque du pluriel.
-const DASH_SEV_LABEL = {
-  danger:  { one: 'critique', many: 'critiques' },
-  warning: { one: 'à surveiller', many: 'à surveiller' },
-  info:    { one: 'à noter', many: 'à noter' },
-};
+// Une carte teintée par sujet, triée par gravité : la lecture se fait à la
+// couleur, sans filtre intermédiaire à manipuler.
 function renderDashboardAlerts() {
   const el = document.getElementById('dashalerts');
   if (!el) return;
@@ -1147,30 +1140,7 @@ function renderDashboardAlerts() {
     el.appendChild(body);
     return;
   }
-  // Bandeau de synthèse : combien de sujets par gravité, et filtre au clic.
-  const counts = { danger: 0, warning: 0, info: 0 };
-  for (const a of alerts) counts[a.sev]++;
-  if (!counts[dashFocusFilter]) dashFocusFilter = '';
-  const sum = dashEl('div', 'dash-focus-sum');
-  const chip = (sev, label, n, on) => {
-    const b = dashEl('button', 'dash-focus-chip' + (sev ? ' is-' + sev : '') + (on ? ' is-on' : ''));
-    b.type = 'button';
-    const strong = document.createElement('b');
-    strong.textContent = String(n);
-    b.appendChild(strong);
-    b.appendChild(dashEl('span', null, label));
-    b.addEventListener('click', () => { dashFocusFilter = sev; renderDashboardAlerts(); });
-    sum.appendChild(b);
-  };
-  chip('', 'au total', alerts.length, !dashFocusFilter);
-  for (const sev of ['danger', 'warning', 'info']) {
-    if (counts[sev]) chip(sev, counts[sev] > 1 ? DASH_SEV_LABEL[sev].many : DASH_SEV_LABEL[sev].one, counts[sev], dashFocusFilter === sev);
-  }
-  body.appendChild(sum);
-
-  const list = dashEl('div', 'dash-focus-list');
-  const shown = dashFocusFilter ? alerts.filter(a => a.sev === dashFocusFilter) : alerts;
-  for (const a of shown) {
+  for (const a of alerts) {
     const row = dashEl('button', 'dash-focus-row is-' + a.sev);
     row.type = 'button';
     row.appendChild(dashEl('span', 'dash-focus-num', String(a.n)));
@@ -1178,14 +1148,13 @@ function renderDashboardAlerts() {
     txt.appendChild(dashEl('span', 'dash-focus-label', a.label));
     if (a.detail) txt.appendChild(dashEl('span', 'dash-focus-detail', a.detail));
     row.appendChild(txt);
-    row.appendChild(dashEl('span', 'dash-focus-go', '›'));
+    row.appendChild(dashEl('span', 'dash-focus-go', '→'));
     if (a.page) row.addEventListener('click', () => {
       switchPage(a.page);
       if (a.sub) switchSubPage(a.sub[0], a.sub[1]);
     });
-    list.appendChild(row);
+    body.appendChild(row);
   }
-  body.appendChild(list);
   el.appendChild(body);
 }
 
@@ -1205,7 +1174,7 @@ function renderDashboardCurve() {
   }
   const model = computeAvancementModel('');
   const planning = computeAvancementPlanning(model.pct);
-  const W = 320, H = 160, PL = 24, PR = 6, PT = 8, PB = 16;
+  const W = 320, H = 150, PL = 24, PR = 6, PT = 8, PB = 16;
   const day = 86400000;
   const first = new Date(keys[0] + 'T00:00:00').getTime();
   const last = new Date(keys[keys.length - 1] + 'T00:00:00').getTime();
@@ -1261,29 +1230,6 @@ function renderDashboardCurve() {
   mkLeg('is-real', 'Réel');
   if (planning) mkLeg('is-theory', 'Théorique');
   body.appendChild(legend);
-
-  // Ce que la courbe montre, écrit noir sur blanc.
-  const stats = dashEl('div', 'dash-curve-stats');
-  const stat = (label, value, tone) => {
-    const b = dashEl('div', 'dash-curve-stat');
-    b.appendChild(dashEl('span', 'dash-curve-stat-lbl', label));
-    b.appendChild(dashEl('span', 'dash-curve-stat-val' + (tone ? ' is-' + tone : ''), value));
-    stats.appendChild(b);
-  };
-  stat('Réel', formatPct(Math.round(model.pct * 10) / 10) + ' %');
-  stat('Théorique', planning ? formatPct(Math.round(planning.pctTemps * 10) / 10) + ' %' : '—', planning ? 'info' : null);
-  stat('Écart', planning
-    ? (planning.ecart >= 0 ? '+' : '−') + formatPct(Math.abs(Math.round(planning.ecart * 10) / 10)) + ' pts'
-    : '—', planning ? (planning.ecart >= 0 ? 'pos' : 'neg') : null);
-  body.appendChild(stats);
-
-  const velocity = computeAvancementVelocity();
-  if (velocity) {
-    const foot = dashEl('div', 'dash-curve-foot');
-    foot.innerHTML = 'Rythme <strong>' + escapeHtml(formatPct(Math.round(velocity.perWeek * 10) / 10)) + ' pts/semaine</strong>'
-      + (velocity.etaISO ? ' · fin projetée le <strong>' + escapeHtml(fmtFR(velocity.etaISO)) + '</strong>' : '');
-    body.appendChild(foot);
-  }
   el.appendChild(body);
 }
 
