@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.64';
+const APP_VERSION = '1.65';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -55,6 +55,10 @@ const state = {
   avancementZoneId: null, // zone affichée dans l'onglet Avancement
   recapBuildingId: null,  // zone racine sélectionnée dans Avancement → Récapitulatif
   zonePickerCollapsed: {}, // { [zoneId]: true } — branches repliées dans les sélecteurs de zone (UI)
+  // Planning par zone racine (Données → Planning) : permet de tracer la
+  // courbe d'avancement d'un bâtiment sur SA propre période, au lieu de
+  // rejouer partout celle du chantier.
+  zoneDates: {},          // { [zoneId]: { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' } }
   // Tableau de bord Avancement : un point d'historique par jour, pour la
   // courbe d'avancement et le calcul du rythme.
   // { 'YYYY-MM-DD': { pct, hDone, hBudget } }
@@ -192,6 +196,7 @@ function load() {
     if (data.taskProgress) state.taskProgress = data.taskProgress;
     if (data.zoneUpdated) state.zoneUpdated = data.zoneUpdated;
     if (data.zonePickerCollapsed && typeof data.zonePickerCollapsed === 'object') state.zonePickerCollapsed = data.zonePickerCollapsed;
+    if (data.zoneDates && typeof data.zoneDates === 'object') state.zoneDates = data.zoneDates;
     if (data.avancementHistory && typeof data.avancementHistory === 'object') state.avancementHistory = data.avancementHistory;
     if (data.avancementZoneId) state.avancementZoneId = data.avancementZoneId;
     if (data.recapBuildingId) state.recapBuildingId = data.recapBuildingId;
@@ -314,6 +319,7 @@ function buildPersistedData() {
     taskProgress: state.taskProgress,
     zoneUpdated: state.zoneUpdated,
     zonePickerCollapsed: state.zonePickerCollapsed,
+    zoneDates: state.zoneDates,
     avancementHistory: state.avancementHistory,
     avancementZoneId: state.avancementZoneId,
     recapBuildingId: state.recapBuildingId,
@@ -617,6 +623,7 @@ function renderAll() {
   renderDocLabelsConfig();
   renderEOTPsConfig();
   renderProjectDates();
+  renderPlanningZones();
   renderTauxHoraire();
   renderWorkBatchesConfig();
   renderProto();
@@ -1978,6 +1985,9 @@ function getZoneDescendants(id) {
 const zoneSelection = new Set();
 
 function renderZones() {
+  // Les périodes par bâtiment listent les zones racines : elles suivent
+  // toute création, suppression ou renommage.
+  renderPlanningZones();
   const tree = document.getElementById('zonetree');
   const empty = document.getElementById('zoneempty');
   if (!tree || !empty) return;
@@ -2122,6 +2132,7 @@ function deleteZone(id) {
     delete state.zoneCollapsed[zid];
     delete state.taskProgress[zid];
     delete state.zoneUpdated[zid];
+    if (state.zoneDates) delete state.zoneDates[zid];
   }
   if (toRemove.has(state.avancementZoneId)) state.avancementZoneId = null;
   save();
@@ -3397,9 +3408,28 @@ function computeAvancementModel(buildingId) {
   return model;
 }
 
+// Dates de planning applicables à un périmètre : celles de la zone racine
+// si elles sont renseignées, sinon celles du chantier. Une zone sans dates
+// propres reste donc lue sur la période globale.
+function getZoneDates(zoneId) {
+  const d = (state.zoneDates || {})[zoneId];
+  if (d && d.start && d.end) return { start: d.start, end: d.end, own: true };
+  return { start: state.projectStart, end: state.projectEnd, own: false };
+}
+function setZoneDate(zoneId, field, value) {
+  if (!state.zoneDates || typeof state.zoneDates !== 'object') state.zoneDates = {};
+  const d = state.zoneDates[zoneId] || (state.zoneDates[zoneId] = { start: '', end: '' });
+  d[field] = value || '';
+  if (!d.start && !d.end) delete state.zoneDates[zoneId];
+  save();
+  renderPlanningZones();
+  renderRecap();
+}
+
 // ---------- Planning : avancement attendu au regard du calendrier ----------
-function computeAvancementPlanning(pctReel) {
-  const s = state.projectStart, e = state.projectEnd;
+function computeAvancementPlanning(pctReel, scope) {
+  const dates = scope ? getZoneDates(scope) : { start: state.projectStart, end: state.projectEnd, own: false };
+  const s = dates.start, e = dates.end;
   if (!s || !e) return null;
   const d0 = new Date(s + 'T00:00:00'), d1 = new Date(e + 'T00:00:00');
   const now = new Date(todayISO() + 'T00:00:00');
@@ -3409,7 +3439,7 @@ function computeAvancementPlanning(pctReel) {
   const elapsed = Math.max(0, Math.min(totalDays, Math.round((now - d0) / day)));
   const pctTemps = (elapsed / totalDays) * 100;
   return {
-    start: s, end: e, totalDays, elapsed,
+    start: s, end: e, ownDates: !!dates.own, totalDays, elapsed,
     remainingDays: Math.max(0, Math.round((d1 - now) / day)),
     overdue: now > d1,
     pctTemps,
@@ -3430,32 +3460,48 @@ function stampAvancementHistory(force) {
   if (m.hBudget <= 0 && m.pct <= 0) return;
   const key = todayISO();
   const prev = state.avancementHistory[key];
+  const zones = {};
+  for (const b of m.buildings) if (b.hBudget > 0) zones[b.id] = Math.round(b.pct * 100) / 100;
   const next = {
     pct: Math.round(m.pct * 100) / 100,
     hDone: Math.round(m.hDone * 10) / 10,
     hBudget: Math.round(m.hBudget * 10) / 10,
+    zones,
   };
-  if (prev && prev.pct === next.pct && prev.hBudget === next.hBudget) return;
+  if (prev && prev.pct === next.pct && prev.hBudget === next.hBudget
+      && _jsonEq(prev.zones || {}, zones)) return;
   state.avancementHistory[key] = next;
   save();
 }
-// Vitesse d'avancement sur les 28 derniers jours et date de fin projetée.
-function computeAvancementVelocity() {
+// Série d'historique du périmètre : le global, ou l'avancement du bâtiment
+// si un bâtiment est sélectionné. Les points antérieurs à l'enregistrement
+// par zone sont simplement absents de la série du bâtiment.
+function getAvancementSeries(scope) {
   const h = state.avancementHistory || {};
-  const keys = Object.keys(h).sort();
-  if (keys.length < 2) return null;
-  const last = keys[keys.length - 1];
-  const lastD = new Date(last + 'T00:00:00');
-  let first = keys[0];
-  for (const k of keys) {
-    if ((lastD - new Date(k + 'T00:00:00')) / 86400000 <= 28) { first = k; break; }
+  const out = [];
+  for (const k of Object.keys(h).sort()) {
+    const p = scope ? (h[k].zones || {})[scope] : h[k].pct;
+    if (typeof p === 'number') out.push({ date: k, pct: p });
   }
-  const days = (lastD - new Date(first + 'T00:00:00')) / 86400000;
+  return out;
+}
+
+// Vitesse d'avancement sur les 28 derniers jours et date de fin projetée.
+function computeAvancementVelocity(scope) {
+  const serie = getAvancementSeries(scope);
+  if (serie.length < 2) return null;
+  const last = serie[serie.length - 1];
+  const lastD = new Date(last.date + 'T00:00:00');
+  let first = serie[0];
+  for (const p of serie) {
+    if ((lastD - new Date(p.date + 'T00:00:00')) / 86400000 <= 28) { first = p; break; }
+  }
+  const days = (lastD - new Date(first.date + 'T00:00:00')) / 86400000;
   if (days <= 0) return null;
-  const perDay = (h[last].pct - h[first].pct) / days;
+  const perDay = (last.pct - first.pct) / days;
   const out = { perDay, perWeek: perDay * 7, windowDays: Math.round(days), etaISO: null, etaDays: null };
-  if (perDay > 0.001 && h[last].pct < 99.95) {
-    const etaDays = Math.ceil((100 - h[last].pct) / perDay);
+  if (perDay > 0.001 && last.pct < 99.95) {
+    const etaDays = Math.ceil((100 - last.pct) / perDay);
     if (etaDays < 3650) {
       out.etaDays = etaDays;
       out.etaISO = new Date(lastD.getTime() + etaDays * 86400000).toISOString().slice(0, 10);
@@ -3525,8 +3571,8 @@ async function exportAvancementToPDF(scope, label) {
     return;
   }
   const model = computeAvancementModel(scope);
-  const planning = computeAvancementPlanning(model.pct);
-  const velocity = computeAvancementVelocity();
+  const planning = computeAvancementPlanning(model.pct, scope);
+  const velocity = computeAvancementVelocity(scope);
   const unit = model.weighting === 'heures' ? ' h' : '';
 
   const pdf = hardenPdfText(new jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' }));
@@ -3658,8 +3704,10 @@ async function exportAvancementToPDF(scope, label) {
   }
 
   // ----- 2. Courbe d'avancement -----
-  const hist = state.avancementHistory || {};
-  const hKeys = Object.keys(hist).sort();
+  const serie = getAvancementSeries(scope);
+  const hist = {};
+  for (const p of serie) hist[p.date] = { pct: p.pct };
+  const hKeys = serie.map(p => p.date);
   if (hKeys.length > 0) {
     banner('COURBE D\'AVANCEMENT');
     const H = 52, PADL = 12, PADB = 7, PADT = 3;
@@ -3952,11 +4000,11 @@ function renderRecap() {
     return;
   }
 
-  const planning = computeAvancementPlanning(model.pct);
-  const velocity = computeAvancementVelocity();
+  const planning = computeAvancementPlanning(model.pct, scope);
+  const velocity = computeAvancementVelocity(scope);
 
   contentEl.appendChild(buildDbKpis(model, planning, velocity));
-  contentEl.appendChild(buildDbCurve(model, planning));
+  contentEl.appendChild(buildDbCurve(model, planning, scope));
   const panels = [];
   if (!scope && full.buildings.length > 1) panels.push(buildDbBuildings(model));
   panels.push(buildDbMatrix(model, scope));
@@ -4047,10 +4095,15 @@ function buildDbKpis(model, planning, velocity) {
 }
 
 // ----- 2. Courbe d'avancement (réel vs théorique) -----
-function buildDbCurve(model, planning) {
-  const card = dbCard('Courbe d\'avancement', 'réel mesuré chaque jour, comparé à la trajectoire théorique');
-  const hist = state.avancementHistory || {};
-  const keys = Object.keys(hist).sort();
+function buildDbCurve(model, planning, scope) {
+  const card = dbCard('Courbe d\'avancement',
+    (scope ? 'avancement de ce bâtiment' : 'avancement du projet')
+    + (planning && planning.ownDates ? ', sur sa propre période' : '')
+    + ', comparé à la trajectoire théorique');
+  const serie = getAvancementSeries(scope);
+  const keys = serie.map(p => p.date);
+  const hist = {};
+  for (const p of serie) hist[p.date] = { pct: p.pct };
   // Le viewBox suit la largeur d'écran : sans cela, l'étirement d'un
   // canevas 760×220 sur un téléphone déforme les libellés d'axes.
   const narrow = (window.innerWidth || 1024) < 700;
@@ -4058,8 +4111,9 @@ function buildDbCurve(model, planning) {
   const PAD_L = 38, PAD_R = 14, PAD_T = 12, PAD_B = 26;
 
   if (!keys.length) {
-    card.appendChild(dbEl('p', 'db-empty',
-      'La courbe se construit automatiquement : un point est enregistré chaque jour où l\'avancement évolue.'));
+    card.appendChild(dbEl('p', 'db-empty', scope
+      ? 'Pas encore de point pour ce bâtiment : la courbe par bâtiment se construit à partir des prochaines saisies d\'avancement.'
+      : 'La courbe se construit automatiquement : un point est enregistré chaque jour où l\'avancement évolue.'));
     return card;
   }
   // Étendue temporelle : le planning s'il existe, sinon l'historique.
@@ -5281,6 +5335,71 @@ function renderProjectDates() {
   if (state.projectEnd && remaining === 0) parts.push('chantier terminé');
   info.innerHTML = parts.join(' · ');
 }
+// Périodes par bâtiment (Données → Planning). Seules les zones racines
+// sont listées : ce sont elles que la courbe du récapitulatif sait tracer.
+function renderPlanningZones() {
+  const host = document.getElementById('planningzones');
+  if (!host) return;
+  host.innerHTML = '';
+  const roots = state.zones.filter(z => (z.parentId || null) === null);
+  if (!roots.length) {
+    const p = document.createElement('p');
+    p.className = 'planning-empty';
+    p.textContent = 'Aucun bâtiment. Créez une zone de premier niveau dans Données → Zones.';
+    host.appendChild(p);
+    return;
+  }
+  for (const z of roots) {
+    const d = (state.zoneDates || {})[z.id] || {};
+    const row = document.createElement('div');
+    row.className = 'planning-zone';
+    const name = document.createElement('div');
+    name.className = 'planning-zone-name';
+    name.textContent = z.name || '(zone sans nom)';
+    row.appendChild(name);
+
+    const fields = document.createElement('div');
+    fields.className = 'planning-zone-fields';
+    const mk = (label, field) => {
+      const box = document.createElement('div');
+      box.className = 'project-date-field';
+      const lab = document.createElement('label');
+      lab.textContent = label;
+      const inp = document.createElement('input');
+      inp.type = 'date';
+      inp.autocomplete = 'off';
+      inp.value = d[field] || '';
+      lab.htmlFor = 'plz_' + field + '_' + z.id;
+      inp.id = lab.htmlFor;
+      inp.addEventListener('change', () => setZoneDate(z.id, field, inp.value));
+      box.append(lab, inp);
+      fields.appendChild(box);
+    };
+    mk('Début', 'start');
+    mk('Fin', 'end');
+    row.appendChild(fields);
+
+    const info = document.createElement('div');
+    info.className = 'planning-zone-info';
+    if (d.start && d.end) {
+      const a = new Date(d.start + 'T00:00:00'), b = new Date(d.end + 'T00:00:00');
+      if (b < a) { info.classList.add('is-warn'); info.textContent = 'La date de fin doit être postérieure à la date de début.'; }
+      else {
+        const days = Math.round((b - a) / 86400000);
+        info.textContent = 'Période propre : ' + days + ' jour' + (days > 1 ? 's' : '')
+          + ' · ' + formatDateShortFR(d.start) + ' → ' + formatDateShortFR(d.end);
+      }
+    } else if (d.start || d.end) {
+      info.classList.add('is-warn');
+      info.textContent = 'Renseignez les deux dates pour que ce bâtiment ait sa propre trajectoire.';
+    } else {
+      info.textContent = 'Suit la période du chantier.';
+    }
+    row.appendChild(info);
+    host.appendChild(row);
+  }
+}
+
 // Taux horaire (€/h) — Données → Admin. Utilisé par les totaux de devis.
 function renderTauxHoraire() {
   const inp = document.getElementById('tauxhoraire');
@@ -5530,6 +5649,7 @@ function switchSubPage(group, name) {
   if (group === 'proto' && name === 'recap') renderProtoRecap();
   if (group === 'stock' && name === 'cb') renderStockCB();
   if (group === 'travaux') renderTravaux();
+  if (group === 'donnees' && name === 'planning') renderPlanningZones();
 }
 
 function renderCompanies() {
@@ -16115,7 +16235,7 @@ async function doSyncPull(initial = false, opts = {}) {
 // retard (il « réapparaît » — bénin et rare, contre une perte de données
 // catastrophique).
 const SYNC_UNION_DICT_KEYS = new Set([
-  'presences', 'weather', 'taskProgress', 'zoneUpdated', 'avancementHistory',
+  'presences', 'weather', 'taskProgress', 'zoneUpdated', 'avancementHistory', 'zoneDates',
   'adminDocs', 'workerDocs', 'heuresData', 'crEntries', 'stEntries',
   'travauxCells'
 ]);

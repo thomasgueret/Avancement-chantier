@@ -117,11 +117,12 @@
 
     <!-- ============== ONGLET : DONNÉES ============== -->
     <section class="page" id="page-donnees">
-      <div class="segmented" role="tablist" data-group="donnees" style="--count:6;">
+      <div class="segmented" role="tablist" data-group="donnees" style="--count:7;">
         <div class="segmented-thumb"></div>
         <button class="seg-btn active" data-group="donnees" data-sub="entreprises" role="tab">Entreprises</button>
         <button class="seg-btn" data-group="donnees" data-sub="zones" role="tab">Zones</button>
         <button class="seg-btn" data-group="donnees" data-sub="taches" role="tab">Tâches</button>
+        <button class="seg-btn" data-group="donnees" data-sub="planning" role="tab">Planning</button>
         <button class="seg-btn" data-group="donnees" data-sub="adminconfig" role="tab">Admin.</button>
         <button class="seg-btn" data-group="donnees" data-sub="eotp" role="tab">eOTP</button>
         <button class="seg-btn" data-group="donnees" data-sub="lots" role="tab">Lots</button>
@@ -174,10 +175,11 @@
       </div>
 
       <!-- Sous-page : Administratif (libellés des 4 docs eCheckIn) -->
-      <div class="sub-page" id="sub-adminconfig" data-group="donnees">
+      <!-- Sous-page : Planning (période du chantier + périodes par bâtiment) -->
+      <div class="sub-page" id="sub-planning" data-group="donnees">
         <div class="list-section">
           <h2 class="section-title">Période du chantier</h2>
-          <p class="section-help">Renseignez les dates prévues pour calculer la durée et projeter les dépenses en fin de chantier (FDC).</p>
+          <p class="section-help">Dates prévues du chantier : elles donnent la durée, la projection des dépenses en fin de chantier (FDC) et la trajectoire théorique de la courbe d'avancement.</p>
           <div class="project-dates-row">
             <div class="project-date-field">
               <label for="projectstart">Début</label>
@@ -190,6 +192,14 @@
           </div>
           <p class="project-dates-info" id="projectdatesinfo"></p>
         </div>
+        <div class="list-section">
+          <h2 class="section-title">Période par bâtiment</h2>
+          <p class="section-help">Seules les zones de premier niveau sont listées : ce sont elles qui apparaissent dans la courbe d'avancement du récapitulatif. Un bâtiment sans dates propres suit la période du chantier.</p>
+          <div class="planning-zones" id="planningzones"></div>
+        </div>
+      </div>
+
+      <div class="sub-page" id="sub-adminconfig" data-group="donnees">
         <div class="list-section">
           <h2 class="section-title">Taux horaire</h2>
           <p class="section-help">Valorise la main d'œuvre des devis : total ligne = montant sous-traitant + heures × taux + matériel + matériaux.</p>

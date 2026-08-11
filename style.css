@@ -1791,38 +1791,42 @@ option { background-color: var(--surface); color: var(--text); }
 .db-delta.is-neg { color: var(--danger); }
 
 /* ----- Matrice croisée ----- */
-.db-matrix-wrap { overflow-x: auto; }
-.db-matrix { border-collapse: separate; border-spacing: 3px; font-variant-numeric: tabular-nums; }
+/* La matrice est compacte et plafonnée en hauteur : sur un chantier à
+   trente zones elle occupait sinon tout l'écran à elle seule. L'en-tête de
+   colonnes et la colonne de gauche restent visibles pendant le défilement. */
+.db-matrix-wrap { overflow: auto; max-height: 340px; scrollbar-width: thin; }
+.db-matrix { border-collapse: separate; border-spacing: 2px; font-variant-numeric: tabular-nums; }
 .db-matrix th, .db-matrix td { padding: 0; }
+.db-matrix thead th { position: sticky; top: 0; background: var(--surface); z-index: 3; }
 .db-matrix-corner {
   font-size: 10px; font-weight: 800; letter-spacing: 0.05em;
   text-transform: uppercase; color: var(--text-3);
   text-align: left; padding-right: 8px;
-  position: sticky; left: 0; background: var(--surface); z-index: 2;
+  position: sticky; left: 0; background: var(--surface); z-index: 4;
 }
 .db-matrix-col {
-  height: 114px; width: 36px; min-width: 36px;
+  height: 78px; width: 30px; min-width: 30px;
   vertical-align: bottom;
-  font-size: 11px; font-weight: 700; color: var(--text-2);
+  font-size: 10.5px; font-weight: 700; color: var(--text-2);
 }
 .db-matrix-col > span {
   display: block;
   writing-mode: vertical-rl;
   transform: rotate(180deg);
-  max-height: 108px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  margin: 0 auto 4px;
+  max-height: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin: 0 auto 3px;
 }
 .db-matrix-row {
-  font-size: 12px; font-weight: 700; color: var(--text-2);
-  text-align: left; padding-right: 10px;
-  max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11.5px; font-weight: 700; color: var(--text-2);
+  text-align: left; padding-right: 8px;
+  max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   position: sticky; left: 0; background: var(--surface); z-index: 1;
 }
 .db-matrix-cell {
-  width: 36px; height: 30px;
+  width: 30px; height: 22px;
   text-align: center;
-  font-size: 11px; font-weight: 800;
-  border-radius: 6px;
+  font-size: 10.5px; font-weight: 800;
+  border-radius: 5px;
   color: var(--text);
   background: var(--surface-2);
 }
@@ -1918,6 +1922,31 @@ option { background-color: var(--surface); color: var(--text); }
 .db-focus-note.is-warn { background: var(--warning-soft); color: var(--warning); border: 1px solid var(--warning-border); }
 .db-focus-note.is-ok { background: var(--success-soft); color: var(--success-2); border: 1px solid var(--success-border); }
 .db-focus-counts { margin-top: 8px; font-size: 11px; color: var(--text-4); line-height: 1.5; }
+
+/* ============ DONNÉES → PLANNING (périodes par bâtiment) ============ */
+.planning-zones { display: flex; flex-direction: column; gap: 10px; }
+.planning-zone {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  box-shadow: var(--shadow-sm);
+}
+.planning-zone-name {
+  font-size: 14.5px; font-weight: 800; color: var(--text);
+  margin-bottom: 8px;
+}
+.planning-zone-fields { display: flex; gap: 10px; flex-wrap: wrap; }
+.planning-zone-fields .project-date-field { flex: 1 1 150px; min-width: 0; }
+.planning-zone-info {
+  margin-top: 8px;
+  font-size: 11.5px; color: var(--text-3);
+}
+.planning-zone-info.is-warn { color: var(--warning); font-weight: 700; }
+.planning-empty {
+  margin: 0; padding: 14px 2px;
+  font-size: 13px; color: var(--text-3); font-style: italic;
+}
 
 /* ============ ADMINISTRATIF (commun Sécurité + eCheckIn) ============ */
 .admin-company {
