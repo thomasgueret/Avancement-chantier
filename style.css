@@ -1955,29 +1955,212 @@ option { background-color: var(--surface); color: var(--text); }
 .db-focus-note.is-ok { background: var(--success-soft); color: var(--success-2); border: 1px solid var(--success-border); }
 .db-focus-counts { margin-top: 8px; font-size: 11px; color: var(--text-4); line-height: 1.5; }
 
-/* ============ DONNÉES → PLANNING (périodes par bâtiment) ============ */
-.planning-zones { display: flex; flex-direction: column; gap: 10px; }
-.planning-zone {
+/* ============ DONNÉES → ZONES → PLANNING (planning en barres) ============ */
+/* Slider secondaire, plus discret que celui de premier niveau. */
+.segmented.segmented-sub { --count: 2; max-width: 420px; margin-bottom: 14px; }
+.segmented.segmented-sub .seg-btn { padding: 8px 8px; min-height: 34px; font-size: 12.5px; }
+
+.gantt-toolbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px;
+  margin-bottom: 10px;
+}
+.gantt-chip {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 4px 11px;
+  font-size: 11.5px; font-weight: 700; color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.gantt-chip.is-warn { color: var(--warning); border-color: var(--warning); font-weight: 800; }
+.gantt-hint { font-size: 11px; color: var(--text-4); }
+
+/* Conteneur de défilement : c'est lui qui porte les positions « sticky »
+   de l'en-tête de temps et de la colonne des bâtiments. */
+.gantt-scroll {
+  overflow: auto;
+  max-height: min(72vh, 720px);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px 14px;
   box-shadow: var(--shadow-sm);
+  overscroll-behavior-x: contain;
 }
-.planning-zone-name {
-  font-size: 14.5px; font-weight: 800; color: var(--text);
-  margin-bottom: 8px;
+.gantt {
+  --gantt-label-w: 218px;
+  --gantt-tl-w: 600px;
+  --gantt-row-h: 44px;
+  min-width: max-content;
 }
-.planning-zone-fields { display: flex; gap: 10px; flex-wrap: wrap; }
-.planning-zone-fields .project-date-field { flex: 1 1 150px; min-width: 0; }
-.planning-zone-info {
-  margin-top: 8px;
-  font-size: 11.5px; color: var(--text-3);
+.gantt-head, .gantt-row {
+  display: grid;
+  grid-template-columns: var(--gantt-label-w) minmax(var(--gantt-tl-w), 1fr);
 }
-.planning-zone-info.is-warn { color: var(--warning); font-weight: 700; }
-.planning-empty {
-  margin: 0; padding: 14px 2px;
+.gantt-head {
+  position: sticky; top: 0; z-index: 4;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-strong);
+}
+.gantt-corner {
+  position: sticky; left: 0; z-index: 5;
+  display: flex; align-items: flex-end;
+  padding: 6px 12px 8px;
+  background: var(--surface-2);
+  border-right: 1px solid var(--border-strong);
+  font-size: 10px; font-weight: 800; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--text-4);
+}
+.gantt-scale { display: flex; flex-direction: column; min-width: 0; }
+.gantt-scale-row { display: flex; min-width: 0; }
+.gantt-year, .gantt-month {
+  flex-basis: 0; min-width: 0;
+  text-align: center; white-space: nowrap; overflow: hidden;
+  border-left: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+.gantt-year {
+  padding: 5px 2px;
+  font-size: 11.5px; font-weight: 800; color: var(--text-2);
+  border-bottom: 1px solid var(--border);
+}
+.gantt-month {
+  padding: 4px 2px;
+  font-size: 10.5px; font-weight: 600; color: var(--text-3);
+  text-transform: capitalize;
+}
+.gantt-scale-row > :first-child { border-left: none; }
+
+.gantt-body { position: relative; }
+.gantt-row {
+  min-height: var(--gantt-row-h);
+  border-bottom: 1px solid var(--border);
+}
+.gantt-row:last-child { border-bottom: none; }
+.gantt-row:nth-child(even) { background: var(--surface-2); }
+.gantt-label {
+  position: sticky; left: 0; z-index: 2;
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  padding: 8px 12px;
+  background: inherit;
+  border: none; border-right: 1px solid var(--border-strong);
+  text-align: left; cursor: pointer;
+  min-width: 0;
+}
+.gantt-row:nth-child(odd) .gantt-label { background: var(--surface); }
+.gantt-row:nth-child(even) .gantt-label { background: var(--surface-2); }
+.gantt-label:hover .gantt-label-name { color: var(--accent-2); }
+.gantt-label-name {
+  font-size: 13.5px; font-weight: 700; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.gantt-label-days {
+  font-size: 11px; font-weight: 800; color: var(--text-3);
+  font-variant-numeric: tabular-nums; flex-shrink: 0;
+}
+.gantt-label-days.is-inherited { color: var(--text-4); font-weight: 600; font-style: italic; }
+.gantt-label-warn {
+  flex: 0 0 auto;
+  background: var(--warning-soft); color: var(--warning);
+  border: 1px solid var(--warning-border); border-radius: 5px;
+  padding: 1px 5px;
+  font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.02em;
+}
+
+.gantt-track { position: relative; min-width: 0; }
+.gantt-gridline {
+  position: absolute; top: 0; bottom: 0; width: 1px;
+  background: var(--border);
+}
+.gantt-gridline.is-year { background: var(--border-strong); }
+.gantt-today {
+  position: absolute; top: 0; bottom: 0; width: 2px;
+  background: var(--accent);
+  opacity: 0.55;
+  z-index: 1;
+}
+
+.gantt-bar {
+  position: absolute;
+  top: 50%; transform: translateY(-50%);
+  height: 20px; min-width: 8px;
+  background: var(--gantt-bar-color, var(--accent));
+  border-radius: 999px;
+  box-shadow: var(--shadow-sm);
+  cursor: grab;
+  touch-action: none;              /* le glissé prime sur le défilement */
+  z-index: 2;
+  transition: filter 0.12s;
+}
+.gantt-bar:hover { filter: brightness(1.06); }
+.gantt-bar.is-dragging { cursor: grabbing; filter: brightness(1.1); box-shadow: var(--shadow-md); }
+.gantt-bar.is-ghost {
+  background: transparent;
+  border: 1.5px dashed var(--border-strong);
+  box-shadow: none; cursor: pointer;
+  height: 14px;
+}
+.gantt-bar-handle {
+  position: absolute; right: -1px; top: 50%;
+  transform: translateY(-50%);
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2.5px solid var(--gantt-bar-color, var(--accent));
+  cursor: ew-resize;
+  touch-action: none;
+}
+.gantt-bar-missing {
+  position: absolute; left: 8px; top: 50%; transform: translateY(-50%);
+  font-size: 11px; font-style: italic; color: var(--warning);
+}
+.gantt-empty {
+  margin: 0; padding: 16px 2px;
   font-size: 13px; color: var(--text-3); font-style: italic;
+}
+
+/* ----- Modale de propriétés d'une barre ----- */
+.gantt-modal .modal-body { display: flex; flex-direction: column; gap: 14px; }
+.gantt-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.gantt-field-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.gantt-field-row .gantt-field { flex: 1 1 150px; }
+.gantt-field-label {
+  font-size: 10.5px; font-weight: 800; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-4);
+}
+.gantt-field input[type="text"], .gantt-field input[type="date"] {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); color: var(--text);
+  font-size: 14px; font-family: inherit;
+}
+.gantt-field input:focus { outline: none; border-color: var(--accent); }
+.gantt-swatches { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.gantt-swatch {
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 2px solid transparent; padding: 0; cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+.gantt-swatch.is-on { border-color: var(--text); transform: scale(1.12); }
+.gantt-swatch-custom {
+  width: 30px; height: 30px; padding: 0;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); cursor: pointer;
+}
+.gantt-modal-info { margin: 0; font-size: 12px; color: var(--text-3); line-height: 1.5; }
+.gantt-modal-info.is-warn { color: var(--danger); font-weight: 700; }
+.gantt-modal-footer {
+  display: flex; gap: 10px; justify-content: space-between; align-items: center; flex-wrap: wrap;
+  padding: 12px 16px 14px;
+  border-top: 1px solid var(--border);
+}
+.gantt-modal-footer .btn-primary { flex: 0 0 auto; }
+.gantt-modal-reset { font-size: 12.5px; }
+
+@media (max-width: 700px) {
+  .gantt { --gantt-label-w: 132px; --gantt-row-h: 40px; }
+  .gantt-label { padding: 6px 8px; gap: 4px; }
+  .gantt-label-name { font-size: 12px; }
+  .gantt-label-days { font-size: 10px; }
+  .gantt-hint { display: none; }
 }
 
 /* ============ ADMINISTRATIF (commun Sécurité + eCheckIn) ============ */

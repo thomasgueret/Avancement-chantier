@@ -117,12 +117,11 @@
 
     <!-- ============== ONGLET : DONNÉES ============== -->
     <section class="page" id="page-donnees">
-      <div class="segmented" role="tablist" data-group="donnees" style="--count:7;">
+      <div class="segmented" role="tablist" data-group="donnees" style="--count:6;">
         <div class="segmented-thumb"></div>
         <button class="seg-btn active" data-group="donnees" data-sub="entreprises" role="tab">Entreprises</button>
         <button class="seg-btn" data-group="donnees" data-sub="zones" role="tab">Zones</button>
         <button class="seg-btn" data-group="donnees" data-sub="taches" role="tab">Tâches</button>
-        <button class="seg-btn" data-group="donnees" data-sub="planning" role="tab">Planning</button>
         <button class="seg-btn" data-group="donnees" data-sub="adminconfig" role="tab">Admin.</button>
         <button class="seg-btn" data-group="donnees" data-sub="eotp" role="tab">eOTP</button>
         <button class="seg-btn" data-group="donnees" data-sub="lots" role="tab">Lots</button>
@@ -142,20 +141,41 @@
 
       <!-- Sous-page : Zones -->
       <div class="sub-page" id="sub-zones" data-group="donnees">
-        <div class="list-section">
-          <p class="section-help">Construisez l'arborescence du chantier. Ajoutez des sous-niveaux pour détailler (Bâtiment → Étage → Mur…). Cochez plusieurs zones pour affecter un ouvrage à toutes en une fois.</p>
-          <!-- Barre d'actions groupées (visible dès qu'une zone est cochée) -->
-          <div class="zone-batch-bar" id="zonebatchbar" hidden>
-            <span class="zone-batch-count" id="zonebatchcount"></span>
-            <span class="zone-batch-hint">Ajouter un ouvrage à une zone cochée l'ajoute à toutes.</span>
-            <button class="zone-batch-clear" id="zonebatchclear" type="button">Tout décocher</button>
+        <!-- Slider secondaire : arborescence des zones / planning en barres -->
+        <div class="segmented segmented-sub" role="tablist" data-group="zones" style="--count:2;">
+          <div class="segmented-thumb"></div>
+          <button class="seg-btn active" data-group="zones" data-sub="arbo" role="tab">Arborescence</button>
+          <button class="seg-btn" data-group="zones" data-sub="zoneplanning" role="tab">Planning</button>
+        </div>
+
+        <div class="sub-page active" id="sub-arbo" data-group="zones">
+          <div class="list-section">
+            <p class="section-help">Construisez l'arborescence du chantier. Ajoutez des sous-niveaux pour détailler (Bâtiment → Étage → Mur…). Cochez plusieurs zones pour affecter un ouvrage à toutes en une fois.</p>
+            <!-- Barre d'actions groupées (visible dès qu'une zone est cochée) -->
+            <div class="zone-batch-bar" id="zonebatchbar" hidden>
+              <span class="zone-batch-count" id="zonebatchcount"></span>
+              <span class="zone-batch-hint">Ajouter un ouvrage à une zone cochée l'ajoute à toutes.</span>
+              <button class="zone-batch-clear" id="zonebatchclear" type="button">Tout décocher</button>
+            </div>
+            <div class="zone-tree" id="zonetree"></div>
+            <div class="empty-state" id="zoneempty">
+              <p>Aucune zone créée.</p>
+              <p class="hint">Appuyez sur « Ajouter une zone » pour commencer.</p>
+            </div>
+            <button class="btn-primary zone-add-root" id="zoneaddroot">+ Ajouter une zone</button>
           </div>
-          <div class="zone-tree" id="zonetree"></div>
-          <div class="empty-state" id="zoneempty">
-            <p>Aucune zone créée.</p>
-            <p class="hint">Appuyez sur « Ajouter une zone » pour commencer.</p>
+        </div>
+
+        <div class="sub-page" id="sub-zoneplanning" data-group="zones">
+          <div class="list-section">
+            <p class="section-help">
+              Une barre par bâtiment, avec ses jours ouvrés entre parenthèses. Chaque période trace la courbe d'avancement du bâtiment
+              dans <strong>Avancement → Récapitulatif</strong> ; le périmètre « Tout le projet » suit les dates du chantier saisies dans <strong>Données → Admin.</strong>
+            </p>
+            <div class="gantt-toolbar" id="gantttoolbar"></div>
+            <div class="gantt-scroll" id="ganttscroll"><div class="gantt" id="ganttchart"></div></div>
+            <p class="gantt-empty" id="ganttempty" hidden>Aucun bâtiment. Créez une zone de premier niveau dans l'onglet <strong>Arborescence</strong>.</p>
           </div>
-          <button class="btn-primary zone-add-root" id="zoneaddroot">+ Ajouter une zone</button>
         </div>
       </div>
 
@@ -174,12 +194,12 @@
         <button class="fab" id="taskfab" aria-label="Ajouter une tâche">+</button>
       </div>
 
-      <!-- Sous-page : Administratif (libellés des 4 docs eCheckIn) -->
-      <!-- Sous-page : Planning (période du chantier + périodes par bâtiment) -->
-      <div class="sub-page" id="sub-planning" data-group="donnees">
+      <!-- Sous-page : Administratif (période du chantier, taux horaire,
+           libellés des 4 docs eCheckIn, plans, sauvegardes) -->
+      <div class="sub-page" id="sub-adminconfig" data-group="donnees">
         <div class="list-section">
           <h2 class="section-title">Période du chantier</h2>
-          <p class="section-help">Dates prévues du chantier : elles donnent la durée, la projection des dépenses en fin de chantier (FDC) et la trajectoire théorique de la courbe d'avancement.</p>
+          <p class="section-help">Dates prévues du chantier : elles donnent la durée, la projection des dépenses en fin de chantier (FDC) et la trajectoire théorique de la courbe d'avancement du périmètre « Tout le projet ». Les périodes par bâtiment se règlent dans <strong>Données → Zones → Planning</strong>.</p>
           <div class="project-dates-row">
             <div class="project-date-field">
               <label for="projectstart">Début</label>
@@ -192,14 +212,6 @@
           </div>
           <p class="project-dates-info" id="projectdatesinfo"></p>
         </div>
-        <div class="list-section">
-          <h2 class="section-title">Période par bâtiment</h2>
-          <p class="section-help">Seules les zones de premier niveau sont listées : ce sont elles qui apparaissent dans la courbe d'avancement du récapitulatif. Un bâtiment sans dates propres suit la période du chantier.</p>
-          <div class="planning-zones" id="planningzones"></div>
-        </div>
-      </div>
-
-      <div class="sub-page" id="sub-adminconfig" data-group="donnees">
         <div class="list-section">
           <h2 class="section-title">Taux horaire</h2>
           <p class="section-help">Valorise la main d'œuvre des devis : total ligne = montant sous-traitant + heures × taux + matériel + matériaux.</p>
@@ -646,6 +658,41 @@
   </datalist>
 
   <div class="toast" id="toast" hidden></div>
+
+  <!-- ===== Propriétés d'une barre du planning (double-clic sur la barre) ===== -->
+  <div class="modal-overlay" id="ganttmodal" hidden>
+    <div class="modal-content gantt-modal" role="dialog" aria-modal="true" aria-labelledby="ganttmodaltitle">
+      <div class="modal-header">
+        <h3 class="modal-title" id="ganttmodaltitle">Propriétés de la barre</h3>
+        <button class="modal-close" id="ganttmodalclose" type="button" aria-label="Fermer">×</button>
+      </div>
+      <div class="modal-body">
+        <label class="gantt-field">
+          <span class="gantt-field-label">Nom du bâtiment</span>
+          <input id="ganttname" type="text" autocomplete="off" placeholder="Bâtiment A">
+        </label>
+        <div class="gantt-field-row">
+          <label class="gantt-field">
+            <span class="gantt-field-label">Début</span>
+            <input id="ganttstart" type="date" autocomplete="off">
+          </label>
+          <label class="gantt-field">
+            <span class="gantt-field-label">Fin</span>
+            <input id="ganttend" type="date" autocomplete="off">
+          </label>
+        </div>
+        <div class="gantt-field">
+          <span class="gantt-field-label">Couleur de la barre</span>
+          <div class="gantt-swatches" id="ganttswatches"></div>
+        </div>
+        <p class="gantt-modal-info" id="ganttmodalinfo"></p>
+      </div>
+      <div class="modal-footer gantt-modal-footer">
+        <button class="btn-secondary gantt-modal-reset" id="ganttreset" type="button">Suivre la période du chantier</button>
+        <button class="btn-primary" id="ganttsave" type="button">Enregistrer</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ============== Modale CACES ============== -->
   <!-- Sélecteur de lieu de la vue Visite (arborescence complète + recherche) -->

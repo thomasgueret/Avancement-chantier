@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.67';
+const APP_VERSION = '1.68';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -623,7 +623,7 @@ function renderAll() {
   renderDocLabelsConfig();
   renderEOTPsConfig();
   renderProjectDates();
-  renderPlanningZones();
+  renderZonePlanning();
   renderTauxHoraire();
   renderWorkBatchesConfig();
   renderProto();
@@ -1985,9 +1985,9 @@ function getZoneDescendants(id) {
 const zoneSelection = new Set();
 
 function renderZones() {
-  // Les périodes par bâtiment listent les zones racines : elles suivent
-  // toute création, suppression ou renommage.
-  renderPlanningZones();
+  // Le planning liste les zones racines : il suit toute création,
+  // suppression ou renommage.
+  renderZonePlanning();
   const tree = document.getElementById('zonetree');
   const empty = document.getElementById('zoneempty');
   if (!tree || !empty) return;
@@ -3442,9 +3442,22 @@ function setZoneDate(zoneId, field, value) {
   if (!state.zoneDates || typeof state.zoneDates !== 'object') state.zoneDates = {};
   const d = state.zoneDates[zoneId] || (state.zoneDates[zoneId] = { start: '', end: '' });
   d[field] = value || '';
-  if (!d.start && !d.end) delete state.zoneDates[zoneId];
+  // La couleur de la barre survit à un effacement des dates : on ne purge
+  // l'entrée que lorsqu'il n'y reste plus rien du tout.
+  if (!d.start && !d.end && !d.color) delete state.zoneDates[zoneId];
   save();
-  renderPlanningZones();
+  renderZonePlanning();
+  renderRecap();
+}
+// Écriture groupée (fin de glissé-déposé, validation de la modale) : une
+// seule sauvegarde et un seul rendu pour l'ensemble des champs modifiés.
+function setZonePlanning(zoneId, patch) {
+  if (!state.zoneDates || typeof state.zoneDates !== 'object') state.zoneDates = {};
+  const d = state.zoneDates[zoneId] || (state.zoneDates[zoneId] = { start: '', end: '' });
+  Object.assign(d, patch);
+  if (!d.start && !d.end && !d.color) delete state.zoneDates[zoneId];
+  save();
+  renderZonePlanning();
   renderRecap();
 }
 
@@ -5430,69 +5443,390 @@ function renderProjectDates() {
   if (state.projectEnd && remaining === 0) parts.push('chantier terminé');
   info.innerHTML = parts.join(' · ');
 }
-// Périodes par bâtiment (Données → Planning). Seules les zones racines
-// sont listées : ce sont elles que la courbe du récapitulatif sait tracer.
-function renderPlanningZones() {
-  const host = document.getElementById('planningzones');
-  if (!host) return;
-  host.innerHTML = '';
-  const roots = state.zones.filter(z => (z.parentId || null) === null);
-  if (!roots.length) {
-    const p = document.createElement('p');
-    p.className = 'planning-empty';
-    p.textContent = 'Aucun bâtiment. Créez une zone de premier niveau dans Données → Zones.';
-    host.appendChild(p);
-    return;
+// ================= PLANNING DES BÂTIMENTS (Données → Zones → Planning) =======
+// Un planning en barres : une ligne par zone de premier niveau. La barre se
+// déplace au glissé-déposé, s'allonge par la poignée de son extrémité droite
+// et s'édite au double-clic. Sa période trace la trajectoire théorique du
+// bâtiment dans la courbe d'avancement du récapitulatif ; le périmètre
+// « Tout le projet » suit, lui, les dates du chantier (Données → Admin.).
+
+const GANTT_PALETTE = ['#f2691e', '#1d7fb8', '#3aa76d', '#e0b400', '#9b5de5', '#e5484d', '#0f766e', '#7d7368'];
+const GANTT_MONTHS_FR = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+const GANTT_MONTH_MIN_W = 62;   // px : en deçà, le planning défile horizontalement
+
+// Les dates sont manipulées en « numéro de jour » (jours depuis 1970-01-01,
+// en UTC) : insensible au fuseau et à l'heure d'été, et l'arithmétique de
+// glissement se réduit à une addition d'entiers.
+const isoToDay = (iso) => Math.round(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 86400000);
+const dayToISO = (n) => new Date(n * 86400000).toISOString().slice(0, 10);
+const dayOfWeek = (n) => (n + 4) % 7;   // 1970-01-01 était un jeudi → 4 (0 = dimanche)
+
+// Dimanche de Pâques (algorithme de Meeus/Jones/Butcher), en numéro de jour.
+function easterDay(year) {
+  const a = year % 19, b = Math.floor(year / 100), c = year % 100;
+  const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return Math.round(Date.UTC(year, month - 1, day) / 86400000);
+}
+const _ganttHolidays = new Map();
+function frenchHolidayDays(year) {
+  if (_ganttHolidays.has(year)) return _ganttHolidays.get(year);
+  const D = (m, d) => Math.round(Date.UTC(year, m - 1, d) / 86400000);
+  const e = easterDay(year);
+  const set = new Set([
+    D(1, 1),        // Jour de l'an
+    e + 1,          // Lundi de Pâques
+    D(5, 1),        // Fête du Travail
+    D(5, 8),        // Victoire 1945
+    e + 39,         // Ascension
+    e + 50,         // Lundi de Pentecôte
+    D(7, 14),       // Fête nationale
+    D(8, 15),       // Assomption
+    D(11, 1),       // Toussaint
+    D(11, 11),      // Armistice
+    D(12, 25),      // Noël
+  ]);
+  _ganttHolidays.set(year, set);
+  return set;
+}
+// Jours ouvrés d'une période, bornes incluses : du lundi au vendredi, hors
+// jours fériés français. C'est l'unité de compte du planning (« jo »).
+function countWorkingDays(startISO, endISO) {
+  if (!startISO || !endISO) return 0;
+  const a = isoToDay(startISO), b = isoToDay(endISO);
+  if (!isFinite(a) || !isFinite(b) || b < a || b - a > 40000) return 0;
+  const y0 = new Date(a * 86400000).getUTCFullYear();
+  const y1 = new Date(b * 86400000).getUTCFullYear();
+  const holidays = new Set();
+  for (let y = y0; y <= y1; y++) for (const h of frenchHolidayDays(y)) holidays.add(h);
+  let n = 0;
+  for (let d = a; d <= b; d++) {
+    const dow = dayOfWeek(d);
+    if (dow === 0 || dow === 6 || holidays.has(d)) continue;
+    n++;
   }
+  return n;
+}
+// Couleur par défaut d'un bâtiment : stable, dérivée de son rang.
+function ganttZoneColor(zoneId) {
+  const stored = ((state.zoneDates || {})[zoneId] || {}).color;
+  if (stored) return stored;
+  const idx = getBuildings().findIndex(z => z.id === zoneId);
+  return GANTT_PALETTE[(idx >= 0 ? idx : 0) % GANTT_PALETTE.length];
+}
+
+// Fenêtre de temps affichée : englobe la période du chantier et toutes les
+// barres, arrondie aux mois pleins avec un mois de marge de chaque côté pour
+// laisser de la place au glissé-déposé.
+function ganttDomain() {
+  let lo = null, hi = null;
+  const push = (iso) => {
+    if (!iso) return;
+    const d = isoToDay(iso);
+    if (!isFinite(d)) return;
+    lo = lo === null ? d : Math.min(lo, d);
+    hi = hi === null ? d : Math.max(hi, d);
+  };
+  push(state.projectStart); push(state.projectEnd);
+  for (const z of getBuildings()) {
+    const d = (state.zoneDates || {})[z.id] || {};
+    push(d.start); push(d.end);
+  }
+  if (lo === null) {
+    const y = new Date().getFullYear();
+    lo = Math.round(Date.UTC(y, 0, 1) / 86400000);
+    hi = Math.round(Date.UTC(y, 11, 31) / 86400000);
+  }
+  const a = new Date(lo * 86400000), b = new Date(hi * 86400000);
+  const first = new Date(Date.UTC(a.getUTCFullYear(), a.getUTCMonth() - 1, 1));
+  const last  = new Date(Date.UTC(b.getUTCFullYear(), b.getUTCMonth() + 2, 0));
+  const startDay = Math.round(first.getTime() / 86400000);
+  const endDay   = Math.round(last.getTime() / 86400000);
+  const months = [];
+  let y = first.getUTCFullYear(), m = first.getUTCMonth();
+  while (y * 12 + m <= last.getUTCFullYear() * 12 + last.getUTCMonth()) {
+    const days = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    months.push({ y, m, days, startDay: Math.round(Date.UTC(y, m, 1) / 86400000) });
+    if (++m > 11) { m = 0; y++; }
+  }
+  return { startDay, endDay, totalDays: endDay - startDay + 1, months };
+}
+
+// ---------------------------------------------------------------- rendu ----
+let _ganttDrag = null;   // état du glissé en cours (null au repos)
+
+function renderZonePlanning() {
+  const chart = document.getElementById('ganttchart');
+  const empty = document.getElementById('ganttempty');
+  const toolbar = document.getElementById('gantttoolbar');
+  if (!chart || !empty) return;
+  chart.innerHTML = '';
+  if (toolbar) toolbar.innerHTML = '';
+
+  const roots = getBuildings();
+  empty.hidden = roots.length > 0;
+  chart.hidden = roots.length === 0;
+  if (!roots.length) return;
+
+  const dom = ganttDomain();
+  chart.style.setProperty('--gantt-tl-w', (dom.months.length * GANTT_MONTH_MIN_W) + 'px');
+  const pct = (day) => ((day - dom.startDay) / dom.totalDays) * 100;
+
+  // ----- Barre d'outils : rappel de la période du chantier -----
+  if (toolbar) {
+    const chip = dbEl('span', 'gantt-chip');
+    if (state.projectStart && state.projectEnd) {
+      chip.textContent = 'Chantier : ' + fmtFR(state.projectStart) + ' → ' + fmtFR(state.projectEnd)
+        + ' · ' + countWorkingDays(state.projectStart, state.projectEnd) + ' jo';
+    } else {
+      chip.classList.add('is-warn');
+      chip.textContent = 'Dates du chantier non renseignées (Données → Admin.)';
+    }
+    toolbar.appendChild(chip);
+    const hint = dbEl('span', 'gantt-hint', 'Glisser pour déplacer · poignée droite pour la durée · double-clic pour les propriétés');
+    toolbar.appendChild(hint);
+  }
+
+  // ----- En-tête : années puis mois, chaque cellule au prorata de ses jours --
+  const head = dbEl('div', 'gantt-head');
+  head.appendChild(dbEl('div', 'gantt-corner', 'Bâtiment'));
+  const scale = dbEl('div', 'gantt-scale');
+  const years = dbEl('div', 'gantt-scale-row gantt-years');
+  let i = 0;
+  while (i < dom.months.length) {
+    let j = i;
+    let days = 0;
+    while (j < dom.months.length && dom.months[j].y === dom.months[i].y) { days += dom.months[j].days; j++; }
+    const cell = dbEl('div', 'gantt-year', String(dom.months[i].y));
+    cell.style.flexGrow = String(days);
+    years.appendChild(cell);
+    i = j;
+  }
+  const monthsRow = dbEl('div', 'gantt-scale-row gantt-months');
+  for (const mo of dom.months) {
+    const cell = dbEl('div', 'gantt-month', GANTT_MONTHS_FR[mo.m]);
+    cell.style.flexGrow = String(mo.days);
+    monthsRow.appendChild(cell);
+  }
+  scale.append(years, monthsRow);
+  head.appendChild(scale);
+  chart.appendChild(head);
+
+  // ----- Une ligne par bâtiment -----
+  const todayDay = isoToDay(todayISO());
+  const body = dbEl('div', 'gantt-body');
   for (const z of roots) {
     const d = (state.zoneDates || {})[z.id] || {};
-    const row = document.createElement('div');
-    row.className = 'planning-zone';
-    const name = document.createElement('div');
-    name.className = 'planning-zone-name';
-    name.textContent = z.name || '(zone sans nom)';
-    row.appendChild(name);
+    const own = !!(d.start && d.end && isoToDay(d.end) >= isoToDay(d.start));
+    const row = dbEl('div', 'gantt-row' + (own ? '' : ' is-inherited'));
+    row.dataset.zone = z.id;
 
-    const fields = document.createElement('div');
-    fields.className = 'planning-zone-fields';
-    const mk = (label, field) => {
-      const box = document.createElement('div');
-      box.className = 'project-date-field';
-      const lab = document.createElement('label');
-      lab.textContent = label;
-      const inp = document.createElement('input');
-      inp.type = 'date';
-      inp.autocomplete = 'off';
-      inp.value = d[field] || '';
-      lab.htmlFor = 'plz_' + field + '_' + z.id;
-      inp.id = lab.htmlFor;
-      inp.addEventListener('change', () => setZoneDate(z.id, field, inp.value));
-      box.append(lab, inp);
-      fields.appendChild(box);
-    };
-    mk('Début', 'start');
-    mk('Fin', 'end');
-    row.appendChild(fields);
-
-    const info = document.createElement('div');
-    info.className = 'planning-zone-info';
-    if (d.start && d.end) {
-      const a = new Date(d.start + 'T00:00:00'), b = new Date(d.end + 'T00:00:00');
-      if (b < a) { info.classList.add('is-warn'); info.textContent = 'La date de fin doit être postérieure à la date de début.'; }
-      else {
-        const days = Math.round((b - a) / 86400000);
-        info.textContent = 'Période propre : ' + days + ' jour' + (days > 1 ? 's' : '')
-          + ' · ' + formatDateShortFR(d.start) + ' → ' + formatDateShortFR(d.end);
-      }
-    } else if (d.start || d.end) {
-      info.classList.add('is-warn');
-      info.textContent = 'Renseignez les deux dates pour que ce bâtiment ait sa propre trajectoire.';
-    } else {
-      info.textContent = 'Suit la période du chantier.';
+    // Libellé : nom + jours ouvrés entre parenthèses. Cliquable — c'est le
+    // chemin d'édition fiable sur mobile, où le double-clic est incertain.
+    const label = dbEl('button', 'gantt-label');
+    label.type = 'button';
+    label.title = 'Modifier la période de ' + (z.name || 'ce bâtiment');
+    label.appendChild(dbEl('span', 'gantt-label-name', z.name || '(zone sans nom)'));
+    const jo = own ? countWorkingDays(d.start, d.end)
+      : countWorkingDays(state.projectStart, state.projectEnd);
+    label.appendChild(dbEl('span', 'gantt-label-days' + (own ? '' : ' is-inherited'), '(' + jo + ' jo)'));
+    // Une seule des deux dates saisie : la barre resterait celle du chantier
+    // sans que rien ne le signale. On le dit là où l'œil est déjà.
+    if (!own && (d.start || d.end)) {
+      const warn = dbEl('span', 'gantt-label-warn', 'période incomplète');
+      warn.title = 'Renseignez les deux dates pour que ce bâtiment ait sa propre trajectoire.';
+      label.appendChild(warn);
     }
-    row.appendChild(info);
-    host.appendChild(row);
+    label.addEventListener('click', () => openGanttModal(z.id));
+    row.appendChild(label);
+
+    const track = dbEl('div', 'gantt-track');
+    // Séparateurs de mois + repère « aujourd'hui »
+    for (const mo of dom.months) {
+      if (mo.startDay <= dom.startDay) continue;
+      const line = dbEl('div', 'gantt-gridline' + (mo.m === 0 ? ' is-year' : ''));
+      line.style.left = pct(mo.startDay) + '%';
+      track.appendChild(line);
+    }
+    if (todayDay >= dom.startDay && todayDay <= dom.endDay) {
+      const now = dbEl('div', 'gantt-today');
+      now.style.left = pct(todayDay) + '%';
+      now.title = "Aujourd'hui";
+      track.appendChild(now);
+    }
+
+    const s = own ? d.start : state.projectStart;
+    const e = own ? d.end : state.projectEnd;
+    if (s && e && isoToDay(e) >= isoToDay(s)) {
+      const bar = dbEl('div', 'gantt-bar' + (own ? '' : ' is-ghost'));
+      bar.style.left = pct(isoToDay(s)) + '%';
+      bar.style.width = ((isoToDay(e) + 1 - isoToDay(s)) / dom.totalDays) * 100 + '%';
+      bar.style.setProperty('--gantt-bar-color', own ? ganttZoneColor(z.id) : 'var(--text-4)');
+      bar.dataset.zone = z.id;
+      bar.title = (own ? '' : 'Période du chantier — ')
+        + fmtFR(s) + ' → ' + fmtFR(e) + ' · ' + countWorkingDays(s, e) + ' jo';
+      if (own) {
+        const handle = dbEl('div', 'gantt-bar-handle');
+        handle.dataset.role = 'resize';
+        handle.title = 'Allonger ou raccourcir';
+        bar.appendChild(handle);
+        bar.addEventListener('pointerdown', (ev) => ganttPointerDown(ev, z.id, dom));
+      }
+      track.appendChild(bar);
+    } else {
+      const warn = dbEl('div', 'gantt-bar-missing', 'Double-cliquez pour définir la période');
+      track.appendChild(warn);
+    }
+    track.addEventListener('dblclick', () => { if (!_ganttDrag) openGanttModal(z.id); });
+    row.appendChild(track);
+    body.appendChild(row);
   }
+  chart.appendChild(body);
+}
+
+// -------------------------------------------------------- glissé-déposé ----
+function ganttPointerDown(ev, zoneId, dom) {
+  if (ev.button != null && ev.button !== 0) return;
+  const bar = ev.currentTarget;
+  const track = bar.parentElement;
+  const d = (state.zoneDates || {})[zoneId] || {};
+  if (!d.start || !d.end) return;
+  const width = track.getBoundingClientRect().width;
+  if (!(width > 0)) return;
+  ev.preventDefault();
+  _ganttDrag = {
+    zoneId, bar, dom,
+    mode: ev.target && ev.target.dataset.role === 'resize' ? 'resize' : 'move',
+    x0: ev.clientX,
+    s0: isoToDay(d.start),
+    e0: isoToDay(d.end),
+    pxPerDay: width / dom.totalDays,
+    moved: false,
+    start: d.start, end: d.end,
+  };
+  bar.classList.add('is-dragging');
+  try { bar.setPointerCapture(ev.pointerId); } catch (err) { /* pointeur déjà relâché */ }
+  bar.addEventListener('pointermove', ganttPointerMove);
+  bar.addEventListener('pointerup', ganttPointerUp);
+  bar.addEventListener('pointercancel', ganttPointerUp);
+}
+function ganttPointerMove(ev) {
+  const g = _ganttDrag;
+  if (!g) return;
+  const delta = Math.round((ev.clientX - g.x0) / g.pxPerDay);
+  if (delta !== 0) g.moved = true;
+  let s = g.s0, e = g.e0;
+  if (g.mode === 'move') { s = g.s0 + delta; e = g.e0 + delta; }
+  else { e = Math.max(g.s0, g.e0 + delta); }
+  g.start = dayToISO(s);
+  g.end = dayToISO(e);
+  g.bar.style.left = ((s - g.dom.startDay) / g.dom.totalDays) * 100 + '%';
+  g.bar.style.width = ((e + 1 - s) / g.dom.totalDays) * 100 + '%';
+  // Retour immédiat : jours ouvrés dans le libellé et infobulle de la barre
+  const row = g.bar.closest('.gantt-row');
+  const days = row && row.querySelector('.gantt-label-days');
+  if (days) days.textContent = '(' + countWorkingDays(g.start, g.end) + ' jo)';
+  g.bar.title = fmtFR(g.start) + ' → ' + fmtFR(g.end) + ' · ' + countWorkingDays(g.start, g.end) + ' jo';
+}
+function ganttPointerUp(ev) {
+  const g = _ganttDrag;
+  if (!g) return;
+  g.bar.removeEventListener('pointermove', ganttPointerMove);
+  g.bar.removeEventListener('pointerup', ganttPointerUp);
+  g.bar.removeEventListener('pointercancel', ganttPointerUp);
+  g.bar.classList.remove('is-dragging');
+  try { g.bar.releasePointerCapture(ev.pointerId); } catch (err) { /* déjà relâché */ }
+  _ganttDrag = null;
+  if (!g.moved) return;                        // simple clic : rien à écrire
+  setZonePlanning(g.zoneId, { start: g.start, end: g.end });
+  showToast(fmtFR(g.start) + ' → ' + fmtFR(g.end) + ' · ' + countWorkingDays(g.start, g.end) + ' jo');
+}
+
+// ---------------------------------------------------- modale de propriétés --
+let _ganttModalZone = null;
+function openGanttModal(zoneId) {
+  const zone = state.zones.find(z => z.id === zoneId);
+  const overlay = document.getElementById('ganttmodal');
+  if (!zone || !overlay) return;
+  _ganttModalZone = zoneId;
+  const d = (state.zoneDates || {})[zoneId] || {};
+  document.getElementById('ganttname').value = zone.name || '';
+  document.getElementById('ganttstart').value = d.start || state.projectStart || '';
+  document.getElementById('ganttend').value = d.end || state.projectEnd || '';
+  renderGanttSwatches(d.color || ganttZoneColor(zoneId));
+  updateGanttModalInfo();
+  overlay.hidden = false;
+}
+function closeGanttModal() {
+  const overlay = document.getElementById('ganttmodal');
+  if (overlay) overlay.hidden = true;
+  _ganttModalZone = null;
+}
+function renderGanttSwatches(selected) {
+  const host = document.getElementById('ganttswatches');
+  if (!host) return;
+  host.innerHTML = '';
+  host.dataset.color = selected;
+  for (const c of GANTT_PALETTE) {
+    const b = dbEl('button', 'gantt-swatch' + (c.toLowerCase() === String(selected).toLowerCase() ? ' is-on' : ''));
+    b.type = 'button';
+    b.style.background = c;
+    b.setAttribute('aria-label', 'Couleur ' + c);
+    b.addEventListener('click', () => renderGanttSwatches(c));
+    host.appendChild(b);
+  }
+  const custom = document.createElement('input');
+  custom.type = 'color';
+  custom.className = 'gantt-swatch-custom';
+  custom.value = /^#[0-9a-f]{6}$/i.test(selected) ? selected : GANTT_PALETTE[0];
+  custom.title = 'Couleur personnalisée';
+  custom.addEventListener('input', () => renderGanttSwatches(custom.value));
+  host.appendChild(custom);
+}
+function updateGanttModalInfo() {
+  const info = document.getElementById('ganttmodalinfo');
+  if (!info) return;
+  const s = document.getElementById('ganttstart').value;
+  const e = document.getElementById('ganttend').value;
+  info.classList.remove('is-warn');
+  if (!s || !e) {
+    info.textContent = 'Sans les deux dates, ce bâtiment suit la période du chantier.';
+    return;
+  }
+  if (isoToDay(e) < isoToDay(s)) {
+    info.classList.add('is-warn');
+    info.textContent = 'La date de fin doit être postérieure à la date de début.';
+    return;
+  }
+  const cal = isoToDay(e) - isoToDay(s) + 1;
+  info.textContent = cal + ' jour' + (cal > 1 ? 's' : '') + ' calendaires · '
+    + countWorkingDays(s, e) + ' jours ouvrés (hors week-ends et jours fériés).';
+}
+function saveGanttModal() {
+  const zoneId = _ganttModalZone;
+  if (!zoneId) return;
+  const name = document.getElementById('ganttname').value.trim();
+  const s = document.getElementById('ganttstart').value;
+  const e = document.getElementById('ganttend').value;
+  if (s && e && isoToDay(e) < isoToDay(s)) {
+    showToast('La date de fin doit être postérieure à la date de début', 'error');
+    return;
+  }
+  const zone = state.zones.find(z => z.id === zoneId);
+  if (zone && name && name !== zone.name) { renameZone(zoneId, name); renderZones(); }
+  setZonePlanning(zoneId, { start: s || '', end: e || '', color: document.getElementById('ganttswatches').dataset.color || '' });
+  closeGanttModal();
+  showToast('Planning mis à jour');
+}
+function resetGanttModal() {
+  if (!_ganttModalZone) return;
+  setZonePlanning(_ganttModalZone, { start: '', end: '', color: '' });
+  closeGanttModal();
+  showToast('Ce bâtiment suit la période du chantier');
 }
 
 // Taux horaire (€/h) — Données → Admin. Utilisé par les totaux de devis.
@@ -5744,7 +6078,10 @@ function switchSubPage(group, name) {
   if (group === 'proto' && name === 'recap') renderProtoRecap();
   if (group === 'stock' && name === 'cb') renderStockCB();
   if (group === 'travaux') renderTravaux();
-  if (group === 'donnees' && name === 'planning') renderPlanningZones();
+  // Le planning se mesure sur la largeur réelle de sa piste : il doit être
+  // (re)dessiné une fois son onglet visible.
+  if (group === 'donnees' && name === 'zones') renderZonePlanning();
+  if (group === 'zones') renderZonePlanning();
 }
 
 function renderCompanies() {
@@ -16596,6 +16933,26 @@ function init() {
   document.getElementById('zoneaddroot').addEventListener('click', () => addZone(null));
   const zoneBatchClear = document.getElementById('zonebatchclear');
   if (zoneBatchClear) zoneBatchClear.addEventListener('click', clearZoneSelection);
+
+  // Planning des bâtiments : modale de propriétés d'une barre
+  const ganttOverlay = document.getElementById('ganttmodal');
+  if (ganttOverlay) {
+    document.getElementById('ganttmodalclose').addEventListener('click', closeGanttModal);
+    ganttOverlay.addEventListener('click', (e) => { if (e.target === ganttOverlay) closeGanttModal(); });
+    document.getElementById('ganttsave').addEventListener('click', saveGanttModal);
+    document.getElementById('ganttreset').addEventListener('click', resetGanttModal);
+    document.getElementById('ganttstart').addEventListener('change', updateGanttModalInfo);
+    document.getElementById('ganttend').addEventListener('change', updateGanttModalInfo);
+    document.getElementById('ganttname').addEventListener('keydown', (e) => { if (e.key === 'Enter') saveGanttModal(); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !ganttOverlay.hidden) closeGanttModal();
+    });
+  }
+  // Le planning se dimensionne sur la largeur réelle de sa piste : il faut
+  // le redessiner quand la fenêtre change de taille (rotation, redimension).
+  window.addEventListener('resize', () => {
+    if (document.getElementById('sub-zoneplanning')?.classList.contains('active')) renderZonePlanning();
+  });
 
   // Plans : bouton « Relancer l'envoi » (Données → Admin). Réarme la
   // synchro Storage après correction côté Supabase (bucket/policies).
