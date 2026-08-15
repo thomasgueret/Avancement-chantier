@@ -1894,6 +1894,27 @@ option { background-color: var(--surface); color: var(--text); }
 .db-task-pct.is-idle { color: var(--text-4); }
 .db-tasks tr.is-excluded td { color: var(--text-4); }
 .db-tasks tr.is-done .db-task-name { color: var(--success-2); }
+/* Séparateur discret entre le bloc « quantités » et le bloc « heures » */
+.db-tasks th.is-hcol, .db-tasks td.is-hcol { border-left: 1px solid var(--border); }
+.db-task-rest { color: var(--text-3); }
+.db-tasks tfoot td {
+  border-top: 1px solid var(--border-strong);
+  border-bottom: none;
+  font-weight: 800; color: var(--text);
+  background: var(--surface-3);
+}
+.db-tasks tfoot .db-task-name { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-3); }
+.db-tasks tfoot td:first-child { border-bottom-left-radius: 8px; }
+.db-tasks tfoot td:last-child { border-bottom-right-radius: 8px; }
+/* Sur mobile, la colonne « Qté totale » est masquée : elle est identique
+   pour toutes les lignes d'un ouvrage et déjà rappelée dans son en-tête.
+   Les colonnes d'heures restent ainsi visibles sans défilement latéral. */
+@media (max-width: 699px) {
+  .db-tasks th:nth-child(2), .db-tasks td:nth-child(2) { display: none; }
+  .db-tasks th, .db-tasks td { padding: 7px 6px; font-size: 11.5px; }
+  .db-tasks th { font-size: 9px; }
+  .db-task-name { min-width: 92px; }
+}
 
 /* ----- Points d'attention ----- */
 .db-focus { display: grid; grid-template-columns: 1fr; gap: 16px; }

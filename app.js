@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.65';
+const APP_VERSION = '1.66';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -3196,11 +3196,11 @@ function buildProgressItem(zoneId, setup, task, quantity) {
     meta.appendChild(qty);
     const hours = quantity * (task.ratio || 0);
     if (!task.excluded && hours > 0) {
-      const allocated = Math.round(hours * 10) / 10;
-      const realized = Math.round(hours * percent / 100 * 10) / 10;
+      // Pas d'arrondi au dixième d'heure ici : 22 m² × 0,3 h/m² à 75 % font
+      // 4,95 h, et non 5 h. formatHours conserve la précision utile.
       const hrs = document.createElement('span');
       hrs.className = 'progress-task-meta-hours';
-      hrs.textContent = `${formatRatio(realized)} / ${formatRatio(allocated)} h`;
+      hrs.textContent = `${formatHours(hours * percent / 100)} / ${formatHours(hours)} h`;
       meta.appendChild(hrs);
     }
     li.querySelector('.progress-info').after(meta);
@@ -3385,11 +3385,28 @@ function computeAvancementModel(buildingId) {
     for (const t of tasks) {
       t.pct = t.den > 0 ? t.num / t.den : (t.count > 0 ? t.sum / t.count : 0);
       t.share = normWeight(t);
-      t.qtyMax = t.share * agg.qtyTotal;
-      t.qtyDone = (t.share * t.num) / 100;
-      qtyDone += t.qtyDone;
+      // Quantités par tâche, au sens du récapitulatif par tâche de référence :
+      // une tâche porte sur la TOTALITÉ de la quantité de l'ouvrage sur le
+      // périmètre (« quantité totale » = Σ des quantités des zones), et sa
+      // quantité réalisée est la somme zone par zone de quantité × avancement.
+      // Aucune pondération par le ratio n'intervient ici : le ratio ne sert
+      // qu'à convertir des quantités en heures. Deux tâches d'un même ouvrage
+      // affichent donc la même quantité totale — c'est voulu, elles décrivent
+      // le même mètre carré vu sous deux angles.
+      t.qtyTotal = t.den;
+      t.qtyDone = t.num / 100;
+      t.qtyRemaining = Math.max(0, t.qtyTotal - t.qtyDone);
+      t.hRemaining = Math.max(0, t.hBudget - t.hDone);
+      // L'ouvrage, lui, cumule des quantités « équivalentes » : la part de
+      // chaque tâche dans l'ouvrage (share) ramène ces quantités qui se
+      // recouvrent à un total comparable à la quantité posée.
+      qtyDone += t.share * t.qtyDone;
     }
-    agg.tasks = tasks.sort((a, b) => b.hBudget - a.hBudget || b.share - a.share);
+    // Ordre des tâches = celui de l'ouvrage dans Données → Tâches (la Map
+    // conserve l'ordre d'insertion), c'est-à-dire l'ordre d'exécution sur le
+    // chantier : traçage, ossature, plaquage… On ne trie pas par poids, le
+    // récapitulatif par tâche se lit comme un mode opératoire.
+    agg.tasks = tasks;
     agg.qtyDone = Math.min(qtyDone, agg.qtyTotal);
     agg.qtyRemaining = Math.max(0, agg.qtyTotal - agg.qtyDone);
     agg.pct = agg.hBudget > 0 ? (agg.hDone / agg.hBudget) * 100
@@ -3806,28 +3823,35 @@ async function exportAvancementToPDF(scope, label) {
     y += 2;
   }
 
-  // ----- 4. Détail par ouvrage et par tâche -----
-  banner('DÉTAIL PAR OUVRAGE');
+  // ----- 4. Récapitulatif par tâche -----
+  banner('RÉCAPITULATIF PAR TÂCHE');
   {
-    const cw = { task: CONTENT_W - 26 - 30 - 30 - 18, poids: 26, real: 30, reste: 30, pct: 18 };
+    // Mêmes colonnes qu'à l'écran : quantité totale / réalisée, puis heures
+    // budgétées / réalisées / restantes.
+    const numW = 21;
+    const cw = { task: CONTENT_W - numW * 5 - 15, qtyT: numW, qtyD: numW, hB: numW, hD: numW, hR: numW, pct: 15 };
     const cx = {};
     cx.task = MARGIN;
-    cx.poids = cx.task + cw.task;
-    cx.real = cx.poids + cw.poids;
-    cx.reste = cx.real + cw.real;
-    cx.pct = cx.reste + cw.reste;
+    cx.qtyT = cx.task + cw.task;
+    cx.qtyD = cx.qtyT + cw.qtyT;
+    cx.hB = cx.qtyD + cw.qtyD;
+    cx.hD = cx.hB + cw.hB;
+    cx.hR = cx.hD + cw.hD;
+    cx.pct = cx.hR + cw.hR;
+    const HEAD = [['Tâche', 'task'], ['Qté totale', 'qtyT'], ['Qté réalisée', 'qtyD'],
+                  ['H. budget', 'hB'], ['H. réalisées', 'hD'], ['H. restantes', 'hR'], ['%', 'pct']];
     const tableHead = () => {
       ensureSpace(6);
       pdf.setFillColor(...GREY_H);
       pdf.rect(MARGIN, y, CONTENT_W, 5, 'F');
       pdf.setDrawColor(190); pdf.setLineWidth(0.15);
       pdf.rect(MARGIN, y, CONTENT_W, 5, 'S');
-      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(60);
+      pdf.line(cx.hB, y, cx.hB, y + 5);
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(6.5); pdf.setTextColor(60);
       pdf.text('Tâche', cx.task + 2, y + 3.4);
-      pdf.text('Poids', cx.poids + cw.poids - 2, y + 3.4, { align: 'right' });
-      pdf.text('Réalisé', cx.real + cw.real - 2, y + 3.4, { align: 'right' });
-      pdf.text('Reste', cx.reste + cw.reste - 2, y + 3.4, { align: 'right' });
-      pdf.text('%', cx.pct + cw.pct - 2, y + 3.4, { align: 'right' });
+      for (const [label, key] of HEAD.slice(1)) {
+        pdf.text(label, cx[key] + cw[key] - 1.5, y + 3.4, { align: 'right' });
+      }
       pdf.setTextColor(0);
       y += 5;
     };
@@ -3842,8 +3866,11 @@ async function exportAvancementToPDF(scope, label) {
       pdf.setFontSize(10); pdf.setTextColor(...ORANGE);
       pdf.text(formatPct(Math.round(o.pct * 10) / 10) + ' %', MARGIN + CONTENT_W - 3, y + 5, { align: 'right' });
       pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.5); pdf.setTextColor(110);
-      pdf.text(formatQty(o.qtyDone) + ' / ' + formatQty(o.qtyTotal) + ' ' + o.unit
-        + ' — reste ' + formatQty(o.qtyRemaining) + ' ' + o.unit
+      pdf.text(formatQty(o.qtyTotal) + ' ' + o.unit
+        + (model.weighting === 'heures'
+          ? ' — ' + formatHours(o.hDone) + ' / ' + formatHours(o.hBudget) + ' h'
+            + ' — reste ' + formatHours(Math.max(0, o.hBudget - o.hDone)) + ' h'
+          : ' — ' + formatQty(o.qtyDone) + ' ' + o.unit + ' réalisés')
         + ' — poids ' + formatPct(Math.round(o.weight * 10) / 10) + ' % du projet', MARGIN + 3, y + 9);
       pdf.setTextColor(0);
       // Jauge sous la ligne de quantités, à l'intérieur de l'encadré.
@@ -3854,23 +3881,48 @@ async function exportAvancementToPDF(scope, label) {
       // Tableau des tâches
       tableHead();
       let alt = false;
+      const na = '-';
+      const noHours = model.weighting !== 'heures';
+      const cell = (txt, key) => pdf.text(txt, cx[key] + cw[key] - 1.5, y + 3.4, { align: 'right' });
       for (const t of o.tasks) {
         ensureSpace(5.5);
         if (alt) { pdf.setFillColor(...ALT); pdf.rect(MARGIN, y, CONTENT_W, 5, 'F'); }
         alt = !alt;
         pdf.setDrawColor(220); pdf.setLineWidth(0.12);
         pdf.line(MARGIN, y + 5, MARGIN + CONTENT_W, y + 5);
-        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8);
+        pdf.setDrawColor(215);
+        pdf.line(cx.hB, y, cx.hB, y + 5);
+        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.5);
         pdf.setTextColor(t.excluded ? 140 : 30);
         pdf.text(pdf.splitTextToSize(t.name + (t.excluded ? '  (hors ratio)' : ''), cw.task - 4)[0], cx.task + 2, y + 3.4);
-        const na = '-';
         pdf.setTextColor(90);
-        pdf.text(t.excluded ? na : formatPct(Math.round(t.share * 1000) / 10) + ' %', cx.poids + cw.poids - 2, y + 3.4, { align: 'right' });
-        pdf.text(t.excluded ? na : formatQty(t.qtyDone) + ' ' + o.unit, cx.real + cw.real - 2, y + 3.4, { align: 'right' });
-        pdf.text(t.excluded ? na : formatQty(Math.max(0, t.qtyMax - t.qtyDone)) + ' ' + o.unit, cx.reste + cw.reste - 2, y + 3.4, { align: 'right' });
+        cell(formatQty(t.qtyTotal) + ' ' + o.unit, 'qtyT');
+        cell(formatQty(t.qtyDone) + ' ' + o.unit, 'qtyD');
+        const h = (v) => (t.excluded || noHours) ? na : formatHours(v);
+        cell(h(t.hBudget), 'hB');
+        cell(h(t.hDone), 'hD');
+        cell(h(t.hRemaining), 'hR');
         pdf.setFont('helvetica', 'bold');
         pdf.setTextColor(...(t.pct >= 99.95 ? GREEN : (t.pct > 0 ? [60,60,60] : [150,150,150])));
-        pdf.text(formatPct(Math.round(t.pct * 10) / 10) + ' %', cx.pct + cw.pct - 2, y + 3.4, { align: 'right' });
+        cell(formatPct(Math.round(t.pct * 10) / 10) + ' %', 'pct');
+        pdf.setTextColor(0);
+        y += 5;
+      }
+      // Ligne de total : seules les heures s'additionnent d'une tâche à l'autre.
+      if (!noHours) {
+        ensureSpace(5.5);
+        pdf.setFillColor(238, 236, 233); pdf.rect(MARGIN, y, CONTENT_W, 5, 'F');
+        pdf.setDrawColor(190); pdf.setLineWidth(0.15);
+        pdf.line(MARGIN, y, MARGIN + CONTENT_W, y);
+        pdf.line(cx.hB, y, cx.hB, y + 5);
+        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(70);
+        pdf.text('Total ouvrage', cx.task + 2, y + 3.4);
+        cell(formatQty(o.qtyTotal) + ' ' + o.unit, 'qtyT');
+        cell(formatQty(o.qtyDone) + ' ' + o.unit + ' éq.', 'qtyD');
+        cell(formatHours(o.hBudget), 'hB');
+        cell(formatHours(o.hDone), 'hD');
+        cell(formatHours(Math.max(0, o.hBudget - o.hDone)), 'hR');
+        cell(formatPct(Math.round(o.pct * 10) / 10) + ' %', 'pct');
         pdf.setTextColor(0);
         y += 5;
       }
@@ -4287,7 +4339,8 @@ function buildDbMatrix(model, scope) {
 
 // ----- 5. Détail par ouvrage et par tâche -----
 function buildDbOuvrages(model) {
-  const card = dbCard('Détail par ouvrage', 'trié par poids dans le projet — dépliez pour voir les tâches');
+  const card = dbCard('Récapitulatif par tâche',
+    'chaque tâche porte sur la totalité du métré de son ouvrage : seules les heures s\'additionnent');
   const list = dbEl('div', 'db-ouvrages');
   for (const o of model.ouvrages) {
     const box = dbEl('details', 'db-ouvrage');
@@ -4295,8 +4348,12 @@ function buildDbOuvrages(model) {
     const idBox = dbEl('div', 'db-ouvrage-id');
     idBox.appendChild(dbEl('span', 'db-ouvrage-name', o.name));
     idBox.appendChild(dbEl('span', 'db-ouvrage-meta',
-      formatQty(o.qtyDone) + ' / ' + formatQty(o.qtyTotal) + ' ' + o.unit + ' réalisés'
-      + ' · reste ' + formatQty(o.qtyRemaining) + ' ' + o.unit));
+      formatQty(o.qtyTotal) + ' ' + o.unit
+      + (model.weighting === 'heures'
+        ? ' · ' + formatHours(o.hDone) + ' / ' + formatHours(o.hBudget) + ' h'
+          + ' · reste ' + formatHours(Math.max(0, o.hBudget - o.hDone)) + ' h'
+        : ' · ' + formatQty(o.qtyDone) + ' ' + o.unit + ' réalisés'
+          + ' · reste ' + formatQty(o.qtyRemaining) + ' ' + o.unit)));
     sum.appendChild(idBox);
     const stats = dbEl('div', 'db-ouvrage-stats');
     const w = dbEl('span', 'db-ouvrage-weight', formatPct(Math.round(o.weight * 10) / 10) + ' % du projet');
@@ -4307,30 +4364,63 @@ function buildDbOuvrages(model) {
     box.appendChild(sum);
     box.appendChild(dbBar(o.pct));
 
+    // Récapitulatif par tâche : quantité totale / réalisée, puis heures
+    // budgétées / réalisées / restantes. Les quantités d'un même ouvrage se
+    // recouvrent (chaque tâche traite les mêmes m²) : seules les colonnes
+    // d'heures sont additionnables, et ce sont elles qu'on totalise.
     const tbl = dbEl('table', 'db-tasks');
     const thead = dbEl('thead');
     const trh = dbEl('tr');
-    for (const [label, cls] of [['Tâche', ''], ['Poids', 'num'], ['Réalisé', 'num'], ['Reste', 'num'], ['Heures', 'num'], ['%', 'num']]) {
-      trh.appendChild(dbEl('th', cls, label));
-    }
+    const COLS = [
+      ['Tâche', ''],
+      ['Qté totale', 'num'],
+      ['Qté réalisée', 'num'],
+      ['H. budget', 'num is-hcol'],
+      ['H. réalisées', 'num'],
+      ['H. restantes', 'num'],
+      ['%', 'num'],
+    ];
+    for (const [label, cls] of COLS) trh.appendChild(dbEl('th', cls, label));
     thead.appendChild(trh);
     tbl.appendChild(thead);
     const tbody = dbEl('tbody');
+    const noHours = model.weighting !== 'heures';
     for (const t of o.tasks) {
       const tr = dbEl('tr', t.excluded ? 'is-excluded' : (t.pct >= 99.95 ? 'is-done' : ''));
       const name = dbEl('td', 'db-task-name');
       name.appendChild(dbEl('span', null, t.name));
       if (t.excluded) name.appendChild(dbEl('span', 'db-task-tag', 'hors ratio'));
       tr.appendChild(name);
-      tr.appendChild(dbEl('td', 'num', t.excluded ? '—' : formatPct(Math.round(t.share * 1000) / 10) + ' %'));
-      tr.appendChild(dbEl('td', 'num', t.excluded ? '—' : formatQty(t.qtyDone) + ' ' + o.unit));
-      tr.appendChild(dbEl('td', 'num', t.excluded ? '—' : formatQty(Math.max(0, t.qtyMax - t.qtyDone)) + ' ' + o.unit));
-      tr.appendChild(dbEl('td', 'num', t.excluded ? '—' : formatHours(t.hDone) + ' / ' + formatHours(t.hBudget)));
-      const pc = dbEl('td', 'num db-task-pct ' + dbPctClass(t.pct), formatPct(Math.round(t.pct * 10) / 10) + ' %');
-      tr.appendChild(pc);
+      tr.appendChild(dbEl('td', 'num', formatQty(t.qtyTotal) + ' ' + o.unit));
+      tr.appendChild(dbEl('td', 'num', formatQty(t.qtyDone) + ' ' + o.unit));
+      const h = (v) => (t.excluded || noHours) ? '—' : formatHours(v) + ' h';
+      tr.appendChild(dbEl('td', 'num is-hcol', h(t.hBudget)));
+      tr.appendChild(dbEl('td', 'num', h(t.hDone)));
+      tr.appendChild(dbEl('td', 'num db-task-rest', h(t.hRemaining)));
+      tr.appendChild(dbEl('td', 'num db-task-pct ' + dbPctClass(t.pct), formatPct(Math.round(t.pct * 10) / 10) + ' %'));
       tbody.appendChild(tr);
     }
     tbl.appendChild(tbody);
+    if (!noHours) {
+      const tfoot = dbEl('tfoot');
+      const trf = dbEl('tr');
+      trf.appendChild(dbEl('td', 'db-task-name', 'Total ouvrage'));
+      trf.appendChild(dbEl('td', 'num', formatQty(o.qtyTotal) + ' ' + o.unit));
+      // « éq. » : les quantités des tâches se recouvrent, leur somme n'a pas
+      // de sens. On affiche la quantité ÉQUIVALENTE réalisée de l'ouvrage,
+      // c'est-à-dire la quantité totale ramenée à son avancement en heures.
+      const eq = dbEl('td', 'num', formatQty(o.qtyDone) + ' ' + o.unit + ' éq.');
+      eq.title = 'Quantité équivalente réalisée : ' + formatQty(o.qtyTotal) + ' ' + o.unit
+        + ' × ' + formatPct(Math.round(o.pct * 10) / 10) + ' % d\'avancement. '
+        + 'Les quantités des tâches portent toutes sur le même métré : elles ne s\'additionnent pas.';
+      trf.appendChild(eq);
+      trf.appendChild(dbEl('td', 'num is-hcol', formatHours(o.hBudget) + ' h'));
+      trf.appendChild(dbEl('td', 'num', formatHours(o.hDone) + ' h'));
+      trf.appendChild(dbEl('td', 'num db-task-rest', formatHours(Math.max(0, o.hBudget - o.hDone)) + ' h'));
+      trf.appendChild(dbEl('td', 'num db-task-pct ' + dbPctClass(o.pct), formatPct(Math.round(o.pct * 10) / 10) + ' %'));
+      tfoot.appendChild(trf);
+      tbl.appendChild(tfoot);
+    }
     const tw = dbEl('div', 'db-tasks-wrap');
     tw.appendChild(tbl);
     box.appendChild(tw);
