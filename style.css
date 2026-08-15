@@ -1468,6 +1468,17 @@ option { background-color: var(--surface); color: var(--text); }
 .progress-task-meta-hours { font-size: 11px; color: var(--text-4); }
 .progress-item.is-done .progress-task-meta,
 .progress-item.is-done .progress-task-meta-hours { color: var(--success-2); }
+/* Sur mobile, le récap « réalisé / total » prend deux fois plus de largeur
+   qu'un simple métré : on laisse le nom de la tâche passer à la ligne
+   plutôt que de le tronquer, et on resserre le récap. */
+@media (max-width: 560px) {
+  .progress-task-name { white-space: normal; overflow: visible; }
+  /* Le badge « hors ratio » ne se comprime pas : sans retour à la ligne il
+     chevaucherait le récap. */
+  .progress-info { flex-wrap: wrap; gap: 4px 6px; }
+  .progress-task-meta { font-size: 10.5px; }
+  .progress-task-meta-hours { font-size: 10px; }
+}
 .progress-tag {
   flex-shrink: 0;
   font-size: 10px; font-weight: 700;

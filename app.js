@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.66';
+const APP_VERSION = '1.67';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -3178,9 +3178,13 @@ function buildProgressItem(zoneId, setup, task, quantity) {
     tag.textContent = 'hors ratio';
     li.querySelector('.progress-info').appendChild(tag);
   }
-  // Récap quantité + heures « réalisées / allouées », entre le nom et le
-  // sélecteur de %. Les heures allouées = quantité × ratio ; les heures
-  // réalisées = allouées × avancement (ex. 4 h à 80 % → 3,2 / 4 h).
+  // Récap quantité + heures, entre le nom et le sélecteur de %. Les deux
+  // lignes suivent le même format « réalisé / total » :
+  //   quantité totale de la tâche = quantité de l'ouvrage dans la zone,
+  //   quantité réalisée = quantité totale × avancement (ex. 22 m² à 75 %
+  //   → 16,5 / 22 m²) ;
+  //   heures allouées = quantité × ratio, heures réalisées = allouées ×
+  //   avancement (ex. 6,6 h à 75 % → 4,95 / 6,6 h).
   // Rien n'est affiché si la quantité n'est pas renseignée dans
   // Données → Zones. Ces heures sont la pondération de la tâche dans le
   // % global de l'ouvrage (cf. getOuvrageRawProgress) — l'affichage des
@@ -3188,11 +3192,12 @@ function buildProgressItem(zoneId, setup, task, quantity) {
   if (quantity > 0) {
     const meta = document.createElement('span');
     meta.className = 'progress-task-meta';
-    // Deux lignes empilées (gain de largeur) : quantité au-dessus, ratio
-    // d'heures réalisées / allouées en dessous.
+    // Deux lignes empilées (gain de largeur) : quantités au-dessus,
+    // heures en dessous.
+    const unit = setup.unit || 'm²';
     const qty = document.createElement('span');
     qty.className = 'progress-task-meta-qty';
-    qty.textContent = `${formatRatio(quantity)} ${setup.unit || 'm²'}`;
+    qty.textContent = `${formatQty(quantity * percent / 100)} / ${formatQty(quantity)} ${unit}`;
     meta.appendChild(qty);
     const hours = quantity * (task.ratio || 0);
     if (!task.excluded && hours > 0) {
