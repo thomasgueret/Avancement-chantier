@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.69';
+const APP_VERSION = '1.70';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -762,9 +762,20 @@ function renderChart() {
   const maxVal = Math.max(0, ...valuesForScale);
   const yMax = niceMax(maxVal);
 
-  // Dimensions du viewBox
-  const VB_W = 500, VB_H = 300;
-  const ML = 36, MR = 12, MT = 12, MB = 32;
+  // Dimensions du viewBox — calées sur la largeur réelle du conteneur, à
+  // raison d'une unité par pixel. Avec un viewBox fixe (500×300) et une
+  // largeur de 100 %, le graphique était mis à l'échelle de la page : sur un
+  // 24 pouces il occupait plus de 1 000 px de haut et les libellés d'axes
+  // étaient grossis d'autant. Ici la hauteur reste bornée et le texte garde
+  // sa taille, quelle que soit la largeur d'écran.
+  const wrap = svg.parentElement;
+  const measured = wrap ? Math.round(wrap.getBoundingClientRect().width) : 0;
+  const VB_W = measured > 0 ? Math.max(320, measured) : 720;   // 0 = onglet masqué
+  const VB_H = Math.max(240, Math.min(380, Math.round(VB_W * 0.3)));
+  svg.setAttribute('viewBox', `0 0 ${VB_W} ${VB_H}`);
+  // MR laisse la place à la moitié du dernier libellé de date, centré sur le
+  // bord droit du tracé : sans marge, « 14/08 » était rogné par le viewBox.
+  const ML = 36, MR = 24, MT = 12, MB = 32;
   const plotL = ML, plotR = VB_W - MR;
   const plotT = MT, plotB = VB_H - MB;
   const plotW = plotR - plotL;
@@ -786,7 +797,9 @@ function renderChart() {
 
   // Axe X (ligne du bas) et labels
   parts.push(`<line class="axis-line" x1="${plotL}" y1="${plotB}" x2="${plotR}" y2="${plotB}" />`);
-  const maxLabels = 6;
+  // Un libellé de date tous les ~86 px : 6 sur un téléphone, une vingtaine
+  // sur un grand écran — la largeur gagnée sert à lire plus de dates.
+  const maxLabels = Math.max(3, Math.min(dates.length, Math.floor(plotW / 86)));
   const labelIndices = new Set();
   if (dates.length <= maxLabels) {
     for (let i = 0; i < dates.length; i++) labelIndices.add(i);
@@ -17120,6 +17133,7 @@ function init() {
     _resizeTimer = setTimeout(() => {
       if (document.getElementById('sub-zoneplanning')?.classList.contains('active')) renderZonePlanning();
       if (document.getElementById('sub-recap')?.classList.contains('active')) renderRecap();
+      if (document.getElementById('sub-graphique')?.classList.contains('active')) renderChart();
     }, 150);
   });
 

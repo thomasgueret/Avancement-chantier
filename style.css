@@ -6822,7 +6822,7 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
    toute la largeur. */
 @media (min-width: 1200px) {
   .company-list, .task-list, .eotp-list, .lots-list, .doc-labels-list,
-  .backup-list, .caces-list {
+  .backup-list, .caces-list, .legend-list {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
     gap: 8px 14px;
