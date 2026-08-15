@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.68';
+const APP_VERSION = '1.69';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -58,7 +58,8 @@ const state = {
   // Planning par zone racine (Données → Planning) : permet de tracer la
   // courbe d'avancement d'un bâtiment sur SA propre période, au lieu de
   // rejouer partout celle du chantier.
-  zoneDates: {},          // { [zoneId]: { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' } }
+  zoneDates: {},          // { [zoneId]: { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD', color } }
+  ganttZoom: 'mois',      // échelle du planning : 'mois' | 'semaines' | 'jours' (UI)
   // Tableau de bord Avancement : un point d'historique par jour, pour la
   // courbe d'avancement et le calcul du rythme.
   // { 'YYYY-MM-DD': { pct, hDone, hBudget } }
@@ -197,6 +198,7 @@ function load() {
     if (data.zoneUpdated) state.zoneUpdated = data.zoneUpdated;
     if (data.zonePickerCollapsed && typeof data.zonePickerCollapsed === 'object') state.zonePickerCollapsed = data.zonePickerCollapsed;
     if (data.zoneDates && typeof data.zoneDates === 'object') state.zoneDates = data.zoneDates;
+    if (GANTT_ZOOMS.some(z => z.key === data.ganttZoom)) state.ganttZoom = data.ganttZoom;
     if (data.avancementHistory && typeof data.avancementHistory === 'object') state.avancementHistory = data.avancementHistory;
     if (data.avancementZoneId) state.avancementZoneId = data.avancementZoneId;
     if (data.recapBuildingId) state.recapBuildingId = data.recapBuildingId;
@@ -320,6 +322,7 @@ function buildPersistedData() {
     zoneUpdated: state.zoneUpdated,
     zonePickerCollapsed: state.zonePickerCollapsed,
     zoneDates: state.zoneDates,
+    ganttZoom: state.ganttZoom,
     avancementHistory: state.avancementHistory,
     avancementZoneId: state.avancementZoneId,
     recapBuildingId: state.recapBuildingId,
@@ -4175,9 +4178,11 @@ function buildDbCurve(model, planning, scope) {
   const hist = {};
   for (const p of serie) hist[p.date] = { pct: p.pct };
   // Le viewBox suit la largeur d'écran : sans cela, l'étirement d'un
-  // canevas 760×220 sur un téléphone déforme les libellés d'axes.
-  const narrow = (window.innerWidth || 1024) < 700;
-  const W = narrow ? 400 : 760, H = narrow ? 240 : 220;
+  // canevas 760×220 sur un téléphone déforme les libellés d'axes — et sur un
+  // 24 pouces, la même courbe s'étirerait sur près de 500 px de haut.
+  const vw = window.innerWidth || 1024;
+  const narrow = vw < 700;
+  const W = narrow ? 400 : (vw >= 1400 ? 1200 : 760), H = narrow ? 240 : 220;
   const PAD_L = 38, PAD_R = 14, PAD_T = 12, PAD_B = 26;
 
   if (!keys.length) {
@@ -5452,7 +5457,15 @@ function renderProjectDates() {
 
 const GANTT_PALETTE = ['#f2691e', '#1d7fb8', '#3aa76d', '#e0b400', '#9b5de5', '#e5484d', '#0f766e', '#7d7368'];
 const GANTT_MONTHS_FR = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
-const GANTT_MONTH_MIN_W = 62;   // px : en deçà, le planning défile horizontalement
+// Échelles de temps, du plus large au plus fin (à la manière de MS Project).
+// `dayW` est la largeur minimale d'une journée : c'est elle qui fixe la
+// largeur totale de la piste, donc la précision du glissé-déposé.
+const GANTT_ZOOMS = [
+  { key: 'mois',     label: 'Mois',     dayW: 62 / 30.4 },   // ≈ 62 px par mois
+  { key: 'semaines', label: 'Semaines', dayW: 30 / 7 },      // ≈ 30 px par semaine
+  { key: 'jours',    label: 'Jours',    dayW: 26 },          // 26 px par jour
+];
+const GANTT_MAX_DAY_CELLS = 1500;   // au-delà, l'échelle « Jours » est inutilisable
 
 // Les dates sont manipulées en « numéro de jour » (jours depuis 1970-01-01,
 // en UTC) : insensible au fuseau et à l'heure d'été, et l'arithmétique de
@@ -5511,6 +5524,19 @@ function countWorkingDays(startISO, endISO) {
   }
   return n;
 }
+// Numéro de semaine ISO 8601 (celui des plannings de chantier : « S28 »).
+function isoWeekNumber(day) {
+  // On se place sur le jeudi de la semaine : son année porte le numéro.
+  const dow = dayOfWeek(day) === 0 ? 7 : dayOfWeek(day);   // 1 = lundi … 7 = dimanche
+  const thursday = day + (4 - dow);
+  const year = new Date(thursday * 86400000).getUTCFullYear();
+  const jan4 = Math.round(Date.UTC(year, 0, 4) / 86400000);
+  const jan4dow = dayOfWeek(jan4) === 0 ? 7 : dayOfWeek(jan4);
+  const week1Monday = jan4 - (jan4dow - 1);
+  return Math.floor((thursday - week1Monday) / 7) + 1;
+}
+const mondayOf = (day) => day - ((dayOfWeek(day) === 0 ? 7 : dayOfWeek(day)) - 1);
+
 // Couleur par défaut d'un bâtiment : stable, dérivée de son rang.
 function ganttZoneColor(zoneId) {
   const stored = ((state.zoneDates || {})[zoneId] || {}).color;
@@ -5557,13 +5583,46 @@ function ganttDomain() {
 }
 
 // ---------------------------------------------------------------- rendu ----
-let _ganttDrag = null;   // état du glissé en cours (null au repos)
+let _ganttDrag = null;      // état du glissé en cours (null au repos)
+let _ganttRendered = null;  // { zoom, scrollLeft } du dernier rendu
+
+// Jour affiché au centre de la fenêtre visible (à droite de la colonne des
+// bâtiments, qui recouvre la piste). Sert à conserver le même point de vue
+// quand on change d'échelle : sans cela, passer au jour renvoie l'utilisateur
+// des mois en arrière.
+function ganttCenterDay(dom) {
+  const sc = document.getElementById('ganttscroll');
+  const track = document.querySelector('.gantt-track');
+  const label = document.querySelector('.gantt-label');
+  if (!sc || !track || !label) return null;
+  const t = track.getBoundingClientRect(), s = sc.getBoundingClientRect();
+  if (!(t.width > 0)) return null;
+  const labelW = label.getBoundingClientRect().width;
+  const centerX = s.left + labelW + Math.max(0, s.width - labelW) / 2;
+  return dom.startDay + ((centerX - t.left) / t.width) * dom.totalDays;
+}
+function ganttScrollToDay(day) {
+  const sc = document.getElementById('ganttscroll');
+  const track = document.querySelector('.gantt-track');
+  const label = document.querySelector('.gantt-label');
+  if (!sc || !track || !label || day == null) return;
+  const dom = ganttDomain();
+  const labelW = label.getBoundingClientRect().width;
+  const trackW = track.getBoundingClientRect().width;
+  const contentX = labelW + ((day - dom.startDay) / dom.totalDays) * trackW;
+  sc.scrollLeft = Math.max(0, contentX - labelW - Math.max(0, sc.clientWidth - labelW) / 2);
+}
 
 function renderZonePlanning() {
   const chart = document.getElementById('ganttchart');
   const empty = document.getElementById('ganttempty');
   const toolbar = document.getElementById('gantttoolbar');
+  const scroll = document.getElementById('ganttscroll');
   if (!chart || !empty) return;
+  // Un rendu ne doit pas ramener la vue au 1er janvier : on retient la
+  // position de défilement pour la restaurer à échelle constante.
+  const keepScroll = scroll && _ganttRendered && _ganttRendered.zoom === state.ganttZoom
+    ? scroll.scrollLeft : null;
   chart.innerHTML = '';
   if (toolbar) toolbar.innerHTML = '';
 
@@ -5573,10 +5632,17 @@ function renderZonePlanning() {
   if (!roots.length) return;
 
   const dom = ganttDomain();
-  chart.style.setProperty('--gantt-tl-w', (dom.months.length * GANTT_MONTH_MIN_W) + 'px');
+  // L'échelle « Jours » n'a de sens que sur une fenêtre raisonnable : au-delà,
+  // on retombe sur « Semaines » plutôt que d'aligner des milliers de cellules.
+  const dayZoomOK = dom.totalDays <= GANTT_MAX_DAY_CELLS;
+  let zoomKey = GANTT_ZOOMS.some(z => z.key === state.ganttZoom) ? state.ganttZoom : 'mois';
+  if (zoomKey === 'jours' && !dayZoomOK) zoomKey = 'semaines';
+  const zoom = GANTT_ZOOMS.find(z => z.key === zoomKey);
+  chart.style.setProperty('--gantt-tl-w', Math.round(dom.totalDays * zoom.dayW) + 'px');
+  chart.dataset.zoom = zoomKey;
   const pct = (day) => ((day - dom.startDay) / dom.totalDays) * 100;
 
-  // ----- Barre d'outils : rappel de la période du chantier -----
+  // ----- Barre d'outils : période du chantier + échelle de temps -----
   if (toolbar) {
     const chip = dbEl('span', 'gantt-chip');
     if (state.projectStart && state.projectEnd) {
@@ -5587,38 +5653,127 @@ function renderZonePlanning() {
       chip.textContent = 'Dates du chantier non renseignées (Données → Admin.)';
     }
     toolbar.appendChild(chip);
-    const hint = dbEl('span', 'gantt-hint', 'Glisser pour déplacer · poignée droite pour la durée · double-clic pour les propriétés');
-    toolbar.appendChild(hint);
+    const zoomBox = dbEl('div', 'gantt-zoom');
+    zoomBox.appendChild(dbEl('span', 'gantt-zoom-label', 'Échelle'));
+    for (const z of GANTT_ZOOMS) {
+      const b = dbEl('button', 'gantt-zoom-btn' + (z.key === zoomKey ? ' is-on' : ''), z.label);
+      b.type = 'button';
+      if (z.key === 'jours' && !dayZoomOK) {
+        b.disabled = true;
+        b.title = 'Fenêtre trop longue (' + dom.totalDays + ' jours) pour une échelle au jour';
+      } else {
+        b.title = 'Afficher le planning à l\'échelle : ' + z.label.toLowerCase();
+        b.addEventListener('click', () => {
+          const center = ganttCenterDay(dom);
+          state.ganttZoom = z.key;
+          save();
+          renderZonePlanning();
+          ganttScrollToDay(center);
+        });
+      }
+      zoomBox.appendChild(b);
+    }
+    toolbar.appendChild(zoomBox);
+    toolbar.appendChild(dbEl('span', 'gantt-hint', 'Glisser pour déplacer · poignée droite pour la durée · double-clic pour les propriétés'));
   }
 
-  // ----- En-tête : années puis mois, chaque cellule au prorata de ses jours --
+  // ----- En-tête : deux niveaux, du plus large au plus fin. Chaque cellule
+  // occupe un nombre de jours, sa largeur suit donc exactement la piste. -----
   const head = dbEl('div', 'gantt-head');
   head.appendChild(dbEl('div', 'gantt-corner', 'Bâtiment'));
   const scale = dbEl('div', 'gantt-scale');
-  const years = dbEl('div', 'gantt-scale-row gantt-years');
-  let i = 0;
-  while (i < dom.months.length) {
-    let j = i;
-    let days = 0;
-    while (j < dom.months.length && dom.months[j].y === dom.months[i].y) { days += dom.months[j].days; j++; }
-    const cell = dbEl('div', 'gantt-year', String(dom.months[i].y));
-    cell.style.flexGrow = String(days);
-    years.appendChild(cell);
-    i = j;
+  const mkRow = (cls, cells) => {
+    const row = dbEl('div', 'gantt-scale-row ' + cls);
+    for (const c of cells) {
+      const cell = dbEl('div', c.cls, c.text);
+      cell.style.flexGrow = String(c.days);
+      if (c.title) cell.title = c.title;
+      row.appendChild(cell);
+    }
+    return row;
+  };
+  // Niveau fin : mois, semaines ISO ou jours selon l'échelle.
+  const fine = [];
+  if (zoomKey === 'mois') {
+    for (const mo of dom.months) fine.push({ cls: 'gantt-month', text: GANTT_MONTHS_FR[mo.m], days: mo.days });
+  } else if (zoomKey === 'semaines') {
+    for (let d = mondayOf(dom.startDay); d <= dom.endDay; d += 7) {
+      const from = Math.max(d, dom.startDay), to = Math.min(d + 6, dom.endDay);
+      fine.push({
+        cls: 'gantt-week', text: 'S' + isoWeekNumber(d), days: to - from + 1,
+        title: 'Semaine ' + isoWeekNumber(d) + ' — ' + fmtFR(dayToISO(from)) + ' → ' + fmtFR(dayToISO(to)),
+      });
+    }
+  } else {
+    for (let d = dom.startDay; d <= dom.endDay; d++) {
+      const dow = dayOfWeek(d);
+      fine.push({
+        cls: 'gantt-day' + (dow === 0 || dow === 6 ? ' is-weekend' : ''),
+        text: String(new Date(d * 86400000).getUTCDate()), days: 1,
+        title: fmtFR(dayToISO(d)),
+      });
+    }
   }
-  const monthsRow = dbEl('div', 'gantt-scale-row gantt-months');
-  for (const mo of dom.months) {
-    const cell = dbEl('div', 'gantt-month', GANTT_MONTHS_FR[mo.m]);
-    cell.style.flexGrow = String(mo.days);
-    monthsRow.appendChild(cell);
+  // Niveau large : années au-dessus des mois, mois au-dessus du reste.
+  const coarse = [];
+  if (zoomKey === 'mois') {
+    let i = 0;
+    while (i < dom.months.length) {
+      let j = i, days = 0;
+      while (j < dom.months.length && dom.months[j].y === dom.months[i].y) { days += dom.months[j].days; j++; }
+      coarse.push({ cls: 'gantt-year', text: String(dom.months[i].y), days });
+      i = j;
+    }
+  } else {
+    for (const mo of dom.months) {
+      const from = Math.max(mo.startDay, dom.startDay);
+      const to = Math.min(mo.startDay + mo.days - 1, dom.endDay);
+      if (to < from) continue;
+      coarse.push({ cls: 'gantt-year', text: GANTT_MONTHS_FR[mo.m] + ' ' + String(mo.y).slice(2), days: to - from + 1 });
+    }
   }
-  scale.append(years, monthsRow);
+  scale.append(mkRow('gantt-years', coarse), mkRow('gantt-months', fine));
   head.appendChild(scale);
   chart.appendChild(head);
 
   // ----- Une ligne par bâtiment -----
   const todayDay = isoToDay(todayISO());
   const body = dbEl('div', 'gantt-body');
+  // Quadrillage et week-ends : une seule couche derrière toutes les lignes,
+  // et non un jeu de traits par bâtiment — à l'échelle du jour, la version
+  // par ligne multiplierait les éléments par le nombre de bâtiments.
+  const grid = dbEl('div', 'gantt-grid');
+  if (zoomKey === 'jours') {
+    for (let d = dom.startDay; d <= dom.endDay; d++) {
+      if (dayOfWeek(d) !== 6) continue;              // samedi : on couvre le week-end
+      const end = Math.min(d + 1, dom.endDay);
+      const we = dbEl('div', 'gantt-weekend');
+      we.style.left = pct(d) + '%';
+      we.style.width = ((end + 1 - d) / dom.totalDays) * 100 + '%';
+      grid.appendChild(we);
+    }
+  }
+  if (zoomKey !== 'mois') {
+    for (let d = mondayOf(dom.startDay); d <= dom.endDay; d += 7) {
+      if (d <= dom.startDay) continue;
+      const line = dbEl('div', 'gantt-gridline');
+      line.style.left = pct(d) + '%';
+      grid.appendChild(line);
+    }
+  }
+  for (const mo of dom.months) {
+    if (mo.startDay <= dom.startDay) continue;
+    const line = dbEl('div', 'gantt-gridline is-month' + (mo.m === 0 ? ' is-year' : ''));
+    line.style.left = pct(mo.startDay) + '%';
+    grid.appendChild(line);
+  }
+  if (todayDay >= dom.startDay && todayDay <= dom.endDay) {
+    const now = dbEl('div', 'gantt-today');
+    now.style.left = pct(todayDay) + '%';
+    now.title = "Aujourd'hui";
+    grid.appendChild(now);
+  }
+
   for (const z of roots) {
     const d = (state.zoneDates || {})[z.id] || {};
     const own = !!(d.start && d.end && isoToDay(d.end) >= isoToDay(d.start));
@@ -5645,20 +5800,6 @@ function renderZonePlanning() {
     row.appendChild(label);
 
     const track = dbEl('div', 'gantt-track');
-    // Séparateurs de mois + repère « aujourd'hui »
-    for (const mo of dom.months) {
-      if (mo.startDay <= dom.startDay) continue;
-      const line = dbEl('div', 'gantt-gridline' + (mo.m === 0 ? ' is-year' : ''));
-      line.style.left = pct(mo.startDay) + '%';
-      track.appendChild(line);
-    }
-    if (todayDay >= dom.startDay && todayDay <= dom.endDay) {
-      const now = dbEl('div', 'gantt-today');
-      now.style.left = pct(todayDay) + '%';
-      now.title = "Aujourd'hui";
-      track.appendChild(now);
-    }
-
     const s = own ? d.start : state.projectStart;
     const e = own ? d.end : state.projectEnd;
     if (s && e && isoToDay(e) >= isoToDay(s)) {
@@ -5685,7 +5826,27 @@ function renderZonePlanning() {
     row.appendChild(track);
     body.appendChild(row);
   }
+  // Ajoutée en dernier pour que :nth-child compte bien les lignes ; elle
+  // reste dessous grâce au z-index.
+  body.appendChild(grid);
   chart.appendChild(body);
+
+  // Position de la vue : conservée d'un rendu à l'autre, et calée sur le jour
+  // à la première ouverture (ou sur la première barre si le jour est hors
+  // fenêtre) plutôt que sur le début de la période affichée.
+  if (scroll) {
+    if (keepScroll != null) {
+      scroll.scrollLeft = keepScroll;
+    } else if (!_ganttRendered) {
+      let focus = todayDay;
+      if (focus < dom.startDay || focus > dom.endDay) {
+        const firsts = roots.map(z => ((state.zoneDates || {})[z.id] || {}).start).filter(Boolean).map(isoToDay);
+        focus = firsts.length ? Math.min(...firsts) : dom.startDay;
+      }
+      ganttScrollToDay(focus);
+    }
+  }
+  _ganttRendered = { zoom: zoomKey };
 }
 
 // -------------------------------------------------------- glissé-déposé ----
@@ -16504,6 +16665,7 @@ const SYNC_EXCLUDED_KEYS = new Set([
   'travauxLotFilter',                // filtre de lots dans Travaux (UI)
   'travauxVisitePath', 'travauxVisiteDeep', // lieu sélectionné dans la vue Visite (UI)
   'zonePickerCollapsed',             // branches repliées des sélecteurs de zone (UI)
+  'ganttZoom',                       // échelle du planning des bâtiments (UI)
   'syncStatus', 'syncTimestamp', 'syncLastPulled', 'syncLastSeenRemoteTs',
   'protoPlan', 'protoPlanW', 'protoPlanH' // champs hérités migrés
 ]);
@@ -16948,10 +17110,17 @@ function init() {
       if (e.key === 'Escape' && !ganttOverlay.hidden) closeGanttModal();
     });
   }
-  // Le planning se dimensionne sur la largeur réelle de sa piste : il faut
-  // le redessiner quand la fenêtre change de taille (rotation, redimension).
+  // Deux vues se dimensionnent sur la largeur réelle de l'écran : le planning
+  // (largeur de sa piste) et la courbe du récapitulatif (viewBox choisi par
+  // paliers). On les redessine quand la fenêtre change de taille — rotation,
+  // redimensionnement, passage sur un second écran.
+  let _resizeTimer = null;
   window.addEventListener('resize', () => {
-    if (document.getElementById('sub-zoneplanning')?.classList.contains('active')) renderZonePlanning();
+    clearTimeout(_resizeTimer);
+    _resizeTimer = setTimeout(() => {
+      if (document.getElementById('sub-zoneplanning')?.classList.contains('active')) renderZonePlanning();
+      if (document.getElementById('sub-recap')?.classList.contains('active')) renderRecap();
+    }, 150);
   });
 
   // Plans : bouton « Relancer l'envoi » (Données → Admin). Réarme la

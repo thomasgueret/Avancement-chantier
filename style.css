@@ -608,13 +608,24 @@ option { background-color: var(--surface); color: var(--text); }
 .page.active { display: block; }
 
 /* Responsive : élargit progressivement les pages au-delà du mobile pour
-   éviter les grosses gouttières vides sur iPad / desktop. La dashboard
-   garde son propre élargissement (cf. plus bas dans le fichier). */
+   éviter les grosses gouttières vides sur iPad / desktop. Sur un 24 pouces
+   (1920 px), les pages occupaient 58 % de la largeur ; les paliers ci-dessous
+   les portent à ~93 %, sans jamais coller aux bords. La dashboard garde son
+   propre élargissement (cf. plus bas dans le fichier). */
 @media (min-width: 768px) {
   .page { max-width: 880px; padding: 20px 24px; }
 }
 @media (min-width: 1080px) {
   .page { max-width: 1120px; padding: 24px 32px; }
+}
+@media (min-width: 1400px) {
+  .page { max-width: 1340px; padding: 24px 36px; }
+}
+@media (min-width: 1680px) {
+  .page { max-width: 1580px; padding: 26px 40px; }
+}
+@media (min-width: 1920px) {
+  .page { max-width: 1800px; }
 }
 
 /* ============ SEGMENTED CONTROL (Saisie / Graphique) ============ */
@@ -1971,7 +1982,27 @@ option { background-color: var(--surface); color: var(--text); }
   font-variant-numeric: tabular-nums;
 }
 .gantt-chip.is-warn { color: var(--warning); border-color: var(--warning); font-weight: 800; }
-.gantt-hint { font-size: 11px; color: var(--text-4); }
+.gantt-hint { font-size: 11px; color: var(--text-4); margin-left: auto; }
+/* Échelle de temps : mois / semaines / jours, à la manière d'un planning
+   d'ordonnancement. Plus l'échelle est fine, plus le glissé est précis. */
+.gantt-zoom {
+  display: flex; align-items: center; gap: 4px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 3px 4px 3px 10px;
+}
+.gantt-zoom-label {
+  font-size: 9.5px; font-weight: 800; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--text-4); margin-right: 2px;
+}
+.gantt-zoom-btn {
+  border: none; background: transparent;
+  border-radius: 999px; padding: 4px 11px;
+  font-size: 11.5px; font-weight: 700; color: var(--text-2);
+  cursor: pointer;
+}
+.gantt-zoom-btn:hover:not(:disabled) { background: var(--surface-3); }
+.gantt-zoom-btn.is-on { background: var(--accent); color: #fff; }
+.gantt-zoom-btn:disabled { color: var(--text-4); cursor: not-allowed; opacity: 0.6; }
 
 /* Conteneur de défilement : c'est lui qui porte les positions « sticky »
    de l'en-tête de temps et de la colonne des bâtiments. */
@@ -2021,22 +2052,34 @@ option { background-color: var(--surface); color: var(--text); }
   font-size: 11.5px; font-weight: 800; color: var(--text-2);
   border-bottom: 1px solid var(--border);
 }
-.gantt-month {
+.gantt-month, .gantt-week, .gantt-day {
   padding: 4px 2px;
   font-size: 10.5px; font-weight: 600; color: var(--text-3);
   text-transform: capitalize;
 }
+.gantt-day { font-size: 9.5px; padding: 4px 0; }
+.gantt-day.is-weekend { background: rgba(0, 0, 0, 0.045); color: var(--text-4); }
+.gantt-week { font-size: 10px; letter-spacing: -0.01em; }
 .gantt-scale-row > :first-child { border-left: none; }
 
 .gantt-body { position: relative; }
+/* Couche de quadrillage commune, sous les lignes : elle couvre exactement la
+   piste (à droite de la colonne des bâtiments) sur toute la hauteur. */
+.gantt-grid {
+  position: absolute; z-index: 0;
+  left: var(--gantt-label-w); right: 0; top: 0; bottom: 0;
+  pointer-events: none;
+}
 .gantt-row {
+  position: relative; z-index: 1;
   min-height: var(--gantt-row-h);
   border-bottom: 1px solid var(--border);
+  background: transparent;
 }
 .gantt-row:last-child { border-bottom: none; }
-.gantt-row:nth-child(even) { background: var(--surface-2); }
+.gantt-row:nth-child(even) { background: rgba(0, 0, 0, 0.018); }
 .gantt-label {
-  position: sticky; left: 0; z-index: 2;
+  position: sticky; left: 0; z-index: 3;
   display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
   padding: 8px 12px;
   background: inherit;
@@ -2068,13 +2111,15 @@ option { background-color: var(--surface); color: var(--text); }
 .gantt-gridline {
   position: absolute; top: 0; bottom: 0; width: 1px;
   background: var(--border);
+  opacity: 0.6;
 }
+.gantt-gridline.is-month { opacity: 1; }
 .gantt-gridline.is-year { background: var(--border-strong); }
+.gantt-weekend { position: absolute; top: 0; bottom: 0; background: rgba(0, 0, 0, 0.035); }
 .gantt-today {
   position: absolute; top: 0; bottom: 0; width: 2px;
   background: var(--accent);
   opacity: 0.55;
-  z-index: 1;
 }
 
 .gantt-bar {
@@ -4943,7 +4988,7 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
    de l'app. Palette importée du design Claude Design.
    ============================================================ */
 #page-dashboard {
-  max-width: 1380px;
+  max-width: 1780px;
   background: var(--bg);
   color: var(--text);
   padding: 22px 24px 28px;
@@ -5511,7 +5556,7 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 }
 
 /* ============ ONGLET TRAVAUX (CCTP du chantier : Visite / CCTP / Carnet) ============ */
-#page-travaux { max-width: 1040px; }
+#page-travaux { max-width: 1580px; }
 
 /* ---------- Éléments partagés ---------- */
 .travaux-lot-dot {
@@ -6480,7 +6525,7 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 /* ============ SUIVI DES HEURES (onglet dédié, optimisé PC) ============ */
 /* La page s'élargit en desktop pour afficher le maximum de colonnes sans
    défilement horizontal (tableau de 13 colonnes pensé pour le PC). */
-#page-heures { max-width: 1320px; }
+#page-heures { max-width: 1780px; }
 
 /* ----- Onglets de semaines (design « classeur ») ----- */
 .heures-week-tabs {
@@ -6768,3 +6813,51 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 }
 .backup-restore:active { background: var(--accent-soft); }
 .backup-create-btn { width: 100%; }
+
+/* ---- Listes en colonnes sur grand écran ----------------------------------
+   Beaucoup de listes ne sont qu'une pile de lignes courtes : au-delà de
+   1200 px, elles laissaient un vide de plusieurs centaines de pixels à
+   droite. On les répartit en colonnes de 380 px minimum, en autant de
+   colonnes que la largeur le permet. Les en-têtes de section conservent
+   toute la largeur. */
+@media (min-width: 1200px) {
+  .company-list, .task-list, .eotp-list, .lots-list, .doc-labels-list,
+  .backup-list, .caces-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 8px 14px;
+    align-items: start;
+  }
+  /* Présences (Effectifs) et articles en stock : une ligne porte un
+     compteur ou un chiffre à droite, il leur faut un peu plus de large. */
+  .entry-list, .stock-summary-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(430px, 1fr));
+    gap: 10px 14px;
+    align-items: start;
+  }
+  /* Blocs par entreprise (Administratif → Sécurité et eCheckIn) : deux
+     colonnes plutôt qu'une pile qui laisse les trois quarts de l'écran vides. */
+  #securitelist, #echeckinlist {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(520px, 1fr));
+    gap: 0 16px;
+    align-items: start;
+  }
+  /* La fiche d'avancement porte un compteur et un bouton par ligne : il lui
+     faut des colonnes plus larges pour que le nom de tâche reste entier. */
+  .progress-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
+    gap: 8px 12px;
+    align-items: start;
+  }
+  .progress-section-header, .progress-empty { grid-column: 1 / -1; }
+
+  /* Un texte d'aide ou un bouton d'action isolé n'a rien à gagner à courir
+     sur 1 800 px : on borne la ligne de lecture et la cible de clic. */
+  .section-help, .project-dates-info { max-width: 96ch; }
+  .danger-zone > .btn-secondary, .danger-zone > .btn-danger,
+  #forceupdatebtn, .backup-create-btn, .eotp-add-btn, .lots-add-btn,
+  .zone-add-root, .echeckin-report-btn { max-width: 460px; }
+}
