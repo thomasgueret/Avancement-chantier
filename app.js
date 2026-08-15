@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.70';
+const APP_VERSION = '1.71';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -83,6 +83,7 @@ const state = {
   consoProducts: [],      // registre canonique : [{ name, reference, unitPrice }]
   eotps: [],              // lignes de budget eOTP : [{ id, code, label, budget }]
   eotpRegistryInitialized: false, // flag de migration douce (une fois)
+  eotpUnitsInitialized: false,    // flag de migration des unités € / h (une fois)
   // Suivi des heures : données par eOTP (indexées par eotpId, survit au renommage du code).
   // Suivi des heures organisé par semaines (instantanés pour comparer les écarts).
   heuresWeeks: [],          // [{ id, name, createdAt, sapDate }]
@@ -228,6 +229,7 @@ function load() {
     if (data.consoProducts) state.consoProducts = data.consoProducts;
     if (data.eotps) state.eotps = data.eotps;
     if (typeof data.eotpRegistryInitialized === 'boolean') state.eotpRegistryInitialized = data.eotpRegistryInitialized;
+    if (typeof data.eotpUnitsInitialized === 'boolean') state.eotpUnitsInitialized = data.eotpUnitsInitialized;
     if (data.heuresData && typeof data.heuresData === 'object') state.heuresData = data.heuresData;
     if (typeof data.heuresSapDate === 'string') state.heuresSapDate = data.heuresSapDate;
     if (Array.isArray(data.heuresWeeks)) state.heuresWeeks = data.heuresWeeks;
@@ -299,6 +301,7 @@ function load() {
 function runPostLoadMigrations() {
   migrateConsoProductsFromEntries();
   migrateEOTPsFromConsoEntries();
+  migrateEOTPUnits();
   migrateProtoPlansFromLegacy();
   migrateCRState();
   migrateHeuresWeeks();
@@ -338,6 +341,7 @@ function buildPersistedData() {
     consoProducts: state.consoProducts,
     eotps: state.eotps,
     eotpRegistryInitialized: state.eotpRegistryInitialized,
+    eotpUnitsInitialized: state.eotpUnitsInitialized,
     heuresData: state.heuresData,
     heuresSapDate: state.heuresSapDate,
     heuresWeeks: state.heuresWeeks,
@@ -1070,7 +1074,8 @@ function computeProjectAlerts() {
     let over = 0, near = 0;
     for (const e of getEOTPs()) {
       const code = (e.code || '').trim();
-      if (!code || !(e.budget > 0)) continue;
+      // Les lignes en heures ne se comparent pas à des dépenses en euros.
+      if (!code || !(e.budget > 0) || isHourEOTP(e)) continue;
       const fdc = (spentByCode.get(code) || 0) / elapsed * totalProj;
       const ratio = fdc / e.budget;
       if (ratio >= 1) over++;
@@ -1692,7 +1697,7 @@ function renderDashboardEOTPAlerts() {
     el.appendChild(body);
     return;
   }
-  const eotps = getEOTPs().filter(e => (e.code || '').trim() && (e.budget || 0) > 0);
+  const eotps = getEOTPs().filter(e => (e.code || '').trim() && (e.budget || 0) > 0 && !isHourEOTP(e));
   if (eotps.length === 0) {
     body.innerHTML = '<p class="dashboard-empty">Aucune ligne de budget eOTP renseignée.</p>';
     el.appendChild(body);
@@ -5409,7 +5414,7 @@ function buildEOTPRow(eotp) {
       <input class="eotp-code" type="text" maxlength="30" placeholder="OTP-2026-001">
       <div class="eotp-budget-wrap">
         <input class="eotp-budget" type="text" inputmode="decimal" placeholder="0">
-        <span class="eotp-budget-currency">€</span>
+        <button class="eotp-unit" type="button"></button>
       </div>
       <button class="eotp-remove" type="button" aria-label="Supprimer cette ligne">
         <svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
@@ -5420,14 +5425,28 @@ function buildEOTPRow(eotp) {
   const code   = li.querySelector('.eotp-code');
   const budget = li.querySelector('.eotp-budget');
   const label  = li.querySelector('.eotp-label');
+  const unit   = li.querySelector('.eotp-unit');
   code.value   = eotp.code || '';
   budget.value = eotp.budget ? fmtPriceForInput(eotp.budget) : '';
   label.value  = eotp.label || '';
+  applyEOTPUnitButton(unit, eotp);
   code.addEventListener('input',   () => setEOTPCode(eotp.id, code.value));
   budget.addEventListener('input', () => setEOTPBudget(eotp.id, budget.value));
   label.addEventListener('input',  () => setEOTPLabel(eotp.id, label.value));
+  unit.addEventListener('click',   () => { toggleEOTPUnit(eotp.id); applyEOTPUnitButton(unit, eotp); });
   li.querySelector('.eotp-remove').addEventListener('click', () => removeEOTP(eotp.id));
   return li;
+}
+// Bouton d'unité de la ligne de budget : € (dépense) ou h (main-d'œuvre).
+// Seules les lignes en « h » alimentent l'onglet Heures.
+function applyEOTPUnitButton(btn, eotp) {
+  const isH = isHourEOTP(eotp);
+  btn.textContent = isH ? 'h' : '€';
+  btn.classList.toggle('is-hours', isH);
+  btn.title = isH
+    ? 'Budget en heures — cette ligne apparaît dans l\'onglet Heures (toucher pour passer en €)'
+    : 'Budget en euros (toucher pour passer en heures)';
+  btn.setAttribute('aria-label', btn.title);
 }
 
 // ---------- Période du chantier (Données → Admin.) ----------
@@ -8960,9 +8979,22 @@ function getEOTP(code) {
 }
 function addEOTP() {
   if (!Array.isArray(state.eotps)) state.eotps = [];
-  state.eotps.push({ id: 'eotp_' + uid(), code: '', label: '', budget: 0 });
+  state.eotps.push({ id: 'eotp_' + uid(), code: '', label: '', budget: 0, unit: 'eur' });
   save();
   renderEOTPsConfig();
+}
+// Unité du budget : 'eur' (défaut, dépenses de Consommable) ou 'h'
+// (main-d'œuvre). Les lignes en heures sont celles que suit l'onglet Heures,
+// dont elles alimentent la colonne « Budget heure ».
+function isHourEOTP(eotp) { return !!eotp && eotp.unit === 'h'; }
+function getHourEOTPs() { return getEOTPs().filter(isHourEOTP); }
+function toggleEOTPUnit(id) {
+  const e = getEOTPs().find(x => x.id === id);
+  if (!e) return;
+  e.unit = isHourEOTP(e) ? 'eur' : 'h';
+  save();
+  renderConsommable();
+  renderHeures();
 }
 function removeEOTP(id) {
   const e = getEOTPs().find(x => x.id === id);
@@ -9003,6 +9035,8 @@ function setEOTPBudget(id, value) {
   const n = parseFloat(String(value).replace(',', '.'));
   e.budget = Number.isFinite(n) && n >= 0 ? n : 0;
   save();
+  // La colonne « Budget heure » du suivi des heures lit cette valeur.
+  if (isHourEOTP(e)) renderHeures();
 }
 // Migration douce : à la première lecture du storage avec eOTP existants
 // dans les entrées mais pas encore dans le registre, on enregistre les
@@ -9020,6 +9054,37 @@ function migrateEOTPsFromConsoEntries() {
   }
   state.eotpRegistryInitialized = true;
 }
+// Migration des unités (v1.71). Avant la bascule € / h, l'onglet Heures
+// proposait toutes les lignes de budget et son budget horaire était saisi
+// dans le tableau. On bascule donc en « h » les lignes qui y étaient déjà
+// cochées, et on remonte leur budget horaire de la dernière semaine vers la
+// ligne de budget — sans quoi le tableau se viderait à la mise à jour.
+function migrateEOTPUnits() {
+  if (state.eotpUnitsInitialized) return;
+  const weeks = Array.isArray(state.heuresWeeks) ? state.heuresWeeks : [];
+  const data = state.heuresData && typeof state.heuresData === 'object' ? state.heuresData : {};
+  const tracked = new Map();   // eotpId → dernier budget horaire saisi
+  for (const w of weeks) {
+    const bucket = data[w.id];
+    if (!bucket || typeof bucket !== 'object') continue;
+    for (const [eotpId, row] of Object.entries(bucket)) {
+      if (!row || !row.selected) continue;
+      tracked.set(eotpId, Number(row.budgetHeures) || 0);
+    }
+  }
+  for (const e of getEOTPs()) {
+    if (e.unit === 'h' || e.unit === 'eur') continue;
+    if (tracked.has(e.id)) {
+      e.unit = 'h';
+      const b = tracked.get(e.id);
+      if (b > 0) e.budget = b;
+    } else {
+      e.unit = 'eur';
+    }
+  }
+  state.eotpUnitsInitialized = true;
+}
+
 // Affichage : code « OTP-2026-001 » ou « OTP-2026-001 — Plomberie » si label
 function eotpDisplay(eotp) {
   if (!eotp) return '';
@@ -9036,7 +9101,8 @@ function eotpDisplay(eotp) {
 // ========================================================================
 
 // Champs numériques de saisie (parse FR : virgule décimale acceptée).
-const HEURES_NUM_FIELDS = ['budgetHeures', 'qteTotal', 'qteRealisee', 'sap', 'correction', 'pumaCumule'];
+// « budgetHeures » n'y figure pas : il est lu dans Données → eOTP.
+const HEURES_NUM_FIELDS = ['qteTotal', 'qteRealisee', 'sap', 'correction', 'pumaCumule'];
 
 // --- Semaines (instantanés du tableau, pour comparer les écarts) ----------
 // Migration douce : l'ancien format (v1.19-1.21) stockait heuresData à plat
@@ -9154,6 +9220,12 @@ function getHeuresRow(eotpId) {
     row = { selected: false, budgetHeures: 0, unite: '', qteTotal: 0, qteRealisee: 0, sap: 0, correction: 0, pumaCumule: 0 };
     bucket[eotpId] = row;
   }
+  // Le budget heures n'est plus saisi dans le tableau : il est repris de la
+  // ligne de budget correspondante (Données → eOTP, unité « h »). On le
+  // recopie dans l'instantané de la semaine pour que les totaux, les exports
+  // et les semaines archivées restent cohérents avec ce qui est affiché.
+  const eotp = getEOTPs().find(e => e.id === eotpId);
+  if (eotp) row.budgetHeures = Number(eotp.budget) || 0;
   return row;
 }
 
@@ -9175,7 +9247,7 @@ function computeHeuresRow(row) {
   const fdcAuto = (ratioActuel != null && rad != null)            // Projection fin de chantier
     ? pumaEcart + ratioActuel * rad : null;                       //   = (PUMA + Écart) + Ratio actuel × RAD
   const ecart = droit - pumaEcart;                                // Droit à dépenser − (PUMA + Correction)
-  return { ratio, avancement, droit, rad, pumaEcart, ratioActuel, fdcAuto, ecart };
+  return { budget, ratio, avancement, droit, rad, pumaEcart, ratioActuel, fdcAuto, ecart };
 }
 
 // Formatage heures : entier si rond, sinon 1 décimale, séparateurs FR.
@@ -9191,12 +9263,6 @@ function fmtHeuresInput(n) {
   return v.toLocaleString('fr-FR', { maximumFractionDigits: 2 }).replace(/ /g, '');
 }
 
-function toggleHeuresSelected(eotpId) {
-  const row = getHeuresRow(eotpId);
-  row.selected = !row.selected;
-  save();
-  renderHeures();
-}
 
 // Date de référence affichée entre parenthèses dans l'en-tête « SAP (…) ».
 // Propre à la semaine active (chaque instantané a sa date d'extraction SAP).
@@ -9297,58 +9363,142 @@ function renderHeuresWeekTabs() {
   el.appendChild(add);
 }
 
+// Lignes de budget suivies ici : celles dont l'unité est « h ». Une ligne en
+// euros relève de Consommable → Budget, pas du suivi de main-d'œuvre.
+function getHeuresCandidates() {
+  return getHourEOTPs()
+    .filter(e => (e.code || '').trim() || (e.label || '').trim())
+    .sort((a, b) => (a.code || '').localeCompare(b.code || '', 'fr'));
+}
+
+// Sélecteur compact : un bouton qui déplie un panneau de cases à cocher.
+// La rangée de pastilles occupait une à trois lignes entières ; ici tout
+// tient sur la ligne des onglets de semaines.
 function renderHeuresEOTPSelect() {
   const el = document.getElementById('heureseotpselect');
   if (!el) return;
+  const wasOpen = !!el.querySelector('.heures-eotp-panel:not([hidden])');
   el.innerHTML = '';
-  const eotps = getEOTPs().slice().sort((a, b) => (a.code || '').localeCompare(b.code || '', 'fr'));
+  const eotps = getHeuresCandidates();
+
+  const btn = dbEl('button', 'heures-eotp-toggle');
+  btn.type = 'button';
+  btn.setAttribute('aria-expanded', 'false');
+  btn.appendChild(dbEl('span', 'heures-eotp-toggle-label', 'eOTP suivis'));
+  const count = dbEl('span', 'heures-eotp-count');
+  const chevron = dbEl('span', 'heures-eotp-chevron', '▾');
+  btn.append(count, chevron);
+  el.appendChild(btn);
+
+  const panel = dbEl('div', 'heures-eotp-panel');
+  panel.hidden = true;
+  el.appendChild(panel);
+
+  const refreshCount = () => {
+    const sel = eotps.filter(e => getHeuresRow(e.id).selected).length;
+    count.textContent = sel + ' / ' + eotps.length;
+    btn.classList.toggle('is-empty', sel === 0);
+  };
+
   if (eotps.length === 0) {
-    const p = document.createElement('p');
-    p.className = 'heures-empty';
-    p.textContent = 'Aucune ligne de budget eOTP. Créez-en dans Données → eOTP pour les suivre ici.';
-    el.appendChild(p);
+    count.textContent = '0';
+    btn.classList.add('is-empty');
+    btn.disabled = true;
+    btn.title = 'Aucune ligne de budget en heures. Dans Données → eOTP, basculez une ligne sur « h ».';
+    panel.remove();
     return;
   }
+
+  const actions = dbEl('div', 'heures-eotp-actions');
+  const mkAction = (label, value) => {
+    const b = dbEl('button', 'heures-eotp-action', label);
+    b.type = 'button';
+    b.addEventListener('click', () => {
+      for (const e of eotps) getHeuresRow(e.id).selected = value;
+      save();
+      renderHeures();
+      openHeuresEOTPPanel();
+    });
+    return b;
+  };
+  actions.append(mkAction('Tout cocher', true), mkAction('Tout décocher', false));
+  panel.appendChild(actions);
+
   for (const e of eotps) {
-    if (!(e.code || '').trim() && !(e.label || '').trim()) continue;
     const row = getHeuresRow(e.id);
-    const chip = document.createElement('label');
-    chip.className = 'heures-eotp-chip' + (row.selected ? ' is-selected' : '');
+    const opt = dbEl('label', 'heures-eotp-opt' + (row.selected ? ' is-selected' : ''));
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = !!row.selected;
-    cb.addEventListener('change', () => toggleHeuresSelected(e.id));
-    const span = document.createElement('span');
-    span.textContent = eotpDisplay(e) || '(sans code)';
-    chip.appendChild(cb);
-    chip.appendChild(span);
-    el.appendChild(chip);
+    cb.addEventListener('change', () => {
+      row.selected = cb.checked;
+      save();
+      opt.classList.toggle('is-selected', cb.checked);
+      renderHeuresTable();
+      refreshCount();
+    });
+    opt.appendChild(cb);
+    opt.appendChild(dbEl('span', 'heures-eotp-opt-name', eotpDisplay(e) || '(sans code)'));
+    opt.appendChild(dbEl('span', 'heures-eotp-opt-budget', fmtHeures(Number(e.budget) || 0) + ' h'));
+    panel.appendChild(opt);
   }
+  refreshCount();
+
+  btn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    if (panel.hidden) openHeuresEOTPPanel(); else closeHeuresEOTPPanel();
+  });
+  panel.addEventListener('click', (ev) => ev.stopPropagation());
+  if (wasOpen) openHeuresEOTPPanel();
 }
+function openHeuresEOTPPanel() {
+  const el = document.getElementById('heureseotpselect');
+  if (!el) return;
+  const panel = el.querySelector('.heures-eotp-panel');
+  const btn = el.querySelector('.heures-eotp-toggle');
+  if (!panel || !btn) return;
+  panel.hidden = false;
+  btn.setAttribute('aria-expanded', 'true');
+  btn.classList.add('is-open');
+  document.addEventListener('click', closeHeuresEOTPPanel);
+  document.addEventListener('keydown', heuresEOTPPanelEsc);
+}
+function closeHeuresEOTPPanel() {
+  const el = document.getElementById('heureseotpselect');
+  document.removeEventListener('click', closeHeuresEOTPPanel);
+  document.removeEventListener('keydown', heuresEOTPPanelEsc);
+  if (!el) return;
+  const panel = el.querySelector('.heures-eotp-panel');
+  const btn = el.querySelector('.heures-eotp-toggle');
+  if (panel) panel.hidden = true;
+  if (btn) { btn.setAttribute('aria-expanded', 'false'); btn.classList.remove('is-open'); }
+}
+function heuresEOTPPanelEsc(e) { if (e.key === 'Escape') closeHeuresEOTPPanel(); }
 
 // Définition des colonnes du tableau. `calc` = colonne dérivée (lecture seule).
 const HEURES_COLUMNS = [
-  { key: 'taches',       label: 'Tâches',                  kind: 'label' },
-  { key: 'budgetHeures', label: 'Budget heure',            kind: 'num',  unitSuffix: 'h' },
-  { key: 'unite',        label: 'Unités',                  kind: 'text' },
-  { key: 'ratio',        label: 'Ratio théorique',         kind: 'calc', title: 'Budget heure ÷ Qté totale' },
-  { key: 'qteTotal',     label: 'Qté totale (ouvrage)',    kind: 'num' },
-  { key: 'qteRealisee',  label: 'Qté réalisé au stade',    kind: 'num',  title: 'Saisie manuelle — liaison avec l\'Avancement à venir' },
-  { key: 'rad',          label: 'RAD',                     kind: 'calc', title: 'Reste à faire : Qté totale − Qté réalisé au stade' },
-  { key: 'avancement',   label: 'Avancement (%)',          kind: 'calc', title: 'Qté réalisée ÷ Qté totale' },
-  { key: 'droit',        label: 'Droit à dépenser',        kind: 'calc', title: 'Budget heure × avancement % (valeur acquise)' },
-  { key: 'sap',          label: 'SAP',                     kind: 'num' },
-  { key: 'correction',   label: 'Correction (PUMA-SAP)',   kind: 'num',  title: 'Peut être négative' },
-  { key: 'pumaCumule',   label: 'PUMA cumulé',             kind: 'num' },
-  { key: 'pumaEcart',    label: 'PUMA cumulé + Écart SAP', kind: 'calc', title: 'PUMA cumulé + Correction' },
-  { key: 'ratioActuel',  label: 'Ratio actuel',            kind: 'calc', title: '(PUMA cumulé + Écart SAP) ÷ Qté réalisé au stade' },
-  { key: 'fdcAuto',      label: 'FDC auto',                kind: 'calc', title: '(PUMA cumulé + Écart SAP) + Ratio actuel × (Qté totale − Qté réalisé au stade)' },
-  { key: 'ecart',        label: 'Écart au stade',          kind: 'calc', title: 'Droit à dépenser − (PUMA cumulé + Correction)' }
+  { key: 'taches',       label: 'Tâches',              kind: 'label' },
+  { key: 'budgetHeures', label: 'Budget heure',        kind: 'calc', title: 'Budget de la ligne eOTP saisi dans Données → eOTP (unité « h »)' },
+  { key: 'unite',        label: 'Unités',              kind: 'text' },
+  { key: 'ratio',        label: 'Ratio théo.',         kind: 'calc', title: 'Ratio théorique : Budget heure ÷ Qté totale' },
+  { key: 'qteTotal',     label: 'Qté totale',          kind: 'num',  title: 'Quantité totale de l\'ouvrage' },
+  { key: 'qteRealisee',  label: 'Qté réalisée',        kind: 'num',  title: 'Quantité réalisée au stade — saisie manuelle' },
+  { key: 'rad',          label: 'RAD',                 kind: 'calc', title: 'Reste à faire : Qté totale − Qté réalisée' },
+  { key: 'avancement',   label: 'Avanc.',              kind: 'calc', title: 'Avancement : Qté réalisée ÷ Qté totale' },
+  { key: 'droit',        label: 'Droit à dép.',        kind: 'calc', title: 'Droit à dépenser : Budget heure × avancement (valeur acquise)' },
+  { key: 'sap',          label: 'SAP',                 kind: 'num' },
+  { key: 'correction',   label: 'Correction',          kind: 'num',  title: 'Correction PUMA − SAP, peut être négative' },
+  { key: 'pumaCumule',   label: 'PUMA cum.',           kind: 'num',  title: 'PUMA cumulé' },
+  { key: 'pumaEcart',    label: 'PUMA + Écart',        kind: 'calc', title: 'PUMA cumulé + Correction' },
+  { key: 'ratioActuel',  label: 'Ratio actuel',        kind: 'calc', title: '(PUMA cumulé + Écart SAP) ÷ Qté réalisée' },
+  { key: 'fdcAuto',      label: 'FDC auto',            kind: 'calc', title: 'Fin de chantier projetée : (PUMA + Écart) + Ratio actuel × RAD' },
+  { key: 'ecart',        label: 'Écart au stade',      kind: 'calc', title: 'Droit à dépenser − (PUMA cumulé + Correction)' }
 ];
 
 // Texte affiché pour une cellule calculée donnée.
 function heuresCalcText(key, comp) {
   switch (key) {
+    case 'budgetHeures': return fmtHeures(comp.budget) + ' h';
     case 'ratio':       return comp.ratio != null ? fmtHeures(comp.ratio) : '—';
     case 'avancement':  return comp.avancement != null ? Math.round(comp.avancement * 100) + ' %' : '—';
     case 'droit':       return fmtHeures(comp.droit) + ' h';
@@ -9366,14 +9516,15 @@ function renderHeuresTable() {
   if (!wrap) return;
   wrap.innerHTML = '';
 
-  const selected = getEOTPs()
-    .filter(e => getHeuresRow(e.id).selected)
-    .sort((a, b) => (a.code || '').localeCompare(b.code || '', 'fr'));
+  const candidates = getHeuresCandidates();
+  const selected = candidates.filter(e => getHeuresRow(e.id).selected);
 
   if (selected.length === 0) {
     const p = document.createElement('p');
     p.className = 'heures-empty';
-    p.textContent = 'Cochez au moins un eOTP ci-dessus pour l\'ajouter au tableau.';
+    p.textContent = candidates.length === 0
+      ? 'Aucune ligne de budget en heures. Dans Données → eOTP, basculez une ligne sur « h » pour la suivre ici.'
+      : 'Choisissez au moins une ligne dans « eOTP suivis » pour l\'ajouter au tableau.';
     wrap.appendChild(p);
     return;
   }
@@ -9485,7 +9636,7 @@ function applyHeuresComputedToRow(tr, row) {
 function refreshHeuresComputed(eotpId) {
   const tr = document.querySelector('tr[data-heures-id="' + cssEscape(eotpId) + '"]');
   if (tr) applyHeuresComputedToRow(tr, getHeuresRow(eotpId));
-  const selected = getEOTPs().filter(e => getHeuresRow(e.id).selected);
+  const selected = getHeuresCandidates().filter(e => getHeuresRow(e.id).selected);
   const tfoot = document.querySelector('.heures-table tfoot');
   if (tfoot) {
     const fresh = buildHeuresFoot(selected);
@@ -14086,6 +14237,7 @@ function importData(file) {
       state.consoProducts = data.consoProducts || [];
       state.eotps = data.eotps || [];
       state.eotpRegistryInitialized = data.eotpRegistryInitialized === true;
+      state.eotpUnitsInitialized = data.eotpUnitsInitialized === true;
       state.consoRecapMode = (data.consoRecapMode === 'eotp') ? 'eotp' : 'product';
       state.projectStart = typeof data.projectStart === 'string' ? data.projectStart : '';
       state.projectEnd   = typeof data.projectEnd   === 'string' ? data.projectEnd   : '';
@@ -14120,6 +14272,7 @@ function importData(file) {
       migrateSetups();
       migrateConsoProductsFromEntries();
   migrateEOTPsFromConsoEntries();
+  migrateEOTPUnits();
       save();
       renderAll();
       showToast('Import réussi');
@@ -14148,6 +14301,7 @@ function resetAll() {
   state.consoProducts = [];
   state.eotps = [];
   state.eotpRegistryInitialized = false;
+  state.eotpUnitsInitialized = false;
   state.consoRecapMode = 'product';
   state.projectStart = '';
   state.projectEnd = '';

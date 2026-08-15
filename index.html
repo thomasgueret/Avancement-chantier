@@ -246,7 +246,7 @@
       <!-- Sous-page : eOTP (lignes de budget pour Consommable) -->
       <div class="sub-page" id="sub-eotp" data-group="donnees">
         <div class="list-section">
-          <p class="section-help">Lignes de budget proposées dans le menu déroulant eOTP de Consommable → Saisie. Le budget indique la dotation totale de chaque ligne.</p>
+          <p class="section-help">Lignes de budget proposées dans le menu déroulant eOTP de Consommable → Saisie. Le budget indique la dotation totale de chaque ligne. Le bouton <strong>€ / h</strong> fixe son unité : les lignes en <strong>h</strong> sont celles que suit l'onglet <strong>Heures</strong>, dont elles alimentent la colonne « Budget heure ».</p>
           <ul class="eotp-list" id="eotplist"></ul>
           <button class="btn-primary eotp-add-btn" id="eotpadd" type="button">+ Ajouter une ligne de budget</button>
         </div>
@@ -494,15 +494,12 @@
     <section class="page" id="page-heures">
       <h2 class="section-title">Suivi des heures</h2>
 
-      <!-- Onglets de semaines (design classeur). Chaque semaine est un
-           instantané complet du tableau, pour comparer les écarts. -->
-      <div class="heures-week-tabs" id="heuresweektabs"></div>
-
-      <!-- Sélection des eOTP à inclure dans le suivi -->
-      <div class="heures-select-section">
-        <h3 class="heures-subtitle">eOTP suivis</h3>
-        <p class="section-help">Cochez les lignes de budget eOTP à faire apparaître dans le tableau.</p>
-        <div class="heures-eotp-select" id="heureseotpselect"></div>
+      <!-- Barre : onglets de semaines (design classeur — chaque semaine est un
+           instantané complet du tableau) et sélecteur d'eOTP suivis, sur une
+           seule ligne pour laisser le maximum de hauteur au tableau. -->
+      <div class="heures-toolbar">
+        <div class="heures-week-tabs" id="heuresweektabs"></div>
+        <div class="heures-eotp-picker" id="heureseotpselect"></div>
       </div>
 
       <!-- Tableau principal -->
