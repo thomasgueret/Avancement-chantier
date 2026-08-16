@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.73';
+const APP_VERSION = '1.74';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -54,6 +54,8 @@ const state = {
   zoneUpdated: {},        // { [zoneId]: timestamp (ms) — dernière modif d'avancement }
   avancementZoneId: null, // zone affichée dans l'onglet Avancement
   recapBuildingId: null,  // zone racine sélectionnée dans Avancement → Récapitulatif
+  recapPeriod: '7',       // période de comparaison du récapitulatif (UI)
+  recapCurveMode: 'pct',  // courbe en % ou en heures (UI)
   zonePickerCollapsed: {}, // { [zoneId]: true } — branches repliées dans les sélecteurs de zone (UI)
   // Planning par zone racine (Données → Planning) : permet de tracer la
   // courbe d'avancement d'un bâtiment sur SA propre période, au lieu de
@@ -203,6 +205,8 @@ function load() {
     if (data.avancementHistory && typeof data.avancementHistory === 'object') state.avancementHistory = data.avancementHistory;
     if (data.avancementZoneId) state.avancementZoneId = data.avancementZoneId;
     if (data.recapBuildingId) state.recapBuildingId = data.recapBuildingId;
+    if (typeof data.recapPeriod === 'string') state.recapPeriod = data.recapPeriod;
+    if (data.recapCurveMode === 'heures' || data.recapCurveMode === 'pct') state.recapCurveMode = data.recapCurveMode;
     if (data.adminDocs) state.adminDocs = data.adminDocs;
     if (data.workers) state.workers = data.workers;
     if (data.workerDocs) state.workerDocs = data.workerDocs;
@@ -329,6 +333,8 @@ function buildPersistedData() {
     avancementHistory: state.avancementHistory,
     avancementZoneId: state.avancementZoneId,
     recapBuildingId: state.recapBuildingId,
+    recapPeriod: state.recapPeriod,
+    recapCurveMode: state.recapCurveMode,
     adminDocs: state.adminDocs,
     workers: state.workers,
     workerDocs: state.workerDocs,
@@ -2713,6 +2719,7 @@ function setProgress(zoneId, taskId, percent) {
   }
   state.zoneUpdated[zoneId] = Date.now();
   save();
+  invalidateHeuresModel();
   // Point d'historique du jour : c'est ce qui alimente la courbe
   // d'avancement et le calcul du rythme (throttlé en interne).
   stampAvancementHistory();
@@ -3530,16 +3537,78 @@ function stampAvancementHistory(force) {
   const prev = state.avancementHistory[key];
   const zones = {};
   for (const b of m.buildings) if (b.hBudget > 0) zones[b.id] = Math.round(b.pct * 100) / 100;
+  // Détail du jour : avancement par zone porteuse et heures acquises par
+  // ouvrage puis par tâche. C'est ce qui permet la colonne « variation sur
+  // 7 / 30 jours » du récapitulatif. Purgé au-delà de 120 jours (cf.
+  // pruneAvancementHistoryDetail) : au-delà, seule la courbe reste utile.
+  const det = { z: {}, o: {} };
+  for (const z of m.zones) if (z.hBudget > 0) det.z[z.id] = Math.round(z.pct * 100) / 100;
+  for (const o of m.ouvrages) {
+    if (!(o.hBudget > 0)) continue;
+    const t = {};
+    for (const tk of o.tasks) if (tk.hBudget > 0) t[tk.id] = Math.round(tk.hDone * 10) / 10;
+    det.o[o.setupId] = { d: Math.round(o.hDone * 10) / 10, b: Math.round(o.hBudget * 10) / 10, t };
+  }
   const next = {
     pct: Math.round(m.pct * 100) / 100,
     hDone: Math.round(m.hDone * 10) / 10,
     hBudget: Math.round(m.hBudget * 10) / 10,
-    zones,
+    zones, det,
   };
   if (prev && prev.pct === next.pct && prev.hBudget === next.hBudget
-      && _jsonEq(prev.zones || {}, zones)) return;
+      && _jsonEq(prev.zones || {}, zones) && _jsonEq(prev.det || {}, det)) return;
   state.avancementHistory[key] = next;
+  pruneAvancementHistoryDetail();
   save();
+}
+// Le détail par zone / ouvrage / tâche pèse bien plus lourd que le point de
+// courbe : on ne le garde que sur une fenêtre glissante. Les points anciens
+// conservent pct / hDone / hBudget / zones, donc la courbe reste entière.
+const AVANCEMENT_DETAIL_DAYS = 120;
+function pruneAvancementHistoryDetail() {
+  const h = state.avancementHistory || {};
+  const limit = dayToISO(isoToDay(todayISO()) - AVANCEMENT_DETAIL_DAYS);
+  for (const k of Object.keys(h)) {
+    if (k < limit && h[k] && h[k].det) delete h[k].det;
+  }
+}
+// Point d'historique le plus récent antérieur ou égal à une date donnée, et
+// qui porte le détail. Renvoie null si l'historique ne remonte pas si loin.
+function getAvancementDetailAt(dateISO) {
+  const h = state.avancementHistory || {};
+  let withDet = null, any = null;
+  for (const k of Object.keys(h).sort()) {
+    if (k > dateISO) break;
+    if (!h[k]) continue;
+    any = { date: k, pct: h[k].pct, zones: h[k].zones || {} };
+    if (h[k].det) withDet = { date: k, det: h[k].det };
+  }
+  return { withDet, any };
+}
+// Périodes de comparaison proposées dans le récapitulatif.
+const RECAP_PERIODS = [
+  { key: '7',   label: '7 j',  days: 7 },
+  { key: '30',  label: '30 j', days: 30 },
+  { key: 'all', label: 'Depuis le début', days: null },
+];
+function getRecapPeriod() {
+  return RECAP_PERIODS.find(p => p.key === state.recapPeriod) || RECAP_PERIODS[0];
+}
+// Référence de comparaison : le détail d'il y a N jours, ou « tout à zéro »
+// pour la période « depuis le début » (le chantier a commencé à 0 %).
+function getRecapBaseline() {
+  const period = getRecapPeriod();
+  if (period.days == null) return { period, zero: true, date: null, det: null, zones: null };
+  const target = dayToISO(isoToDay(todayISO()) - period.days);
+  const found = getAvancementDetailAt(target);
+  return {
+    period, zero: false,
+    date: (found.withDet || found.any || {}).date || null,
+    det: found.withDet ? found.withDet.det : null,
+    // Les % par bâtiment survivent à la purge du détail : on s'en sert en
+    // repli quand seule la ligne « bâtiment » est demandée.
+    zones: found.any ? found.any.zones : null,
+  };
 }
 // Série d'historique du périmètre : le global, ou l'avancement du bâtiment
 // si un bâtiment est sélectionné. Les points antérieurs à l'enregistrement
@@ -4171,6 +4240,20 @@ function renderRecap() {
   mkChip('', 'Tout le projet', full.pct);
   for (const b of full.buildings) mkChip(b.id, b.name, b.pct);
   pickerEl.appendChild(chips);
+  // Période de comparaison : alimente les colonnes « variation » de la
+  // matrice et du récapitulatif par tâche.
+  const periods = dbEl('div', 'db-periods');
+  periods.appendChild(dbEl('span', 'db-periods-label', 'Variation'));
+  for (const per of RECAP_PERIODS) {
+    const b = dbEl('button', 'db-period' + (getRecapPeriod().key === per.key ? ' is-on' : ''), per.label);
+    b.type = 'button';
+    b.title = per.days == null
+      ? 'Variation depuis le démarrage du chantier'
+      : 'Variation sur les ' + per.days + ' derniers jours';
+    b.addEventListener('click', () => { state.recapPeriod = per.key; save(); renderRecap(); });
+    periods.appendChild(b);
+  }
+  pickerEl.appendChild(periods);
   const exportBtn = dbEl('button', 'db-export', 'Exporter en PDF');
   exportBtn.type = 'button';
   exportBtn.addEventListener('click', () => {
@@ -4189,7 +4272,7 @@ function renderRecap() {
   const velocity = computeAvancementVelocity(scope);
 
   contentEl.appendChild(buildDbKpis(model, planning, velocity));
-  contentEl.appendChild(buildDbCurve(model, planning, scope));
+  contentEl.appendChild(buildDbCurve(model, planning, scope, velocity));
   const panels = [];
   if (!scope && full.buildings.length > 1) panels.push(buildDbBuildings(model));
   panels.push(buildDbMatrix(model, scope));
@@ -4300,20 +4383,55 @@ function buildDbKpis(model, planning, velocity) {
   return row;
 }
 
-// ----- 2. Courbe d'avancement (réel vs théorique) -----
-function buildDbCurve(model, planning, scope) {
+// ----- 2. Courbe d'avancement -----
+// Quatre tracés se superposent : l'avancement réel, la trajectoire théorique
+// (linéaire sur la période), le rythme à tenir (du jour à 100 % à l'échéance)
+// et la projection au rythme observé (du jour à 100 % à la date projetée).
+// Un curseur au survol donne la valeur à n'importe quelle date, et une
+// bascule affiche l'axe en % ou en heures.
+function buildDbCurve(model, planning, scope, velocity) {
   const card = dbCard('Courbe d\'avancement');
   const serie = getAvancementSeries(scope);
   const keys = serie.map(p => p.date);
   const hist = {};
   for (const p of serie) hist[p.date] = { pct: p.pct };
+  // Les heures acquises ne sont mémorisées qu'au niveau global ; pour un
+  // bâtiment on les reconstitue à partir du % et de son budget du jour.
+  const rawHist = state.avancementHistory || {};
+  const hBudget = model.hBudget;
+  // La bascule n'a de sens qu'en pondération « heures » : sans ratio saisi,
+  // model.hBudget est une somme de quantités, pas des heures.
+  const canHours = model.weighting === 'heures' && hBudget > 0;
+  const mode = (state.recapCurveMode === 'heures' && canHours) ? 'heures' : 'pct';
+  const yMax = mode === 'heures' ? hBudget : 100;
+  const valOf = (dateKey, pct) => {
+    if (mode !== 'heures') return pct;
+    const point = rawHist[dateKey];
+    if (!scope && point && typeof point.hDone === 'number') return point.hDone;
+    return (pct / 100) * hBudget;
+  };
+  const fmtVal = (v) => mode === 'heures' ? formatHours(v) + ' h' : formatPct(Math.round(v * 10) / 10) + ' %';
+
+  // Bascule % / heures : la lecture en heures est celle du droit à dépenser.
+  if (canHours) {
+    const seg = dbEl('div', 'db-curve-modes');
+    for (const [key, label] of [['pct', '%'], ['heures', 'Heures']]) {
+      const b = dbEl('button', 'db-curve-mode' + (mode === key ? ' is-on' : ''), label);
+      b.type = 'button';
+      b.title = key === 'pct' ? 'Axe en pourcentage d\'avancement' : 'Axe en heures de main-d\'œuvre acquises';
+      b.addEventListener('click', () => { state.recapCurveMode = key; save(); renderRecap(); });
+      seg.appendChild(b);
+    }
+    card.querySelector('.db-card-head').appendChild(seg);
+  }
+
   // Le viewBox suit la largeur d'écran : sans cela, l'étirement d'un
   // canevas 760×220 sur un téléphone déforme les libellés d'axes — et sur un
   // 24 pouces, la même courbe s'étirerait sur près de 500 px de haut.
   const vw = window.innerWidth || 1024;
   const narrow = vw < 700;
-  const W = narrow ? 400 : (vw >= 1400 ? 1200 : 760), H = narrow ? 240 : 220;
-  const PAD_L = 38, PAD_R = 14, PAD_T = 12, PAD_B = 26;
+  const W = narrow ? 400 : (vw >= 1400 ? 1200 : 760), H = narrow ? 250 : 232;
+  const PAD_L = mode === 'heures' ? 46 : 38, PAD_R = 14, PAD_T = 12, PAD_B = 26;
 
   if (!keys.length) {
     card.appendChild(dbEl('p', 'db-empty', scope
@@ -4321,15 +4439,19 @@ function buildDbCurve(model, planning, scope) {
       : 'La courbe se construit automatiquement : un point est enregistré chaque jour où l\'avancement évolue.'));
     return card;
   }
-  // Étendue temporelle : le planning s'il existe, sinon l'historique.
+  // Étendue temporelle : le planning s'il existe, l'historique, et la date
+  // de fin projetée si elle sort de la période — sinon la droite serait
+  // tronquée au bord droit du graphique.
   const day = 86400000;
-  const firstHist = new Date(keys[0] + 'T00:00:00').getTime();
-  const lastHist = new Date(keys[keys.length - 1] + 'T00:00:00').getTime();
-  const t0 = planning ? Math.min(firstHist, new Date(planning.start + 'T00:00:00').getTime()) : firstHist;
-  const t1 = planning ? Math.max(lastHist, new Date(planning.end + 'T00:00:00').getTime()) : Math.max(lastHist, t0 + day);
+  const ms = (iso) => new Date(iso + 'T00:00:00').getTime();
+  const firstHist = ms(keys[0]);
+  const lastHist = ms(keys[keys.length - 1]);
+  let t0 = planning ? Math.min(firstHist, ms(planning.start)) : firstHist;
+  let t1 = planning ? Math.max(lastHist, ms(planning.end)) : Math.max(lastHist, t0 + day);
+  if (velocity && velocity.etaISO) t1 = Math.max(t1, ms(velocity.etaISO));
   const span = Math.max(day, t1 - t0);
-  const x = (ms) => PAD_L + ((ms - t0) / span) * (W - PAD_L - PAD_R);
-  const y = (pct) => PAD_T + (1 - Math.max(0, Math.min(100, pct)) / 100) * (H - PAD_T - PAD_B);
+  const x = (msVal) => PAD_L + ((msVal - t0) / span) * (W - PAD_L - PAD_R);
+  const y = (v) => PAD_T + (1 - Math.max(0, Math.min(yMax, v)) / yMax) * (H - PAD_T - PAD_B);
 
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
@@ -4340,33 +4462,57 @@ function buildDbCurve(model, planning, scope) {
     return el;
   };
   // Grille horizontale + graduations
-  for (const p of [0, 25, 50, 75, 100]) {
-    svg.appendChild(mk('line', { x1: PAD_L, x2: W - PAD_R, y1: y(p), y2: y(p), class: 'db-curve-grid' }));
-    const lab = mk('text', { x: PAD_L - 6, y: y(p) + 4, class: 'db-curve-axis', 'text-anchor': 'end' });
-    lab.textContent = p + '%';
+  for (const q of [0, 0.25, 0.5, 0.75, 1]) {
+    const v = yMax * q;
+    svg.appendChild(mk('line', { x1: PAD_L, x2: W - PAD_R, y1: y(v), y2: y(v), class: 'db-curve-grid' }));
+    const lab = mk('text', { x: PAD_L - 6, y: y(v) + 4, class: 'db-curve-axis', 'text-anchor': 'end' });
+    lab.textContent = mode === 'heures' ? formatHours(v) : Math.round(q * 100) + '%';
     svg.appendChild(lab);
   }
-  // Trajectoire théorique (linéaire de 0 à 100 sur la durée du chantier)
-  if (planning) {
-    const ps = new Date(planning.start + 'T00:00:00').getTime();
-    const pe = new Date(planning.end + 'T00:00:00').getTime();
-    svg.appendChild(mk('line', { x1: x(ps), y1: y(0), x2: x(pe), y2: y(100), class: 'db-curve-theory' }));
+  // Repères de fin de bâtiment (période propre saisie dans le planning)
+  const markers = [];
+  if (!scope) {
+    for (const b of getBuildings()) {
+      const d = (state.zoneDates || {})[b.id];
+      if (!d || !d.start || !d.end) continue;
+      const t = ms(d.end);
+      if (t < t0 || t > t1) continue;
+      markers.push({ name: b.name || '(bâtiment)', iso: d.end, x: x(t), color: ganttZoneColor(b.id) });
+    }
   }
-  // Courbe de projection : du point d'avancement du jour jusqu'à 100 % à la
-  // date de fin. Sa pente EST le rythme à tenir affiché dans « Calendrier ».
+  for (const mkr of markers) {
+    const line = mk('line', { x1: mkr.x, x2: mkr.x, y1: PAD_T, y2: H - PAD_B, class: 'db-curve-marker' });
+    line.setAttribute('stroke', mkr.color);
+    const t = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    t.textContent = mkr.name + ' — fin le ' + fmtFR(mkr.iso);
+    line.appendChild(t);
+    svg.appendChild(line);
+    const dot = mk('circle', { cx: mkr.x, cy: PAD_T + 3, r: 3, class: 'db-curve-marker-dot' });
+    dot.setAttribute('fill', mkr.color);
+    dot.appendChild(t.cloneNode(true));
+    svg.appendChild(dot);
+  }
+  // Trajectoire théorique (linéaire de 0 à 100 % sur la durée du chantier)
+  if (planning) {
+    svg.appendChild(mk('line', { x1: x(ms(planning.start)), y1: y(0), x2: x(ms(planning.end)), y2: y(yMax), class: 'db-curve-theory' }));
+  }
+  // Projections : rythme à tenir (vert) et rythme observé (bleu ardoise)
+  const lastKey = keys[keys.length - 1];
   const lastPct = serie[serie.length - 1].pct;
+  const lastVal = valOf(lastKey, lastPct);
+  const fromMs = Math.max(ms(todayISO()), lastHist);
   const target = computeAvancementTarget(lastPct, planning);
-  const todayMs = new Date(todayISO() + 'T00:00:00').getTime();
   const showTarget = !!(target && target.perWeek != null && !target.done);
   if (showTarget) {
-    const pe = new Date(planning.end + 'T00:00:00').getTime();
-    const from = Math.max(todayMs, new Date(keys[keys.length - 1] + 'T00:00:00').getTime());
-    svg.appendChild(mk('line', {
-      x1: x(from), y1: y(lastPct), x2: x(pe), y2: y(100), class: 'db-curve-target',
-    }));
+    svg.appendChild(mk('line', { x1: x(fromMs), y1: y(lastVal), x2: x(ms(planning.end)), y2: y(yMax), class: 'db-curve-target' }));
+  }
+  const showEta = !!(velocity && velocity.etaISO && lastPct < 99.95);
+  if (showEta) {
+    svg.appendChild(mk('line', { x1: x(fromMs), y1: y(lastVal), x2: x(ms(velocity.etaISO)), y2: y(yMax), class: 'db-curve-eta' }));
+    svg.appendChild(mk('circle', { cx: x(ms(velocity.etaISO)), cy: y(yMax), r: 3.5, class: 'db-curve-eta-dot' }));
   }
   // Courbe réelle
-  const pts = keys.map(k => ({ x: x(new Date(k + 'T00:00:00').getTime()), y: y(hist[k].pct), k, pct: hist[k].pct }));
+  const pts = keys.map(k => ({ x: x(ms(k)), y: y(valOf(k, hist[k].pct)), k, pct: hist[k].pct, val: valOf(k, hist[k].pct) }));
   if (pts.length > 1) {
     const d = pts.map((p, i) => (i ? 'L' : 'M') + p.x.toFixed(1) + ' ' + p.y.toFixed(1)).join(' ');
     const area = d + ` L${pts[pts.length - 1].x.toFixed(1)} ${y(0)} L${pts[0].x.toFixed(1)} ${y(0)} Z`;
@@ -4376,7 +4522,7 @@ function buildDbCurve(model, planning, scope) {
   const lastPt = pts[pts.length - 1];
   svg.appendChild(mk('circle', { cx: lastPt.x, cy: lastPt.y, r: 4.5, class: 'db-curve-dot' }));
   // Aujourd'hui
-  const todayX = x(new Date(todayISO() + 'T00:00:00').getTime());
+  const todayX = x(ms(todayISO()));
   if (todayX >= PAD_L && todayX <= W - PAD_R) {
     svg.appendChild(mk('line', { x1: todayX, y1: PAD_T, x2: todayX, y2: H - PAD_B, class: 'db-curve-today' }));
   }
@@ -4388,23 +4534,84 @@ function buildDbCurve(model, planning, scope) {
   lab1.textContent = fmtFR(new Date(t1).toISOString().slice(0, 10));
   svg.appendChild(lab1);
 
+  // ----- Curseur de lecture -----
+  // Une ligne verticale, un point sur la courbe et une étiquette suivent le
+  // pointeur : on lit la valeur à n'importe quelle date sans la deviner.
+  const cursor = mk('g', { class: 'db-curve-cursor', visibility: 'hidden' });
+  const cLine = mk('line', { y1: PAD_T, y2: H - PAD_B, class: 'db-curve-cursor-line' });
+  const cDot = mk('circle', { r: 4, class: 'db-curve-cursor-dot' });
+  cursor.append(cLine, cDot);
+  svg.appendChild(cursor);
+  const hit = mk('rect', { x: PAD_L, y: PAD_T, width: Math.max(1, W - PAD_L - PAD_R), height: Math.max(1, H - PAD_T - PAD_B), class: 'db-curve-hit' });
+  svg.appendChild(hit);
+
   const box = dbEl('div', 'db-curve-wrap');
   box.appendChild(svg);
+  const tip = dbEl('div', 'db-curve-tip');
+  tip.hidden = true;
+  box.appendChild(tip);
   card.appendChild(box);
 
+  const moveCursor = (ev) => {
+    const r = svg.getBoundingClientRect();
+    if (!(r.width > 0)) return;
+    const vx = ((ev.clientX - r.left) / r.width) * W;
+    let best = pts[0], bestD = Infinity;
+    for (const p of pts) {
+      const d2 = Math.abs(p.x - vx);
+      if (d2 < bestD) { bestD = d2; best = p; }
+    }
+    cursor.setAttribute('visibility', 'visible');
+    cLine.setAttribute('x1', best.x); cLine.setAttribute('x2', best.x);
+    cDot.setAttribute('cx', best.x); cDot.setAttribute('cy', best.y);
+    tip.hidden = false;
+    tip.innerHTML = '';
+    tip.appendChild(dbEl('span', 'db-curve-tip-date', fmtFR(best.k)));
+    tip.appendChild(dbEl('span', 'db-curve-tip-val', formatPct(Math.round(best.pct * 10) / 10) + ' %'));
+    if (canHours) {
+      tip.appendChild(dbEl('span', 'db-curve-tip-sub',
+        formatHours(mode === 'heures' ? best.val : (best.pct / 100) * hBudget) + ' h acquises'));
+    }
+    // L'étiquette suit le point mais reste entièrement dans le cadre : elle
+    // est centrée sur sa position, il faut donc borner sur sa demi-largeur.
+    const px = (best.x / W) * r.width;
+    const half = tip.offsetWidth / 2 + 2;
+    tip.style.left = Math.max(half, Math.min(Math.max(half, r.width - half), px)) + 'px';
+    // Au doigt, il n'y a pas de « sortie du survol » : on referme tout seul.
+    if (ev.pointerType === 'touch') {
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(hideCursor, 2500);
+    }
+  };
+  let hideTimer = null;
+  const hideCursor = () => {
+    cursor.setAttribute('visibility', 'hidden');
+    tip.hidden = true;
+  };
+  hit.addEventListener('pointermove', (ev) => { if (ev.pointerType !== 'touch') moveCursor(ev); });
+  hit.addEventListener('pointerdown', moveCursor);
+  hit.addEventListener('pointerleave', () => { clearTimeout(hideTimer); hideCursor(); });
+
   const legend = dbEl('div', 'db-legend');
-  const mkLeg = (cls, text) => {
+  const mkLeg = (cls, text, title) => {
     const l = dbEl('span', 'db-legend-item');
     l.appendChild(dbEl('span', 'db-legend-swatch ' + cls));
     l.appendChild(dbEl('span', null, text));
+    if (title) l.title = title;
     legend.appendChild(l);
   };
   mkLeg('is-real', 'Avancement réel');
   if (planning) mkLeg('is-theory', 'Trajectoire théorique');
   if (showTarget) {
     mkLeg('is-target', 'Rythme à tenir — ' + formatPct(Math.round(target.perWeek * 10) / 10)
-      + ' %/semaine jusqu\'au ' + fmtFR(target.end));
+      + ' %/semaine jusqu\'au ' + fmtFR(target.end),
+      'Ce qu\'il faut produire chaque semaine pour finir à la date objectif.');
   }
+  if (showEta) {
+    mkLeg('is-eta', 'Rythme actuel — fin projetée le ' + fmtFR(velocity.etaISO),
+      'Prolongation du rythme observé sur les ' + velocity.windowWorkDays + ' derniers jours ouvrés.');
+  }
+  if (markers.length) mkLeg('is-marker', 'Fin des bâtiments', markers.map(m => m.name + ' : ' + fmtFR(m.iso)).join(' · '));
   mkLeg('is-today', 'Aujourd\'hui');
   card.appendChild(legend);
   if (target && !target.done && target.perWeek == null) {
@@ -4449,7 +4656,9 @@ function buildDbBuildings(model) {
 
 // ----- 4. Matrice bâtiment × ouvrage -----
 function buildDbMatrix(model, scope) {
-  const card = dbCard('Matrice ' + (scope ? 'zones' : 'bâtiments') + ' × ouvrages');
+  const base = getRecapBaseline();
+  const card = dbCard('Matrice ' + (scope ? 'zones' : 'bâtiments') + ' × ouvrages',
+    'variation ' + (base.period.days == null ? 'depuis le début' : 'sur ' + base.period.days + ' j'));
   const rows = scope
     ? model.zones.slice().sort((a, b) => a.label.localeCompare(b.label, 'fr')).map(z => ({ id: z.id, name: z.label.split(' › ').slice(1).join(' › ') || z.label }))
     : model.buildings.map(b => ({ id: b.id, name: b.name }));
@@ -4479,6 +4688,12 @@ function buildDbMatrix(model, scope) {
     th.title = c.name + ' — ' + formatPct(Math.round(c.weight * 10) / 10) + ' % du projet';
     trh.appendChild(th);
   }
+  const thDelta = dbEl('th', 'db-matrix-delta-col');
+  thDelta.appendChild(dbEl('span', null, 'Δ'));
+  thDelta.title = base.period.days == null
+    ? 'Avancement gagné depuis le début du chantier'
+    : 'Points d\'avancement gagnés sur les ' + base.period.days + ' derniers jours';
+  trh.appendChild(thDelta);
   thead.appendChild(trh);
   table.appendChild(thead);
   const tbody = dbEl('tbody');
@@ -4495,13 +4710,36 @@ function buildDbMatrix(model, scope) {
       } else {
         // Teinte pleine dont l'opacité suit l'avancement : la valeur reste
         // lisible à 5 % comme à 100 %, contrairement à un remplissage partiel.
-        td.classList.add(dbPctClass(v));
+        td.classList.add(dbPctClass(v), 'is-clickable');
         td.textContent = Math.round(v) + '';
-        td.title = r.name + ' — ' + c.name + ' : ' + formatPct(Math.round(v * 10) / 10) + ' %';
+        td.title = r.name + ' — ' + c.name + ' : ' + formatPct(Math.round(v * 10) / 10) + ' %'
+          + '\nCliquer pour ouvrir la saisie d\'avancement sur cet ouvrage';
         td.style.background = dbCellTint(v);
+        td.tabIndex = 0;
+        td.setAttribute('role', 'button');
+        td.setAttribute('aria-label', r.name + ' — ' + c.name + ' : ouvrir la saisie d\'avancement');
+        const go = () => openAvancementAt(r.id, c.setupId, !scope);
+        td.addEventListener('click', go);
+        td.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); go(); }
+        });
       }
       tr.appendChild(td);
     }
+    // Variation de la ligne sur la période : lue dans l'historique.
+    const dPct = matrixRowDelta(r.id, base, model);
+    const tdD = dbEl('td', 'db-matrix-delta');
+    if (dPct == null) {
+      tdD.classList.add('is-na');
+      tdD.textContent = '—';
+      tdD.title = 'Pas d\'historique sur cette période';
+    } else {
+      tdD.classList.add(dPct > 0.05 ? 'is-pos' : (dPct < -0.05 ? 'is-neg' : 'is-flat'));
+      tdD.textContent = (dPct > 0.05 ? '+' : (dPct < -0.05 ? '−' : '')) + formatPct(Math.abs(Math.round(dPct * 10) / 10));
+      tdD.title = r.name + ' : ' + (dPct >= 0 ? '+' : '−') + formatPct(Math.abs(Math.round(dPct * 10) / 10))
+        + ' points ' + (base.period.days == null ? 'depuis le début' : 'sur ' + base.period.days + ' j');
+    }
+    tr.appendChild(tdD);
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
@@ -4513,96 +4751,253 @@ function buildDbMatrix(model, scope) {
   return card;
 }
 
-// ----- 5. Détail par ouvrage et par tâche -----
-function buildDbOuvrages(model) {
-  const card = dbCard('Récapitulatif par tâche');
-  const list = dbEl('div', 'db-ouvrages');
-  for (const o of model.ouvrages) {
-    const box = dbEl('details', 'db-ouvrage');
-    const sum = dbEl('summary', 'db-ouvrage-head');
-    const idBox = dbEl('div', 'db-ouvrage-id');
-    idBox.appendChild(dbEl('span', 'db-ouvrage-name', o.name));
-    idBox.appendChild(dbEl('span', 'db-ouvrage-meta',
-      formatQty(o.qtyTotal) + ' ' + o.unit
-      + (model.weighting === 'heures'
-        ? ' · ' + formatHours(o.hDone) + ' / ' + formatHours(o.hBudget) + ' h'
-          + ' · reste ' + formatHours(Math.max(0, o.hBudget - o.hDone)) + ' h'
-        : ' · ' + formatQty(o.qtyDone) + ' ' + o.unit + ' réalisés'
-          + ' · reste ' + formatQty(o.qtyRemaining) + ' ' + o.unit)));
-    sum.appendChild(idBox);
-    const stats = dbEl('div', 'db-ouvrage-stats');
-    const w = dbEl('span', 'db-ouvrage-weight', formatPct(Math.round(o.weight * 10) / 10) + ' % du projet');
-    w.title = 'Poids de cet ouvrage dans l\'avancement global';
-    stats.appendChild(w);
-    stats.appendChild(dbEl('span', 'db-ouvrage-pct ' + dbPctClass(o.pct), formatPct(Math.round(o.pct * 10) / 10) + ' %'));
-    sum.appendChild(stats);
-    box.appendChild(sum);
-    box.appendChild(dbBar(o.pct));
-
-    // Récapitulatif par tâche : quantité totale / réalisée, puis heures
-    // budgétées / réalisées / restantes. Les quantités d'un même ouvrage se
-    // recouvrent (chaque tâche traite les mêmes m²) : seules les colonnes
-    // d'heures sont additionnables, et ce sont elles qu'on totalise.
-    const tbl = dbEl('table', 'db-tasks');
-    const thead = dbEl('thead');
-    const trh = dbEl('tr');
-    const COLS = [
-      ['Tâche', ''],
-      ['Qté totale', 'num'],
-      ['Qté réalisée', 'num'],
-      ['H. budget', 'num is-hcol'],
-      ['H. réalisées', 'num'],
-      ['H. restantes', 'num'],
-      ['%', 'num'],
-    ];
-    for (const [label, cls] of COLS) trh.appendChild(dbEl('th', cls, label));
-    thead.appendChild(trh);
-    tbl.appendChild(thead);
-    const tbody = dbEl('tbody');
-    const noHours = model.weighting !== 'heures';
-    for (const t of o.tasks) {
-      const tr = dbEl('tr', t.excluded ? 'is-excluded' : (t.pct >= 99.95 ? 'is-done' : ''));
-      const name = dbEl('td', 'db-task-name');
-      name.appendChild(dbEl('span', null, t.name));
-      if (t.excluded) name.appendChild(dbEl('span', 'db-task-tag', 'hors ratio'));
-      tr.appendChild(name);
-      tr.appendChild(dbEl('td', 'num', formatQty(t.qtyTotal) + ' ' + o.unit));
-      tr.appendChild(dbEl('td', 'num', formatQty(t.qtyDone) + ' ' + o.unit));
-      const h = (v) => (t.excluded || noHours) ? '—' : formatHours(v) + ' h';
-      tr.appendChild(dbEl('td', 'num is-hcol', h(t.hBudget)));
-      tr.appendChild(dbEl('td', 'num', h(t.hDone)));
-      tr.appendChild(dbEl('td', 'num db-task-rest', h(t.hRemaining)));
-      tr.appendChild(dbEl('td', 'num db-task-pct ' + dbPctClass(t.pct), formatPct(Math.round(t.pct * 10) / 10) + ' %'));
-      tbody.appendChild(tr);
-    }
-    tbl.appendChild(tbody);
-    if (!noHours) {
-      const tfoot = dbEl('tfoot');
-      const trf = dbEl('tr');
-      trf.appendChild(dbEl('td', 'db-task-name', 'Total ouvrage'));
-      trf.appendChild(dbEl('td', 'num', formatQty(o.qtyTotal) + ' ' + o.unit));
-      // « éq. » : les quantités des tâches se recouvrent, leur somme n'a pas
-      // de sens. On affiche la quantité ÉQUIVALENTE réalisée de l'ouvrage,
-      // c'est-à-dire la quantité totale ramenée à son avancement en heures.
-      const eq = dbEl('td', 'num', formatQty(o.qtyDone) + ' ' + o.unit + ' éq.');
-      eq.title = 'Quantité équivalente réalisée : ' + formatQty(o.qtyTotal) + ' ' + o.unit
-        + ' × ' + formatPct(Math.round(o.pct * 10) / 10) + ' % d\'avancement. '
-        + 'Les quantités des tâches portent toutes sur le même métré : elles ne s\'additionnent pas.';
-      trf.appendChild(eq);
-      trf.appendChild(dbEl('td', 'num is-hcol', formatHours(o.hBudget) + ' h'));
-      trf.appendChild(dbEl('td', 'num', formatHours(o.hDone) + ' h'));
-      trf.appendChild(dbEl('td', 'num db-task-rest', formatHours(Math.max(0, o.hBudget - o.hDone)) + ' h'));
-      trf.appendChild(dbEl('td', 'num db-task-pct ' + dbPctClass(o.pct), formatPct(Math.round(o.pct * 10) / 10) + ' %'));
-      tfoot.appendChild(trf);
-      tbl.appendChild(tfoot);
-    }
-    const tw = dbEl('div', 'db-tasks-wrap');
-    tw.appendChild(tbl);
-    box.appendChild(tw);
-    list.appendChild(box);
+// Variation d'avancement d'une ligne de matrice (bâtiment ou zone) sur la
+// période choisie. « Depuis le début » vaut l'avancement courant, le chantier
+// ayant démarré à zéro ; sinon on lit le détail archivé.
+function matrixRowDelta(rowId, base, model) {
+  const cur = matrixRowPct(rowId, model);
+  if (cur == null) return null;
+  if (base.zero) return cur;               // tout est parti de 0 %
+  let before = base.det && base.det.z ? base.det.z[rowId] : undefined;
+  if (typeof before !== 'number' && base.zones) before = base.zones[rowId];
+  if (typeof before !== 'number') return null;
+  return cur - before;
+}
+function matrixRowPct(rowId, model) {
+  const b = model.buildings.find(x => x.id === rowId);
+  if (b) return b.pct;
+  const z = model.zones.find(x => x.id === rowId);
+  return z ? z.pct : null;
+}
+// Ouvre la saisie d'avancement sur la zone visée, en mettant en évidence
+// l'ouvrage cliqué dans la matrice. `isBuilding` : on descend alors sur la
+// première zone porteuse de cet ouvrage.
+function openAvancementAt(rowId, setupId, isBuilding) {
+  let zoneId = rowId;
+  if (isBuilding) {
+    zoneId = getDescendantZones(rowId).find(zid => getZoneOuvrages(zid).some(o => o.setup.id === setupId)) || null;
+    if (!zoneId) { showToast('Aucune zone de ce bâtiment ne porte cet ouvrage', 'error'); return; }
   }
+  state.avancementZoneId = zoneId;
+  save();
+  switchSubPage('avancement', 'fiche');
+  renderAvancement();
+  // Mise en évidence de la section de l'ouvrage, puis défilement dessus.
+  requestAnimationFrame(() => {
+    const headers = [...document.querySelectorAll('#progresslist .progress-section-header')];
+    const setup = state.taskSetups.find(s2 => s2.id === setupId);
+    const wanted = setup ? (setup.name || '(ouvrage sans nom)') : null;
+    const target = headers.find(h => (h.querySelector('.progress-section-name') || {}).textContent === wanted);
+    if (!target) return;
+    target.classList.add('is-flash');
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setTimeout(() => target.classList.remove('is-flash'), 2200);
+  });
+}
+
+// ----- 5. Détail par ouvrage et par tâche -----
+// Tri, recherche et dépliage global en tête de carte : avec vingt ouvrages,
+// retrouver une tâche à la main devient vite pénible. La colonne « Δ » donne
+// les heures acquises sur la période choisie — « qui a bougé cette semaine ».
+const DB_OUVRAGE_SORTS = [
+  { key: 'poids',  label: 'Poids',      cmp: (a, b) => b.hBudget - a.hBudget },
+  { key: 'reste',  label: 'Reste',      cmp: (a, b) => (b.hBudget - b.hDone) - (a.hBudget - a.hDone) },
+  { key: 'pct',    label: 'Avancement', cmp: (a, b) => a.pct - b.pct },
+  { key: 'nom',    label: 'Nom',        cmp: (a, b) => (a.name || '').localeCompare(b.name || '', 'fr') },
+];
+let _dbOuvrageSort = 'poids';
+let _dbOuvrageQuery = '';
+let _dbOuvrageOpen = false;
+
+function buildDbOuvrages(model) {
+  const base = getRecapBaseline();
+  const card = dbCard('Récapitulatif par tâche');
+  const tools = dbEl('div', 'db-ouvrages-tools');
+
+  const search = document.createElement('input');
+  search.type = 'search';
+  search.className = 'db-ouvrage-search';
+  search.placeholder = 'Filtrer un ouvrage ou une tâche…';
+  search.value = _dbOuvrageQuery;
+  search.addEventListener('input', () => { _dbOuvrageQuery = search.value; refresh(true); });
+  tools.appendChild(search);
+
+  const sortBox = dbEl('div', 'db-ouvrage-sorts');
+  sortBox.appendChild(dbEl('span', 'db-ouvrage-sorts-label', 'Trier par'));
+  for (const so of DB_OUVRAGE_SORTS) {
+    const b = dbEl('button', 'db-ouvrage-sort' + (_dbOuvrageSort === so.key ? ' is-on' : ''), so.label);
+    b.type = 'button';
+    b.addEventListener('click', () => { _dbOuvrageSort = so.key; refresh(); });
+    sortBox.appendChild(b);
+  }
+  tools.appendChild(sortBox);
+
+  const toggle = dbEl('button', 'db-ouvrage-expand', _dbOuvrageOpen ? 'Tout replier' : 'Tout déplier');
+  toggle.type = 'button';
+  toggle.addEventListener('click', () => { _dbOuvrageOpen = !_dbOuvrageOpen; refresh(); });
+  tools.appendChild(toggle);
+  card.appendChild(tools);
+
+  const list = dbEl('div', 'db-ouvrages');
   card.appendChild(list);
+  const note = dbEl('p', 'db-empty');
+  note.hidden = true;
+  card.appendChild(note);
+
+  // Redessine la liste sans reconstruire la carte : la recherche garde son
+  // curseur et l'état de dépliage reste maîtrisé.
+  function refresh(keepFocus) {
+    list.innerHTML = '';
+    const q = _dbOuvrageQuery.trim().toLowerCase();
+    const sort = DB_OUVRAGE_SORTS.find(x => x.key === _dbOuvrageSort) || DB_OUVRAGE_SORTS[0];
+    const matches = (o) => {
+      if (!q) return null;                       // pas de filtre
+      if ((o.name || '').toLowerCase().includes(q)) return o.tasks;
+      const hit = o.tasks.filter(t => (t.name || '').toLowerCase().includes(q));
+      return hit.length ? hit : false;
+    };
+    let shown = 0;
+    for (const o of model.ouvrages.slice().sort(sort.cmp)) {
+      const m = matches(o);
+      if (m === false) continue;
+      shown++;
+      list.appendChild(buildDbOuvrageBox(o, model, base, m || o.tasks, !!q || _dbOuvrageOpen));
+    }
+    note.hidden = shown > 0;
+    if (!shown) note.textContent = 'Aucun ouvrage ni tâche ne correspond à « ' + _dbOuvrageQuery.trim() + ' ».';
+    toggle.textContent = _dbOuvrageOpen ? 'Tout replier' : 'Tout déplier';
+    for (const b of sortBox.querySelectorAll('.db-ouvrage-sort')) {
+      b.classList.toggle('is-on', b.textContent === sort.label);
+    }
+    if (keepFocus) search.focus();
+  }
+  refresh();
   return card;
+}
+
+// Heures acquises par un ouvrage / une tâche sur la période de comparaison.
+// Renvoie null quand l'historique ne remonte pas assez loin.
+function dbTaskDelta(base, setupId, taskId, currentHDone) {
+  if (base.zero) return currentHDone;          // depuis le début : tout est gagné
+  if (!base.det || !base.det.o) return null;
+  const o = base.det.o[setupId];
+  if (!o) return null;
+  if (!taskId) return currentHDone - (Number(o.d) || 0);
+  const before = o.t ? o.t[taskId] : undefined;
+  if (typeof before !== 'number') return null;
+  return currentHDone - before;
+}
+function dbDeltaCell(cls, delta, base) {
+  const td = dbEl('td', cls);
+  if (delta == null) {
+    td.classList.add('is-na');
+    td.textContent = '—';
+    td.title = 'Pas d\'historique sur cette période';
+    return td;
+  }
+  const r = Math.round(delta * 10) / 10;
+  td.classList.add(r > 0.05 ? 'is-pos' : (r < -0.05 ? 'is-neg' : 'is-flat'));
+  td.textContent = (r > 0.05 ? '+' : (r < -0.05 ? '−' : '')) + formatHours(Math.abs(r)) + ' h';
+  td.title = 'Heures acquises ' + (base.period.days == null ? 'depuis le début' : 'sur les ' + base.period.days + ' derniers jours');
+  return td;
+}
+
+function buildDbOuvrageBox(o, model, base, tasks, open) {
+  const box = dbEl('details', 'db-ouvrage');
+  if (open) box.open = true;
+  const sum = dbEl('summary', 'db-ouvrage-head');
+  const idBox = dbEl('div', 'db-ouvrage-id');
+  idBox.appendChild(dbEl('span', 'db-ouvrage-name', o.name));
+  idBox.appendChild(dbEl('span', 'db-ouvrage-meta',
+    formatQty(o.qtyTotal) + ' ' + o.unit
+    + (model.weighting === 'heures'
+      ? ' · ' + formatHours(o.hDone) + ' / ' + formatHours(o.hBudget) + ' h'
+        + ' · reste ' + formatHours(Math.max(0, o.hBudget - o.hDone)) + ' h'
+      : ' · ' + formatQty(o.qtyDone) + ' ' + o.unit + ' réalisés'
+        + ' · reste ' + formatQty(o.qtyRemaining) + ' ' + o.unit)));
+  sum.appendChild(idBox);
+  const stats = dbEl('div', 'db-ouvrage-stats');
+  const oDelta = dbTaskDelta(base, o.setupId, null, o.hDone);
+  if (oDelta != null && Math.abs(oDelta) >= 0.05) {
+    const d = dbEl('span', 'db-ouvrage-delta ' + (oDelta > 0 ? 'is-pos' : 'is-neg'),
+      (oDelta > 0 ? '+' : '−') + formatHours(Math.abs(oDelta)) + ' h');
+    d.title = 'Heures acquises ' + (base.period.days == null ? 'depuis le début' : 'sur ' + base.period.days + ' j');
+    stats.appendChild(d);
+  }
+  const w = dbEl('span', 'db-ouvrage-weight', formatPct(Math.round(o.weight * 10) / 10) + ' % du projet');
+  w.title = 'Poids de cet ouvrage dans l\'avancement global';
+  stats.appendChild(w);
+  stats.appendChild(dbEl('span', 'db-ouvrage-pct ' + dbPctClass(o.pct), formatPct(Math.round(o.pct * 10) / 10) + ' %'));
+  sum.appendChild(stats);
+  box.appendChild(sum);
+  box.appendChild(dbBar(o.pct));
+
+  // Récapitulatif par tâche : quantité totale / réalisée, puis heures
+  // budgétées / réalisées / restantes. Les quantités d'un même ouvrage se
+  // recouvrent (chaque tâche traite les mêmes m²) : seules les colonnes
+  // d'heures sont additionnables, et ce sont elles qu'on totalise.
+  const tbl = dbEl('table', 'db-tasks');
+  const thead = dbEl('thead');
+  const trh = dbEl('tr');
+  const dLabel = 'Δ ' + (base.period.days == null ? 'total' : base.period.days + ' j');
+  const COLS = [
+    ['Tâche', ''],
+    ['Qté totale', 'num'],
+    ['Qté réalisée', 'num'],
+    ['H. budget', 'num is-hcol'],
+    ['H. réalisées', 'num'],
+    ['H. restantes', 'num'],
+    [dLabel, 'num db-delta-col'],
+    ['%', 'num'],
+  ];
+  for (const [label, cls] of COLS) trh.appendChild(dbEl('th', cls, label));
+  thead.appendChild(trh);
+  tbl.appendChild(thead);
+  const tbody = dbEl('tbody');
+  const noHours = model.weighting !== 'heures';
+  for (const t of tasks) {
+    const tr = dbEl('tr', t.excluded ? 'is-excluded' : (t.pct >= 99.95 ? 'is-done' : ''));
+    const name = dbEl('td', 'db-task-name');
+    name.appendChild(dbEl('span', null, t.name));
+    if (t.excluded) name.appendChild(dbEl('span', 'db-task-tag', 'hors ratio'));
+    tr.appendChild(name);
+    tr.appendChild(dbEl('td', 'num', formatQty(t.qtyTotal) + ' ' + o.unit));
+    tr.appendChild(dbEl('td', 'num', formatQty(t.qtyDone) + ' ' + o.unit));
+    const h = (v) => (t.excluded || noHours) ? '—' : formatHours(v) + ' h';
+    tr.appendChild(dbEl('td', 'num is-hcol', h(t.hBudget)));
+    tr.appendChild(dbEl('td', 'num', h(t.hDone)));
+    tr.appendChild(dbEl('td', 'num db-task-rest', h(t.hRemaining)));
+    tr.appendChild(dbDeltaCell('num db-task-delta',
+      (t.excluded || noHours) ? null : dbTaskDelta(base, o.setupId, t.id, t.hDone), base));
+    tr.appendChild(dbEl('td', 'num db-task-pct ' + dbPctClass(t.pct), formatPct(Math.round(t.pct * 10) / 10) + ' %'));
+    tbody.appendChild(tr);
+  }
+  tbl.appendChild(tbody);
+  if (!noHours) {
+    const tfoot = dbEl('tfoot');
+    const trf = dbEl('tr');
+    trf.appendChild(dbEl('td', 'db-task-name', 'Total ouvrage'));
+    trf.appendChild(dbEl('td', 'num', formatQty(o.qtyTotal) + ' ' + o.unit));
+    // « éq. » : les quantités des tâches se recouvrent, leur somme n'a pas
+    // de sens. On affiche la quantité ÉQUIVALENTE réalisée de l'ouvrage,
+    // c'est-à-dire la quantité totale ramenée à son avancement en heures.
+    const eq = dbEl('td', 'num', formatQty(o.qtyDone) + ' ' + o.unit + ' éq.');
+    eq.title = 'Quantité équivalente réalisée : ' + formatQty(o.qtyTotal) + ' ' + o.unit
+      + ' × ' + formatPct(Math.round(o.pct * 10) / 10) + ' % d\'avancement. '
+      + 'Les quantités des tâches portent toutes sur le même métré : elles ne s\'additionnent pas.';
+    trf.appendChild(eq);
+    trf.appendChild(dbEl('td', 'num is-hcol', formatHours(o.hBudget) + ' h'));
+    trf.appendChild(dbEl('td', 'num', formatHours(o.hDone) + ' h'));
+    trf.appendChild(dbEl('td', 'num db-task-rest', formatHours(Math.max(0, o.hBudget - o.hDone)) + ' h'));
+    trf.appendChild(dbDeltaCell('num db-task-delta', oDelta, base));
+    trf.appendChild(dbEl('td', 'num db-task-pct ' + dbPctClass(o.pct), formatPct(Math.round(o.pct * 10) / 10) + ' %'));
+    tfoot.appendChild(trf);
+    tbl.appendChild(tfoot);
+  }
+  const tw = dbEl('div', 'db-tasks-wrap');
+  tw.appendChild(tbl);
+  box.appendChild(tw);
+  return box;
 }
 
 // ----- 6. Points d'attention -----
@@ -5555,6 +5950,10 @@ function buildEOTPRow(eotp) {
       </button>
     </div>
     <input class="eotp-label" type="text" maxlength="80" placeholder="Libellé (optionnel) : Plomberie phase 1, GO…">
+    <label class="eotp-link" hidden>
+      <span class="eotp-link-label">Ouvrage rattaché</span>
+      <select class="eotp-setup"></select>
+    </label>
   `;
   const code   = li.querySelector('.eotp-code');
   const budget = li.querySelector('.eotp-budget');
@@ -5563,11 +5962,31 @@ function buildEOTPRow(eotp) {
   code.value   = eotp.code || '';
   budget.value = eotp.budget ? fmtPriceForInput(eotp.budget) : '';
   label.value  = eotp.label || '';
+  const linkBox = li.querySelector('.eotp-link');
+  const setupSel = li.querySelector('.eotp-setup');
+  const fillLink = () => {
+    linkBox.hidden = !isHourEOTP(eotp);
+    if (linkBox.hidden) return;
+    setupSel.innerHTML = '';
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = 'Saisie manuelle (aucun ouvrage)';
+    setupSel.appendChild(none);
+    for (const st of state.taskSetups) {
+      const opt = document.createElement('option');
+      opt.value = st.id;
+      opt.textContent = st.name || '(ouvrage sans nom)';
+      setupSel.appendChild(opt);
+    }
+    setupSel.value = eotp.setupId || '';
+  };
+  fillLink();
   applyEOTPUnitButton(unit, eotp);
+  setupSel.addEventListener('change', () => setEOTPSetup(eotp.id, setupSel.value));
   code.addEventListener('input',   () => setEOTPCode(eotp.id, code.value));
   budget.addEventListener('input', () => setEOTPBudget(eotp.id, budget.value));
   label.addEventListener('input',  () => setEOTPLabel(eotp.id, label.value));
-  unit.addEventListener('click',   () => { toggleEOTPUnit(eotp.id); applyEOTPUnitButton(unit, eotp); });
+  unit.addEventListener('click',   () => { toggleEOTPUnit(eotp.id); applyEOTPUnitButton(unit, eotp); fillLink(); });
   li.querySelector('.eotp-remove').addEventListener('click', () => removeEOTP(eotp.id));
   return li;
 }
@@ -9120,7 +9539,7 @@ function getEOTP(code) {
 }
 function addEOTP() {
   if (!Array.isArray(state.eotps)) state.eotps = [];
-  state.eotps.push({ id: 'eotp_' + uid(), code: '', label: '', budget: 0, unit: 'eur' });
+  state.eotps.push({ id: 'eotp_' + uid(), code: '', label: '', budget: 0, unit: 'eur', setupId: '' });
   save();
   renderEOTPsConfig();
 }
@@ -9133,9 +9552,24 @@ function toggleEOTPUnit(id) {
   const e = getEOTPs().find(x => x.id === id);
   if (!e) return;
   e.unit = isHourEOTP(e) ? 'eur' : 'h';
+  if (!isHourEOTP(e)) e.setupId = '';   // le rattachement n'a de sens qu'en heures
   save();
   renderConsommable();
   renderHeures();
+}
+// Rattachement d'une ligne de budget à un ouvrage : le suivi des heures y
+// puise alors quantité totale, quantité réalisée et unité, au lieu de les
+// faire ressaisir. '' = saisie manuelle (comportement d'origine).
+function setEOTPSetup(id, setupId) {
+  const e = getEOTPs().find(x => x.id === id);
+  if (!e) return;
+  e.setupId = state.taskSetups.some(s => s.id === setupId) ? setupId : '';
+  save();
+  renderHeures();
+}
+function getEOTPSetup(eotp) {
+  if (!eotp || !eotp.setupId) return null;
+  return state.taskSetups.find(s => s.id === eotp.setupId) || null;
 }
 function removeEOTP(id) {
   const e = getEOTPs().find(x => x.id === id);
@@ -9438,6 +9872,7 @@ function setHeuresField(eotpId, field, value) {
 }
 
 function renderHeures() {
+  invalidateHeuresModel();
   renderHeuresWeekTabs();
   renderHeuresEOTPSelect();
   renderHeuresTable();
@@ -9503,6 +9938,39 @@ function renderHeuresWeekTabs() {
   add.addEventListener('click', addHeuresWeek);
   el.appendChild(add);
 }
+
+// Le suivi des heures lit l'avancement pour les lignes rattachées à un
+// ouvrage. Le modèle est mémorisé quelques instants : `refreshHeuresComputed`
+// est appelé à chaque frappe, on ne recalcule pas tout le chantier à chaque
+// touche. `renderHeures` repart toujours d'un modèle frais.
+let _heuresModel = null, _heuresModelAt = 0;
+function invalidateHeuresModel() { _heuresModel = null; }
+function getHeuresAvancementModel() {
+  const now = Date.now();
+  if (_heuresModel && now - _heuresModelAt < 1500) return _heuresModel;
+  _heuresModel = computeAvancementModel('');
+  _heuresModelAt = now;
+  return _heuresModel;
+}
+// Ligne de tableau résolue : les champs alimentés par l'ouvrage rattaché
+// écrasent la saisie manuelle, et l'on renvoie l'agrégat pour l'affichage.
+function resolveHeuresRow(eotp, model) {
+  const row = getHeuresRow(eotp.id);
+  const link = eotp.setupId ? (model.ouvrages || []).find(o => o.setupId === eotp.setupId) : null;
+  // Rattachement qui ne donne rien : soit l'ouvrage a été supprimé de
+  // Données → Tâches, soit il n'est encore affecté à aucune zone. La ligne
+  // retombe alors en saisie manuelle, mais on le dit — sans ce signal, elle
+  // afficherait les dernières valeurs recopiées sans qu'on sache pourquoi
+  // elles ne bougent plus.
+  const orphan = !link && !!eotp.setupId;
+  if (link) {
+    row.unite = link.unit || '';
+    row.qteTotal = Math.round(link.qtyTotal * 100) / 100;
+    row.qteRealisee = Math.round(link.qtyDone * 100) / 100;
+  }
+  return { row, link, orphan, setup: eotp.setupId ? getEOTPSetup(eotp) : null };
+}
+const HEURES_AUTO_FIELDS = new Set(['unite', 'qteTotal', 'qteRealisee']);
 
 // Lignes de budget suivies ici : celles dont l'unité est « h ». Une ligne en
 // euros relève de Consommable → Budget, pas du suivi de main-d'œuvre.
@@ -9670,6 +10138,7 @@ function renderHeuresTable() {
     return;
   }
 
+  const model = getHeuresAvancementModel();
   const table = document.createElement('table');
   table.className = 'heures-table';
 
@@ -9704,7 +10173,7 @@ function renderHeuresTable() {
   // TBODY
   const tbody = document.createElement('tbody');
   for (const e of selected) {
-    tbody.appendChild(buildHeuresRow(e));
+    tbody.appendChild(buildHeuresRow(e, model));
   }
   table.appendChild(tbody);
 
@@ -9714,22 +10183,46 @@ function renderHeuresTable() {
   wrap.appendChild(table);
 }
 
-function buildHeuresRow(eotp) {
-  const row = getHeuresRow(eotp.id);
+function buildHeuresRow(eotp, model) {
+  const { row, link, orphan, setup } = resolveHeuresRow(eotp, model || getHeuresAvancementModel());
   const tr = document.createElement('tr');
   tr.setAttribute('data-heures-id', eotp.id);
+  if (link) tr.classList.add('is-linked');
 
   for (const col of HEURES_COLUMNS) {
     if (col.kind === 'label') {
       const th = document.createElement('th');
       th.scope = 'row';
       th.className = 'heures-cell-label';
-      th.textContent = eotpDisplay(eotp) || '(sans code)';
+      th.appendChild(dbEl('span', null, eotpDisplay(eotp) || '(sans code)'));
+      if (link) {
+        const tag = dbEl('span', 'heures-link-tag', '⇄ ' + link.name);
+        tag.title = 'Quantités et avancement repris de l\'ouvrage « ' + link.name
+          + ' » (Avancement). Modifiable dans Données → eOTP.';
+        th.appendChild(tag);
+      } else if (orphan) {
+        const tag = dbEl('span', 'heures-link-tag is-orphan',
+          '⚠ ' + (setup ? 'ouvrage non affecté' : 'ouvrage supprimé'));
+        tag.title = setup
+          ? 'L\'ouvrage « ' + (setup.name || '') + ' » n\'est affecté à aucune zone : rien à reprendre. '
+            + 'Affectez-le dans Données → Zones, ou repassez la ligne en saisie manuelle.'
+          : 'L\'ouvrage rattaché a été supprimé de Données → Tâches. La ligne est repassée en saisie manuelle.';
+        th.appendChild(tag);
+      }
       tr.appendChild(th);
       continue;
     }
     const td = document.createElement('td');
     td.className = 'heures-col-' + col.key;
+    // Champ alimenté par l'ouvrage rattaché : lecture seule, comme une
+    // colonne calculée — la donnée vient de la saisie d'avancement.
+    if (link && HEURES_AUTO_FIELDS.has(col.key)) {
+      td.classList.add('is-calc', 'is-auto');
+      td.textContent = col.key === 'unite' ? (row.unite || '—') : fmtHeures(row[col.key]);
+      td.title = 'Repris de l\'ouvrage « ' + link.name + ' »';
+      tr.appendChild(td);
+      continue;
+    }
     if (col.kind === 'calc') {
       td.classList.add('is-calc', 'heures-calc-' + col.key);
       // Le texte est posé par refreshHeuresComputed juste après.
@@ -9777,7 +10270,9 @@ function applyHeuresComputedToRow(tr, row) {
 function refreshHeuresComputed(eotpId) {
   const tr = document.querySelector('tr[data-heures-id="' + cssEscape(eotpId) + '"]');
   if (tr) applyHeuresComputedToRow(tr, getHeuresRow(eotpId));
+  const model = getHeuresAvancementModel();
   const selected = getHeuresCandidates().filter(e => getHeuresRow(e.id).selected);
+  for (const e of selected) resolveHeuresRow(e, model);
   const tfoot = document.querySelector('.heures-table tfoot');
   if (tfoot) {
     const fresh = buildHeuresFoot(selected);
@@ -14442,6 +14937,8 @@ function resetAll() {
   state.eotps = [];
   state.eotpRegistryInitialized = false;
   state.eotpUnitsInitialized = false;
+  state.recapPeriod = '7';
+  state.recapCurveMode = 'pct';
   state.consoRecapMode = 'product';
   state.projectStart = '';
   state.projectEnd = '';
@@ -16972,6 +17469,7 @@ const SYNC_EXCLUDED_KEYS = new Set([
   'travauxLotFilter',                // filtre de lots dans Travaux (UI)
   'travauxVisitePath', 'travauxVisiteDeep', // lieu sélectionné dans la vue Visite (UI)
   'zonePickerCollapsed',             // branches repliées des sélecteurs de zone (UI)
+  'recapPeriod', 'recapCurveMode',   // réglages d'affichage du récapitulatif (UI)
   'ganttZoom',                       // échelle du planning des bâtiments (UI)
   'syncStatus', 'syncTimestamp', 'syncLastPulled', 'syncLastSeenRemoteTs',
   'protoPlan', 'protoPlanW', 'protoPlanH' // champs hérités migrés

@@ -1785,7 +1785,6 @@ option { background-color: var(--surface); color: var(--text); }
 .db-grid > .db-card { margin-bottom: 0; }
 
 /* ----- Courbe d'avancement ----- */
-.db-curve-wrap { width: 100%; overflow: hidden; }
 .db-curve { width: 100%; height: auto; display: block; }
 .db-curve-grid { stroke: var(--border); stroke-width: 1; }
 .db-curve-axis { fill: var(--text-4); font-size: 10px; font-family: inherit; }
@@ -1797,6 +1796,47 @@ option { background-color: var(--surface); color: var(--text); }
 /* Projection : du point du jour à 100 % à l'échéance. Trait plein plus fin
    que le réel, en vert, pour se distinguer de la théorique en pointillés. */
 .db-curve-target { stroke: var(--success); stroke-width: 2; stroke-dasharray: 2 5; stroke-linecap: round; }
+/* Projection au rythme observé : elle atteint 100 % à la date projetée. */
+.db-curve-eta { stroke: #7a6cff; stroke-width: 2; stroke-dasharray: 7 4; stroke-linecap: round; }
+.db-curve-eta-dot { fill: #7a6cff; stroke: var(--surface); stroke-width: 1.5; }
+/* Repères de fin de bâtiment, dans la couleur de leur barre de planning. */
+.db-curve-marker { stroke-width: 1.2; stroke-dasharray: 1 4; opacity: 0.75; }
+.db-curve-marker-dot { stroke: var(--surface); stroke-width: 1; }
+/* Curseur de lecture au survol */
+.db-curve-hit { fill: transparent; cursor: crosshair; }
+.db-curve-cursor-line { stroke: var(--text-3); stroke-width: 1; }
+.db-curve-cursor-dot { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+.db-curve-wrap { position: relative; width: 100%; }
+.db-curve-tip {
+  position: absolute; top: 4px;
+  transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  padding: 5px 9px;
+  background: var(--text); color: var(--surface);
+  border-radius: 8px;
+  font-size: 11px; line-height: 1.3;
+  pointer-events: none; white-space: nowrap;
+  box-shadow: var(--shadow-md);
+  z-index: 2;
+}
+.db-curve-tip[hidden] { display: none; }
+.db-curve-tip-date { font-weight: 700; opacity: 0.75; font-size: 10px; }
+.db-curve-tip-val { font-weight: 800; font-size: 13px; }
+.db-curve-tip-sub { opacity: 0.75; font-size: 10px; }
+/* Bascule % / heures dans l'en-tête de la carte */
+.db-curve-modes {
+  display: inline-flex; gap: 2px; margin-left: auto;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 2px;
+}
+.db-curve-mode {
+  border: none; background: transparent;
+  border-radius: 999px; padding: 3px 11px;
+  font-size: 11px; font-weight: 700; color: var(--text-3);
+  cursor: pointer;
+}
+.db-curve-mode:hover { color: var(--accent); }
+.db-curve-mode.is-on { background: var(--accent); color: #fff; }
 .db-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
 .db-legend-item { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--text-3); font-weight: 600; }
 .db-kpi-target { color: var(--success-2); font-weight: 700; }
@@ -1807,6 +1847,100 @@ option { background-color: var(--surface); color: var(--text); }
 .db-legend-swatch.is-theory { background: var(--info); }
 .db-legend-swatch.is-today { background: var(--text-4); width: 2px; height: 12px; }
 .db-legend-swatch.is-target { background: var(--success); }
+.db-legend-swatch.is-eta { background: #7a6cff; }
+.db-legend-swatch.is-marker { background: var(--text-3); width: 2px; height: 12px; }
+
+/* ----- Sélecteur de période de comparaison ----- */
+.db-periods {
+  display: inline-flex; align-items: center; gap: 3px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 3px 4px 3px 10px;
+}
+.db-periods-label {
+  font-size: 9.5px; font-weight: 800; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--text-4); margin-right: 2px;
+}
+.db-period {
+  border: none; background: transparent;
+  border-radius: 999px; padding: 4px 10px;
+  font-size: 11.5px; font-weight: 700; color: var(--text-2);
+  cursor: pointer; white-space: nowrap;
+}
+.db-period:hover { background: var(--surface-3); }
+.db-period.is-on { background: var(--accent); color: #fff; }
+
+/* ----- Variations (matrice et récapitulatif par tâche) ----- */
+.db-matrix-delta-col, .db-matrix-delta {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding-left: 10px !important;
+  border-left: 1px solid var(--border);
+}
+.db-matrix-delta { font-weight: 800; font-size: 11px; }
+.db-matrix-delta.is-pos, .db-task-delta.is-pos, .db-ouvrage-delta.is-pos { color: var(--success-2); }
+.db-matrix-delta.is-neg, .db-task-delta.is-neg, .db-ouvrage-delta.is-neg { color: var(--danger); }
+.db-matrix-delta.is-flat, .db-task-delta.is-flat { color: var(--text-4); }
+.db-matrix-delta.is-na, .db-task-delta.is-na { color: var(--text-4); }
+.db-matrix-cell.is-clickable { cursor: pointer; }
+.db-matrix-cell.is-clickable:hover,
+.db-matrix-cell.is-clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.db-tasks .db-delta-col, .db-tasks .db-task-delta { border-left: 1px solid var(--border); }
+.db-task-delta { font-weight: 700; }
+.db-ouvrage-delta {
+  background: var(--surface-3);
+  border-radius: 999px; padding: 3px 9px;
+  font-size: 10.5px; font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ----- Barre d'outils du récapitulatif par tâche ----- */
+.db-ouvrages-tools {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.db-ouvrage-search {
+  flex: 1 1 220px; min-width: 0; max-width: 380px;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); color: var(--text);
+  font-size: 12.5px; font-family: inherit;
+  padding: 7px 13px;
+}
+.db-ouvrage-search:focus { outline: none; border-color: var(--accent); }
+.db-ouvrage-sorts {
+  display: inline-flex; align-items: center; gap: 3px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 3px 4px 3px 10px;
+}
+.db-ouvrage-sorts-label {
+  font-size: 9.5px; font-weight: 800; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--text-4); margin-right: 2px;
+}
+.db-ouvrage-sort {
+  border: none; background: transparent;
+  border-radius: 999px; padding: 4px 10px;
+  font-size: 11.5px; font-weight: 700; color: var(--text-2);
+  cursor: pointer; white-space: nowrap;
+}
+.db-ouvrage-sort:hover { background: var(--surface-3); }
+.db-ouvrage-sort.is-on { background: var(--accent); color: #fff; }
+.db-ouvrage-expand {
+  margin-left: auto;
+  border: 1px solid var(--border-strong); background: var(--surface);
+  border-radius: 999px; padding: 6px 14px;
+  font-size: 11.5px; font-weight: 700; color: var(--text-2);
+  cursor: pointer; white-space: nowrap;
+}
+.db-ouvrage-expand:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Ouvrage mis en évidence après un clic dans la matrice */
+.progress-section-header.is-flash {
+  animation: db-flash 2.2s ease-out;
+}
+@keyframes db-flash {
+  0%, 60% { box-shadow: 0 0 0 3px var(--accent); }
+  100% { box-shadow: 0 0 0 3px transparent; }
+}
 
 /* ----- Lignes comparatives (par bâtiment) ----- */
 .db-rows { display: flex; flex-direction: column; gap: 12px; }
@@ -2679,6 +2813,22 @@ option { background-color: var(--surface); color: var(--text); }
   color: #fff;
 }
 .eotp-unit.is-hours:hover { color: #fff; border-color: var(--info); }
+/* Rattachement à un ouvrage : n'apparaît que sur les lignes en heures. */
+.eotp-link { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.eotp-link[hidden] { display: none; }
+.eotp-link-label {
+  font-size: 10.5px; font-weight: 800; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-4);
+  flex-shrink: 0;
+}
+.eotp-setup {
+  flex: 1; min-width: 0;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text);
+  font-size: 12.5px; font-family: inherit;
+  padding: 5px 8px;
+}
+.eotp-setup:focus { outline: none; border-color: var(--accent); }
 .eotp-remove {
   flex-shrink: 0;
   width: 30px; height: 30px;
@@ -6802,6 +6952,17 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   color: var(--text);
 }
 .heures-table td.heures-col-unite .heures-input { text-align: center; }
+/* Cellules alimentées par l'ouvrage rattaché : même fond que les colonnes
+   calculées, plus une teinte pour dire « ça vient d'ailleurs ». */
+.heures-table td.is-auto { color: var(--info); font-weight: 600; }
+.heures-link-tag.is-orphan { color: var(--warning); }
+.heures-link-tag {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px; font-weight: 700;
+  color: var(--info);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .heures-input::placeholder { color: var(--text-3); }
 .heures-input:focus {
   outline: none;
