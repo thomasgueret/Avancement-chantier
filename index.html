@@ -281,9 +281,10 @@
 
     <!-- ============== ONGLET : AVANCEMENT ============== -->
     <section class="page" id="page-avancement">
-      <div class="segmented" role="tablist" data-group="avancement" data-position="1" style="--count:2;">
+      <div class="segmented" role="tablist" data-group="avancement" data-position="2" style="--count:3;">
         <div class="segmented-thumb"></div>
         <button class="seg-btn" data-group="avancement" data-sub="recap" role="tab">Récapitulatif</button>
+        <button class="seg-btn" data-group="avancement" data-sub="heures" role="tab">Heures</button>
         <button class="seg-btn active" data-group="avancement" data-sub="fiche" role="tab">Avancement</button>
       </div>
 
@@ -291,6 +292,21 @@
         <div class="recap-picker" id="recappicker"></div>
         <div class="recap-content" id="recapcontent"></div>
         <div class="empty-state" id="recapempty"></div>
+      </div>
+
+
+      <!-- Suivi des heures — anciennement onglet de premier niveau -->
+      <div class="sub-page" id="sub-heures" data-group="avancement">
+        <!-- Barre : onglets de semaines (design classeur — chaque semaine est un
+             instantané complet du tableau) et sélecteur d'eOTP suivis, sur une
+             seule ligne pour laisser le maximum de hauteur au tableau. -->
+        <div class="heures-toolbar">
+          <div class="heures-week-tabs" id="heuresweektabs"></div>
+          <div class="heures-eotp-picker" id="heureseotpselect"></div>
+        </div>
+
+        <!-- Tableau principal -->
+        <div class="heures-table-wrap" id="heurestablewrap"></div>
       </div>
 
       <div class="sub-page active" id="sub-fiche" data-group="avancement">
@@ -491,20 +507,6 @@
     </section>
 
     <!-- ============== SUIVI DES HEURES ============== -->
-    <section class="page" id="page-heures">
-      <h2 class="section-title">Suivi des heures</h2>
-
-      <!-- Barre : onglets de semaines (design classeur — chaque semaine est un
-           instantané complet du tableau) et sélecteur d'eOTP suivis, sur une
-           seule ligne pour laisser le maximum de hauteur au tableau. -->
-      <div class="heures-toolbar">
-        <div class="heures-week-tabs" id="heuresweektabs"></div>
-        <div class="heures-eotp-picker" id="heureseotpselect"></div>
-      </div>
-
-      <!-- Tableau principal -->
-      <div class="heures-table-wrap" id="heurestablewrap"></div>
-    </section>
 
     <!-- ============== ONGLET : ST ============== -->
     <section class="page" id="page-st">
@@ -615,10 +617,6 @@
     <button class="tab-btn" data-page="consommable" role="tab">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4Z"/></svg>
       <span>Consommable</span>
-    </button>
-    <button class="tab-btn" data-page="heures" role="tab">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7Z"/></svg>
-      <span>Heures</span>
     </button>
     <button class="tab-btn" data-page="proto" role="tab">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17v4h4l11-11-4-4L3 17Zm17.7-11.6-2.1-2.1a1 1 0 0 0-1.4 0l-1.8 1.8 3.5 3.5 1.8-1.8a1 1 0 0 0 0-1.4Z"/></svg>

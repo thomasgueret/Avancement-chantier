@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.71';
+const APP_VERSION = '1.72';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -1093,7 +1093,8 @@ function computeProjectAlerts() {
     if (ecart < 0) {
       out.push({ sev: 'warning', n: fmtHeures(Math.abs(ecart)),
         label: 'heures consommées au-delà du droit à dépenser',
-        detail: 'Suivi des heures — écart au stade', page: 'heures' });
+        detail: 'Suivi des heures — écart au stade',
+        page: 'avancement', sub: ['avancement', 'heures'] });
     }
   }
 
@@ -1379,7 +1380,7 @@ function renderDashboardHeures() {
   const el = document.getElementById('dashheures');
   if (!el) return;
   el.innerHTML = '';
-  el.appendChild(dashboardCardHeader('Suivi des heures', 'heures'));
+  el.appendChild(dashboardCardHeader('Suivi des heures', 'avancement', ['avancement', 'heures']));
   const body = document.createElement('div');
   body.className = 'dash-heures';
   const week = getHeuresActiveWeek();
@@ -1487,7 +1488,7 @@ function renderDashboardST() {
   el.appendChild(body);
 }
 
-function dashboardCardHeader(title, gotoPage) {
+function dashboardCardHeader(title, gotoPage, sub) {
   const h = document.createElement('div');
   h.className = 'dash-card-head';
   const t = document.createElement('span');
@@ -1499,7 +1500,10 @@ function dashboardCardHeader(title, gotoPage) {
     link.type = 'button';
     link.className = 'dash-card-link';
     link.textContent = 'Ouvrir →';
-    link.addEventListener('click', () => switchPage(gotoPage));
+    link.addEventListener('click', () => {
+      switchPage(gotoPage);
+      if (sub) switchSubPage(sub[0], sub[1]);
+    });
     h.appendChild(link);
   }
   return h;
@@ -3064,6 +3068,7 @@ function buildAvancementZonePicker(zone) {
 
 function renderAvancement() {
   renderRecap();
+  renderHeures();
   const pickers = document.getElementById('zonepickers');
   const fiche = document.getElementById('zonefiche');
   const empty = document.getElementById('avancementempty');
@@ -3566,6 +3571,30 @@ function computeAvancementVelocity(scope) {
   return out;
 }
 
+// Rythme À TENIR pour finir à la date objectif — à ne pas confondre avec le
+// rythme OBSERVÉ de computeAvancementVelocity, qui extrapole le passé :
+//   (100 % − avancement actuel) ÷ temps restant jusqu'à la date de fin.
+// C'est cette droite que trace la courbe de projection du récapitulatif.
+function computeAvancementTarget(pct, planning) {
+  if (!planning) return null;
+  const remaining = Math.max(0, 100 - pct);
+  const days = planning.remainingDays;
+  const out = {
+    remaining, days, end: planning.end,
+    overdue: !!planning.overdue,
+    done: remaining <= 0.05,
+    perDay: null, perWeek: null,
+  };
+  if (out.done) { out.perDay = 0; out.perWeek = 0; return out; }
+  // Dernier jour : le rythme hebdomadaire n'a plus de sens, on annonce le
+  // reste à faire. Au-delà de l'échéance, idem — mais le message diffère.
+  out.lastDay = !out.overdue && days === 0;
+  if (out.overdue || days <= 0) return out;
+  out.perDay = remaining / days;
+  out.perWeek = out.perDay * 7;
+  return out;
+}
+
 // ---------- Petits utilitaires d'affichage ----------
 // Teinte d'une cellule de matrice : couleur de la bande d'avancement,
 // opacité proportionnelle au %. Le texte reste crème et lisible partout.
@@ -3748,9 +3777,18 @@ async function exportAvancementToPDF(scope, label) {
     ensureSpace(6);
     gauge(model.pct, MARGIN, CONTENT_W, 3);
     y += 6;
+    const target = computeAvancementTarget(model.pct, planning);
+    if (target && !target.done && target.perWeek != null) {
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8.5); pdf.setTextColor(...GREEN);
+      pdf.text('Rythme à tenir : ' + formatPct(Math.round(target.perWeek * 10) / 10)
+        + ' %/semaine pour finir le ' + fmtFR(target.end)
+        + ' (' + formatPct(Math.round(target.remaining * 10) / 10) + ' % restants en ' + target.days + ' jours)', MARGIN, y);
+      pdf.setTextColor(0);
+      y += 5;
+    }
     if (velocity) {
       pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(110);
-      pdf.text('Rythme observé : ' + formatPct(Math.round(velocity.perWeek * 10) / 10) + ' pts/semaine'
+      pdf.text('Rythme observé : ' + formatPct(Math.round(velocity.perWeek * 10) / 10) + ' %/semaine'
         + (velocity.etaISO ? ' — fin projetée le ' + fmtFR(velocity.etaISO) : '')
         + ' (sur ' + velocity.windowDays + ' jours)', MARGIN, y);
       pdf.setTextColor(0);
@@ -3798,6 +3836,21 @@ async function exportAvancementToPDF(scope, label) {
         pdf.line(x1 + (x2 - x1) * a, y1 + (y2 - y1) * a, x1 + (x2 - x1) * b2, y1 + (y2 - y1) * b2);
       }
     }
+    // Rythme à tenir : du point du jour à 100 % à l'échéance (pointillés verts)
+    const pdfTarget = computeAvancementTarget(model.pct, planning);
+    if (planning && pdfTarget && !pdfTarget.done && pdfTarget.perWeek != null) {
+      const lastKey = hKeys[hKeys.length - 1];
+      const fromMs = Math.max(new Date(todayISO() + 'T00:00:00').getTime(),
+        new Date(lastKey + 'T00:00:00').getTime());
+      const pe2 = new Date(planning.end + 'T00:00:00').getTime();
+      const x1 = px(fromMs), y1 = py(hist[lastKey].pct), x2 = px(pe2), y2 = py(100);
+      pdf.setDrawColor(...GREEN); pdf.setLineWidth(0.6);
+      const steps = 40;
+      for (let i = 0; i < steps; i += 2) {
+        const a = i / steps, b2 = Math.min(1, (i + 1) / steps);
+        pdf.line(x1 + (x2 - x1) * a, y1 + (y2 - y1) * a, x1 + (x2 - x1) * b2, y1 + (y2 - y1) * b2);
+      }
+    }
     // Courbe réelle
     pdf.setDrawColor(...ORANGE); pdf.setLineWidth(0.7);
     let prev = null;
@@ -3822,7 +3875,10 @@ async function exportAvancementToPDF(scope, label) {
     // Légende
     pdf.setFontSize(7.5);
     let lx = MARGIN;
-    const leg = [[ORANGE, 'Avancement réel']].concat(planning ? [[BLUE, 'Trajectoire théorique']] : []);
+    const leg = [[ORANGE, 'Avancement réel']]
+      .concat(planning ? [[BLUE, 'Trajectoire théorique']] : [])
+      .concat(planning && pdfTarget && !pdfTarget.done && pdfTarget.perWeek != null
+        ? [[GREEN, 'Rythme à tenir — ' + formatPct(Math.round(pdfTarget.perWeek * 10) / 10) + ' %/semaine']] : []);
     for (const [col, txt] of leg) {
       pdf.setDrawColor(...col); pdf.setLineWidth(0.7);
       pdf.line(lx, y - 1, lx + 5, y - 1);
@@ -4175,10 +4231,24 @@ function buildDbKpis(model, planning, velocity) {
     k4.appendChild(dbEl('div', 'db-kpi-value db-kpi-void', '—'));
     k4.appendChild(dbEl('div', 'db-kpi-sub', 'Dates de chantier non renseignées.'));
   }
+  // Rythme À TENIR : la donnée qui répond à « combien par semaine pour finir
+  // à la date objectif ». Mise en avant, avant le rythme observé.
+  const target = computeAvancementTarget(model.pct, planning);
+  if (target) {
+    let txt;
+    if (target.done) txt = 'Objectif atteint : 100 % avant l\'échéance';
+    else if (target.lastDay) txt = 'Dernier jour : ' + formatPct(Math.round(target.remaining * 10) / 10) + ' % restants';
+    else if (target.perWeek == null) txt = 'Échéance dépassée : ' + formatPct(Math.round(target.remaining * 10) / 10) + ' % restants';
+    else txt = 'À tenir : ' + formatPct(Math.round(target.perWeek * 10) / 10) + ' %/semaine jusqu\'au ' + fmtFR(target.end);
+    const el = dbEl('div', 'db-kpi-sub db-kpi-target' + (target.perWeek == null && !target.done ? ' is-neg' : ''), txt);
+    el.title = 'Rythme à tenir = (100 % − avancement actuel) ÷ temps restant. C\'est la pente de la courbe de projection.';
+    k4.appendChild(el);
+  }
   if (velocity) {
     const rate = dbEl('div', 'db-kpi-sub db-kpi-rate',
-      'Rythme : ' + formatPct(Math.round(velocity.perWeek * 10) / 10) + ' pts/semaine'
+      'Rythme observé : ' + formatPct(Math.round(velocity.perWeek * 10) / 10) + ' %/semaine'
       + (velocity.etaISO ? ' · fin projetée le ' + fmtFR(velocity.etaISO) : ''));
+    rate.title = 'Rythme constaté sur les ' + velocity.windowDays + ' derniers jours, prolongé jusqu\'à 100 %.';
     k4.appendChild(rate);
   }
   row.appendChild(k4);
@@ -4190,7 +4260,7 @@ function buildDbCurve(model, planning, scope) {
   const card = dbCard('Courbe d\'avancement',
     (scope ? 'avancement de ce bâtiment' : 'avancement du projet')
     + (planning && planning.ownDates ? ', sur sa propre période' : '')
-    + ', comparé à la trajectoire théorique');
+    + ', trajectoire théorique et rythme à tenir');
   const serie = getAvancementSeries(scope);
   const keys = serie.map(p => p.date);
   const hist = {};
@@ -4240,6 +4310,19 @@ function buildDbCurve(model, planning, scope) {
     const pe = new Date(planning.end + 'T00:00:00').getTime();
     svg.appendChild(mk('line', { x1: x(ps), y1: y(0), x2: x(pe), y2: y(100), class: 'db-curve-theory' }));
   }
+  // Courbe de projection : du point d'avancement du jour jusqu'à 100 % à la
+  // date de fin. Sa pente EST le rythme à tenir affiché dans « Calendrier ».
+  const lastPct = serie[serie.length - 1].pct;
+  const target = computeAvancementTarget(lastPct, planning);
+  const todayMs = new Date(todayISO() + 'T00:00:00').getTime();
+  const showTarget = !!(target && target.perWeek != null && !target.done);
+  if (showTarget) {
+    const pe = new Date(planning.end + 'T00:00:00').getTime();
+    const from = Math.max(todayMs, new Date(keys[keys.length - 1] + 'T00:00:00').getTime());
+    svg.appendChild(mk('line', {
+      x1: x(from), y1: y(lastPct), x2: x(pe), y2: y(100), class: 'db-curve-target',
+    }));
+  }
   // Courbe réelle
   const pts = keys.map(k => ({ x: x(new Date(k + 'T00:00:00').getTime()), y: y(hist[k].pct), k, pct: hist[k].pct }));
   if (pts.length > 1) {
@@ -4276,8 +4359,18 @@ function buildDbCurve(model, planning, scope) {
   };
   mkLeg('is-real', 'Avancement réel');
   if (planning) mkLeg('is-theory', 'Trajectoire théorique');
+  if (showTarget) {
+    mkLeg('is-target', 'Rythme à tenir — ' + formatPct(Math.round(target.perWeek * 10) / 10)
+      + ' %/semaine jusqu\'au ' + fmtFR(target.end));
+  }
   mkLeg('is-today', 'Aujourd\'hui');
   card.appendChild(legend);
+  if (target && !target.done && target.perWeek == null) {
+    card.appendChild(dbEl('p', 'db-note is-warn', target.lastDay
+      ? 'Dernier jour du planning : il reste ' + formatPct(Math.round(target.remaining * 10) / 10) + ' % à réaliser.'
+      : 'La date de fin est dépassée : il reste ' + formatPct(Math.round(target.remaining * 10) / 10)
+        + ' % à réaliser. Repoussez l\'échéance pour retrouver un rythme à tenir.'));
+  }
   if (keys.length < 2) {
     card.appendChild(dbEl('p', 'db-note',
       'Un seul point pour l\'instant : la courbe se remplira au fil des saisies d\'avancement.'));
@@ -6268,6 +6361,13 @@ function switchSubPage(group, name) {
   }
   // Garantit un récap toujours frais à l'ouverture du sous-onglet
   if (group === 'avancement' && name === 'recap') renderRecap();
+  if (group === 'avancement' && name === 'heures') renderHeures();
+  // Le tableau des heures a besoin de plus de largeur que le reste de la
+  // page : on lève le plafond commun tant que son sous-onglet est ouvert.
+  if (group === 'avancement') {
+    const page = document.getElementById('page-avancement');
+    if (page) page.classList.toggle('is-wide', name === 'heures');
+  }
   if (group === 'proto' && name === 'recap') renderProtoRecap();
   if (group === 'stock' && name === 'cb') renderStockCB();
   if (group === 'travaux') renderTravaux();
@@ -14169,7 +14269,6 @@ function switchPage(name) {
   if (name === 'administratif') renderAdministratif();
   if (name === 'stock') renderStock();
   if (name === 'consommable') renderConsommable();
-  if (name === 'heures') renderHeures();
   if (name === 'dashboard') renderDashboard();
   if (name === 'proto') renderProto();
   if (name === 'cr') renderCR();
