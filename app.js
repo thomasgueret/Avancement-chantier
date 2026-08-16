@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.72';
+const APP_VERSION = '1.73';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -989,14 +989,15 @@ function renderDashboardVitals() {
     tile({
       label: 'Écart au planning',
       value: (planning.ecart >= 0 ? '+' : '−') + formatPct(Math.abs(Math.round(planning.ecart * 10) / 10)),
-      unit: 'pts', tone: planning.ecart >= 0 ? 'ok' : 'bad',
+      unit: '%', tone: planning.ecart >= 0 ? 'ok' : 'bad',
       sub: (planning.ecart >= 0 ? 'en avance' : 'en retard') + ' · attendu ' + formatPct(Math.round(planning.pctTemps * 10) / 10) + ' %',
       page: 'avancement', sub2: ['avancement', 'recap']
     });
     tile({
       label: 'Calendrier', value: String(planning.remainingDays), unit: 'j restants',
       gauge: planning.pctTemps, tone: 'info',
-      sub: 'fin le ' + fmtFR(planning.end) + (velocity && velocity.etaISO ? ' · projetée ' + fmtFR(velocity.etaISO) : ''),
+      sub: planning.remainingWorkDays + ' j ouvrés · fin le ' + fmtFR(planning.end)
+        + (velocity && velocity.etaISO ? ' · projetée ' + fmtFR(velocity.etaISO) : ''),
       page: 'avancement', sub2: ['avancement', 'recap']
     });
   } else {
@@ -3499,10 +3500,16 @@ function computeAvancementPlanning(pctReel, scope) {
   const totalDays = Math.round((d1 - d0) / day);
   const elapsed = Math.max(0, Math.min(totalDays, Math.round((now - d0) / day)));
   const pctTemps = (elapsed / totalDays) * 100;
+  // Décompte en jours ouvrés : c'est la base des deux rythmes (à tenir et
+  // observé). Un chantier ne produit pas le week-end ni les jours fériés.
+  const overdue = now > d1;
+  const todayIso = todayISO();
   return {
     start: s, end: e, ownDates: !!dates.own, totalDays, elapsed,
     remainingDays: Math.max(0, Math.round((d1 - now) / day)),
-    overdue: now > d1,
+    totalWorkDays: countWorkingDays(s, e),
+    remainingWorkDays: overdue ? 0 : countWorkingDays(todayIso > s ? todayIso : s, e),
+    overdue,
     pctTemps,
     ecart: pctReel - pctTemps,
   };
@@ -3547,7 +3554,9 @@ function getAvancementSeries(scope) {
   return out;
 }
 
-// Vitesse d'avancement sur les 28 derniers jours et date de fin projetée.
+// Vitesse d'avancement observée sur les 28 derniers jours et date de fin
+// projetée. Tout est compté en JOURS OUVRÉS (lundi-vendredi hors fériés) :
+// une semaine vaut 5 jours de production.
 function computeAvancementVelocity(scope) {
   const serie = getAvancementSeries(scope);
   if (serie.length < 2) return null;
@@ -3559,16 +3568,42 @@ function computeAvancementVelocity(scope) {
   }
   const days = (lastD - new Date(first.date + 'T00:00:00')) / 86400000;
   if (days <= 0) return null;
-  const perDay = (last.pct - first.pct) / days;
-  const out = { perDay, perWeek: perDay * 7, windowDays: Math.round(days), etaISO: null, etaDays: null };
+  // Fenêtre comptée en jours ouvrés : deux points séparés par un week-end
+  // n'ont pas produit d'avancement pendant deux jours, les compter
+  // écraserait artificiellement le rythme. La semaine vaut 5 jours ouvrés.
+  const workDays = countWorkingDays(first.date, last.date);
+  if (workDays <= 0) return null;
+  const perDay = (last.pct - first.pct) / workDays;
+  const out = {
+    perDay, perWeek: perDay * 5,
+    windowDays: Math.round(days), windowWorkDays: workDays,
+    etaISO: null, etaDays: null,
+  };
   if (perDay > 0.001 && last.pct < 99.95) {
-    const etaDays = Math.ceil((100 - last.pct) / perDay);
-    if (etaDays < 3650) {
+    const etaDays = Math.ceil((100 - last.pct) / perDay);   // en jours ouvrés
+    if (etaDays < 2600) {
       out.etaDays = etaDays;
-      out.etaISO = new Date(lastD.getTime() + etaDays * 86400000).toISOString().slice(0, 10);
+      out.etaISO = addWorkingDays(last.date, etaDays);
     }
   }
   return out;
+}
+
+// Date obtenue en avançant de n jours ouvrés à partir d'une date donnée
+// (celle-ci non comptée). Sert à projeter une fin de chantier au rythme
+// observé sans compter les week-ends ni les jours fériés.
+function addWorkingDays(fromISO, n) {
+  let d = isoToDay(fromISO);
+  let left = Math.max(0, Math.round(n));
+  let guard = 0;
+  while (left > 0 && guard++ < 20000) {
+    d += 1;
+    const dow = dayOfWeek(d);
+    if (dow === 0 || dow === 6) continue;
+    if (frenchHolidayDays(new Date(d * 86400000).getUTCFullYear()).has(d)) continue;
+    left--;
+  }
+  return dayToISO(d);
 }
 
 // Rythme À TENIR pour finir à la date objectif — à ne pas confondre avec le
@@ -3579,8 +3614,9 @@ function computeAvancementTarget(pct, planning) {
   if (!planning) return null;
   const remaining = Math.max(0, 100 - pct);
   const days = planning.remainingDays;
+  const workDays = Number(planning.remainingWorkDays) || 0;
   const out = {
-    remaining, days, end: planning.end,
+    remaining, days, workDays, end: planning.end,
     overdue: !!planning.overdue,
     done: remaining <= 0.05,
     perDay: null, perWeek: null,
@@ -3589,9 +3625,11 @@ function computeAvancementTarget(pct, planning) {
   // Dernier jour : le rythme hebdomadaire n'a plus de sens, on annonce le
   // reste à faire. Au-delà de l'échéance, idem — mais le message diffère.
   out.lastDay = !out.overdue && days === 0;
-  if (out.overdue || days <= 0) return out;
-  out.perDay = remaining / days;
-  out.perWeek = out.perDay * 7;
+  // Compté en jours ouvrés : la semaine de production vaut 5 jours. Une
+  // échéance qui ne tombe que sur des week-ends ne laisse aucun jour ouvré.
+  if (out.overdue || workDays <= 0) return out;
+  out.perDay = remaining / workDays;
+  out.perWeek = out.perDay * 5;
   return out;
 }
 
@@ -3737,7 +3775,7 @@ async function exportAvancementToPDF(scope, label) {
       },
       planning ? {
         label: 'ÉCART AU PLANNING',
-        value: (planning.ecart >= 0 ? '+' : '-') + formatPct(Math.abs(Math.round(planning.ecart * 10) / 10)) + ' pts',
+        value: (planning.ecart >= 0 ? '+' : '-') + formatPct(Math.abs(Math.round(planning.ecart * 10) / 10)) + ' %',
         color: planning.ecart >= 0 ? GREEN : RED,
         sub: (planning.ecart >= 0 ? 'En avance' : 'En retard') + ' — attendu ' + formatPct(Math.round(planning.pctTemps * 10) / 10) + ' %'
       } : { label: 'ÉCART AU PLANNING', value: '—', color: [140,140,140], sub: 'dates de chantier non renseignées' },
@@ -3782,7 +3820,7 @@ async function exportAvancementToPDF(scope, label) {
       pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8.5); pdf.setTextColor(...GREEN);
       pdf.text('Rythme à tenir : ' + formatPct(Math.round(target.perWeek * 10) / 10)
         + ' %/semaine pour finir le ' + fmtFR(target.end)
-        + ' (' + formatPct(Math.round(target.remaining * 10) / 10) + ' % restants en ' + target.days + ' jours)', MARGIN, y);
+        + ' (' + formatPct(Math.round(target.remaining * 10) / 10) + ' % restants en ' + target.workDays + ' jours ouvrés)', MARGIN, y);
       pdf.setTextColor(0);
       y += 5;
     }
@@ -3790,7 +3828,7 @@ async function exportAvancementToPDF(scope, label) {
       pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(110);
       pdf.text('Rythme observé : ' + formatPct(Math.round(velocity.perWeek * 10) / 10) + ' %/semaine'
         + (velocity.etaISO ? ' — fin projetée le ' + fmtFR(velocity.etaISO) : '')
-        + ' (sur ' + velocity.windowDays + ' jours)', MARGIN, y);
+        + ' (sur ' + velocity.windowWorkDays + ' jours ouvrés)', MARGIN, y);
       pdf.setTextColor(0);
       y += 5;
     }
@@ -4178,10 +4216,12 @@ function buildDbKpis(model, planning, velocity) {
   v1.appendChild(dbEl('span', 'db-kpi-unit', '%'));
   k1.appendChild(v1);
   k1.appendChild(dbBar(model.pct, 'db-bar-lg'));
-  const wLabel = model.weighting === 'heures' ? 'pondéré par les heures budgétées'
-    : (model.weighting === 'quantites' ? 'pondéré par les quantités (aucun ratio saisi)'
-      : 'moyenne des tâches (ni ratio ni quantité saisis)');
-  k1.appendChild(dbEl('div', 'db-kpi-sub', wLabel));
+  // Le mode de pondération reste consultable en infobulle : il n'apparaît
+  // plus en clair sous le chiffre, et « Qualité des données » le signale
+  // déjà lorsqu'il n'est pas celui attendu.
+  k1.title = model.weighting === 'heures' ? 'Pondéré par les heures budgétées'
+    : (model.weighting === 'quantites' ? 'Pondéré par les quantités (aucun ratio saisi)'
+      : 'Moyenne des tâches (ni ratio ni quantité saisis)');
   row.appendChild(k1);
 
   // Écart au planning
@@ -4191,7 +4231,7 @@ function buildDbKpis(model, planning, velocity) {
     const e = planning.ecart;
     const v = dbEl('div', 'db-kpi-value ' + (e >= 0 ? 'is-pos' : 'is-neg'));
     v.appendChild(dbEl('span', 'db-kpi-num', (e >= 0 ? '+' : '−') + formatPct(Math.abs(Math.round(e * 10) / 10))));
-    v.appendChild(dbEl('span', 'db-kpi-unit', 'pts'));
+    v.appendChild(dbEl('span', 'db-kpi-unit', '%'));
     k2.appendChild(v);
     k2.appendChild(dbEl('div', 'db-kpi-tag ' + (e >= 0 ? 'is-pos' : 'is-neg'),
       e >= 0 ? 'En avance sur le calendrier' : 'En retard sur le calendrier'));
@@ -4226,7 +4266,9 @@ function buildDbKpis(model, planning, velocity) {
     k4.appendChild(v);
     k4.appendChild(dbBar(planning.pctTemps, 'db-bar-time'));
     k4.appendChild(dbEl('div', 'db-kpi-sub',
-      'Fin prévue le ' + fmtFR(planning.end) + ' · ' + planning.elapsed + '/' + planning.totalDays + ' j écoulés'));
+      'Fin prévue le ' + fmtFR(planning.end)
+      + ' · ' + planning.remainingWorkDays + ' j ouvrés restants'
+      + ' · ' + planning.elapsed + '/' + planning.totalDays + ' j écoulés'));
   } else {
     k4.appendChild(dbEl('div', 'db-kpi-value db-kpi-void', '—'));
     k4.appendChild(dbEl('div', 'db-kpi-sub', 'Dates de chantier non renseignées.'));
@@ -4241,14 +4283,17 @@ function buildDbKpis(model, planning, velocity) {
     else if (target.perWeek == null) txt = 'Échéance dépassée : ' + formatPct(Math.round(target.remaining * 10) / 10) + ' % restants';
     else txt = 'À tenir : ' + formatPct(Math.round(target.perWeek * 10) / 10) + ' %/semaine jusqu\'au ' + fmtFR(target.end);
     const el = dbEl('div', 'db-kpi-sub db-kpi-target' + (target.perWeek == null && !target.done ? ' is-neg' : ''), txt);
-    el.title = 'Rythme à tenir = (100 % − avancement actuel) ÷ temps restant. C\'est la pente de la courbe de projection.';
+    el.title = 'Rythme à tenir = (100 % − avancement actuel) ÷ jours ouvrés restants, ramené à une semaine de 5 jours'
+      + (target.workDays ? ' — ' + formatPct(Math.round(target.remaining * 10) / 10) + ' % en ' + target.workDays + ' jours ouvrés' : '')
+      + '. C\'est la pente de la courbe de projection.';
     k4.appendChild(el);
   }
   if (velocity) {
     const rate = dbEl('div', 'db-kpi-sub db-kpi-rate',
       'Rythme observé : ' + formatPct(Math.round(velocity.perWeek * 10) / 10) + ' %/semaine'
       + (velocity.etaISO ? ' · fin projetée le ' + fmtFR(velocity.etaISO) : ''));
-    rate.title = 'Rythme constaté sur les ' + velocity.windowDays + ' derniers jours, prolongé jusqu\'à 100 %.';
+    rate.title = 'Rythme constaté sur les ' + velocity.windowDays + ' derniers jours, soit '
+      + velocity.windowWorkDays + ' jours ouvrés, ramené à une semaine de 5 jours et prolongé jusqu\'à 100 %.';
     k4.appendChild(rate);
   }
   row.appendChild(k4);
@@ -4257,10 +4302,7 @@ function buildDbKpis(model, planning, velocity) {
 
 // ----- 2. Courbe d'avancement (réel vs théorique) -----
 function buildDbCurve(model, planning, scope) {
-  const card = dbCard('Courbe d\'avancement',
-    (scope ? 'avancement de ce bâtiment' : 'avancement du projet')
-    + (planning && planning.ownDates ? ', sur sa propre période' : '')
-    + ', trajectoire théorique et rythme à tenir');
+  const card = dbCard('Courbe d\'avancement');
   const serie = getAvancementSeries(scope);
   const keys = serie.map(p => p.date);
   const hist = {};
@@ -4407,7 +4449,7 @@ function buildDbBuildings(model) {
 
 // ----- 4. Matrice bâtiment × ouvrage -----
 function buildDbMatrix(model, scope) {
-  const card = dbCard('Matrice ' + (scope ? 'zones' : 'bâtiments') + ' × ouvrages', 'avancement croisé, en un coup d\'œil');
+  const card = dbCard('Matrice ' + (scope ? 'zones' : 'bâtiments') + ' × ouvrages');
   const rows = scope
     ? model.zones.slice().sort((a, b) => a.label.localeCompare(b.label, 'fr')).map(z => ({ id: z.id, name: z.label.split(' › ').slice(1).join(' › ') || z.label }))
     : model.buildings.map(b => ({ id: b.id, name: b.name }));
@@ -4473,8 +4515,7 @@ function buildDbMatrix(model, scope) {
 
 // ----- 5. Détail par ouvrage et par tâche -----
 function buildDbOuvrages(model) {
-  const card = dbCard('Récapitulatif par tâche',
-    'chaque tâche porte sur la totalité du métré de son ouvrage : seules les heures s\'additionnent');
+  const card = dbCard('Récapitulatif par tâche');
   const list = dbEl('div', 'db-ouvrages');
   for (const o of model.ouvrages) {
     const box = dbEl('details', 'db-ouvrage');
@@ -4566,7 +4607,7 @@ function buildDbOuvrages(model) {
 
 // ----- 6. Points d'attention -----
 function buildDbFocus(model, planning) {
-  const card = dbCard('Points d\'attention', 'ce qui mérite une décision');
+  const card = dbCard('Points d\'attention');
   const cols = dbEl('div', 'db-focus');
 
   // a) Zones les moins avancées à fort volume
