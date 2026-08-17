@@ -164,6 +164,24 @@
             </div>
             <button class="btn-primary zone-add-root" id="zoneaddroot">+ Ajouter une zone</button>
           </div>
+
+          <!-- Import / export de l'arborescence par fichier tableur -->
+          <div class="list-section zone-io">
+            <h2 class="section-title">Import par fichier</h2>
+            <p class="section-help">
+              Créez toute l'arborescence dans un tableur, puis importez-la. Une ligne = une zone ;
+              les colonnes <strong>Bâtiment / Étage / Zone / Sous-zone</strong> décrivent le chemin,
+              les colonnes suivantes portent la quantité de chaque ouvrage.
+              Les ouvrages proposés sont ceux de <strong>Données → Tâches</strong> :
+              paramétrez-les d'abord, le modèle les reprendra en colonnes.
+            </p>
+            <div class="zone-io-actions">
+              <button class="btn-secondary" id="zonetemplatebtn" type="button">⬇ Modèle CSV</button>
+              <button class="btn-secondary" id="zoneexportbtn" type="button">⬇ Exporter mes zones</button>
+              <button class="btn-primary" id="zoneimportbtn" type="button">⬆ Importer un fichier</button>
+              <input type="file" id="zoneimportinput" accept=".csv,.txt,text/csv,text/plain" hidden>
+            </div>
+          </div>
         </div>
 
         <div class="sub-page" id="sub-zoneplanning" data-group="zones">
@@ -653,6 +671,21 @@
   </datalist>
 
   <div class="toast" id="toast" hidden></div>
+
+  <!-- ===== Rapport d'import de zones (avant application) ===== -->
+  <div class="modal-overlay" id="zoneimportmodal" hidden>
+    <div class="modal-content zone-import-modal" role="dialog" aria-modal="true" aria-labelledby="zoneimporttitle">
+      <div class="modal-header">
+        <h3 class="modal-title" id="zoneimporttitle">Import de zones</h3>
+        <button class="modal-close" id="zoneimportclose" type="button" aria-label="Fermer">×</button>
+      </div>
+      <div class="modal-body" id="zoneimportbody"></div>
+      <div class="modal-footer gantt-modal-footer">
+        <button class="btn-secondary" id="zoneimportcancel" type="button">Annuler</button>
+        <button class="btn-primary" id="zoneimportconfirm" type="button">Importer</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ===== Propriétés d'une barre du planning (double-clic sur la barre) ===== -->
   <div class="modal-overlay" id="ganttmodal" hidden>

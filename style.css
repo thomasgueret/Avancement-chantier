@@ -1785,7 +1785,7 @@ option { background-color: var(--surface); color: var(--text); }
 .db-grid > .db-card { margin-bottom: 0; }
 
 /* ----- Courbe d'avancement ----- */
-.db-curve { width: 100%; height: auto; display: block; }
+.db-curve { display: block; max-width: none; }
 .db-curve-grid { stroke: var(--border); stroke-width: 1; }
 .db-curve-axis { fill: var(--text-4); font-size: 10px; font-family: inherit; }
 .db-curve-theory { stroke: var(--info); stroke-width: 2; stroke-dasharray: 6 5; opacity: 0.8; }
@@ -1808,7 +1808,7 @@ option { background-color: var(--surface); color: var(--text); }
 .db-curve-cursor-dot { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
 .db-curve-wrap { position: relative; width: 100%; }
 .db-curve-tip {
-  position: absolute; top: 4px;
+  position: absolute; top: 4px; min-width: 156px;
   transform: translateX(-50%);
   display: flex; flex-direction: column; align-items: center; gap: 1px;
   padding: 5px 9px;
@@ -1821,14 +1821,35 @@ option { background-color: var(--surface); color: var(--text); }
 }
 .db-curve-tip[hidden] { display: none; }
 .db-curve-tip-date { font-weight: 700; opacity: 0.75; font-size: 10px; }
-.db-curve-tip-val { font-weight: 800; font-size: 13px; }
+.db-curve-tip-val { font-weight: 800; font-size: 12px; font-variant-numeric: tabular-nums; }
 .db-curve-tip-sub { opacity: 0.75; font-size: 10px; }
-/* Bascule % / heures dans l'en-tête de la carte */
+/* Contrôles d'échelle dans l'en-tête de la carte */
+.db-curve-controls { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
 .db-curve-modes {
-  display: inline-flex; gap: 2px; margin-left: auto;
+  display: inline-flex; align-items: center; gap: 2px;
   background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 999px; padding: 2px;
 }
+.db-curve-modes-label {
+  font-size: 9.5px; font-weight: 800; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--text-4);
+  padding: 0 4px 0 7px;
+}
+/* Axe du temps dilaté : la courbe défile dans son cadre. */
+.db-curve-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
+.db-curve-vgrid { stroke: var(--border); stroke-width: 1; stroke-dasharray: 2 5; opacity: 0.7; }
+.db-curve-tip-line { display: flex; align-items: center; gap: 6px; width: 100%; }
+.db-curve-tip-swatch { width: 10px; height: 3px; border-radius: 2px; flex-shrink: 0; }
+.db-curve-tip-swatch.is-real { background: var(--accent); }
+.db-curve-tip-swatch.is-theory { background: var(--info); }
+.db-curve-tip-swatch.is-target { background: var(--success); }
+.db-curve-tip-swatch.is-eta { background: #7a6cff; }
+.db-curve-tip-nom { flex: 1; opacity: 0.8; text-align: left; }
+.db-curve-cursor-dot.is-real { fill: var(--accent); }
+.db-curve-cursor-dot.is-theory { fill: var(--info); }
+.db-curve-cursor-dot.is-target { fill: var(--success); }
+.db-curve-cursor-dot.is-eta { fill: #7a6cff; }
+.db-curve-notes:empty { display: none; }
 .db-curve-mode {
   border: none; background: transparent;
   border-radius: 999px; padding: 3px 11px;
@@ -2348,6 +2369,37 @@ option { background-color: var(--surface); color: var(--text); }
   .gantt-label-days { font-size: 10px; }
   .gantt-hint { display: none; }
 }
+
+/* ============ IMPORT / EXPORT DES ZONES (fichier tableur) ============ */
+.zone-io { margin-top: 22px; }
+.zone-io-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.zone-io-actions button { flex: 0 1 auto; }
+.zone-import-modal .modal-body { display: flex; flex-direction: column; gap: 12px; }
+.zone-import-file {
+  margin: 0; font-size: 12px; font-weight: 700; color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.zone-import-stats { display: flex; flex-wrap: wrap; gap: 8px; }
+.zone-import-stat {
+  flex: 1 1 92px;
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 8px 6px;
+}
+.zone-import-stat.is-ok { border-color: var(--success-border); background: var(--success-soft); }
+.zone-import-stat.is-warn { border-color: var(--warning-border); background: var(--warning-soft); }
+.zone-import-stat.is-err { border-color: var(--danger-border); background: var(--danger-soft); }
+.zone-import-stat-n { font-size: 19px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
+.zone-import-stat-label { font-size: 10.5px; color: var(--text-3); text-align: center; line-height: 1.25; }
+.zone-import-note { margin: 0; font-size: 12px; color: var(--text-2); line-height: 1.5; }
+.zone-import-note.is-warn { color: var(--warning); font-weight: 600; }
+.zone-import-list {
+  margin: 0; padding-left: 18px;
+  font-size: 12px; color: var(--text-2); line-height: 1.6;
+  max-height: 180px; overflow-y: auto;
+}
+.zone-import-list.is-err { color: var(--danger); }
+.zone-import-list .is-more { font-style: italic; color: var(--text-4); }
 
 /* ============ ADMINISTRATIF (commun Sécurité + eCheckIn) ============ */
 .admin-company {

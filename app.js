@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.74';
+const APP_VERSION = '1.75';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -56,6 +56,7 @@ const state = {
   recapBuildingId: null,  // zone racine sélectionnée dans Avancement → Récapitulatif
   recapPeriod: '7',       // période de comparaison du récapitulatif (UI)
   recapCurveMode: 'pct',  // courbe en % ou en heures (UI)
+  recapCurveZoom: 'auto', // échelle de temps de la courbe (UI)
   zonePickerCollapsed: {}, // { [zoneId]: true } — branches repliées dans les sélecteurs de zone (UI)
   // Planning par zone racine (Données → Planning) : permet de tracer la
   // courbe d'avancement d'un bâtiment sur SA propre période, au lieu de
@@ -207,6 +208,7 @@ function load() {
     if (data.recapBuildingId) state.recapBuildingId = data.recapBuildingId;
     if (typeof data.recapPeriod === 'string') state.recapPeriod = data.recapPeriod;
     if (data.recapCurveMode === 'heures' || data.recapCurveMode === 'pct') state.recapCurveMode = data.recapCurveMode;
+    if (typeof data.recapCurveZoom === 'string') state.recapCurveZoom = data.recapCurveZoom;
     if (data.adminDocs) state.adminDocs = data.adminDocs;
     if (data.workers) state.workers = data.workers;
     if (data.workerDocs) state.workerDocs = data.workerDocs;
@@ -335,6 +337,7 @@ function buildPersistedData() {
     recapBuildingId: state.recapBuildingId,
     recapPeriod: state.recapPeriod,
     recapCurveMode: state.recapCurveMode,
+    recapCurveZoom: state.recapCurveZoom,
     adminDocs: state.adminDocs,
     workers: state.workers,
     workerDocs: state.workerDocs,
@@ -1415,7 +1418,7 @@ function renderDashboardHeures() {
   `;
   body.querySelector('.dash-heures-pct').textContent = pct != null ? pct + ' %' : '—';
   body.querySelector('.dash-heures-detail').textContent =
-    `${fmtHeures(sumDroit)} h acquises / ${fmtHeures(sumBudget)} h budget · ${week ? week.name : ''}`;
+    `${fmtHeures(sumDroit)} h droit à dépenser / ${fmtHeures(sumBudget)} h budget · ${week ? week.name : ''}`;
   const ec = body.querySelector('.dash-heures-ecart');
   ec.textContent = `Écart au stade : ${sumEcart >= 0 ? '+' : ''}${fmtHeures(sumEcart)} h`;
   ec.classList.add(sumEcart >= 0 ? 'is-positive' : 'is-negative');
@@ -2811,7 +2814,9 @@ function changeProgress(zoneId, taskId, delta) {
 }
 
 function navigateAvancement(delta) {
-  const list = getTaskZonesInOrder();
+  // Navigation bornée au bâtiment courant (cf. renderAvancement).
+  const root = getZoneRoot(state.avancementZoneId);
+  const list = getTaskZonesInOrder().filter(z => getZoneRoot(z.id) === root);
   const idx = list.findIndex(z => z.id === state.avancementZoneId);
   if (idx < 0) return;
   const newIdx = idx + delta;
@@ -2819,6 +2824,18 @@ function navigateAvancement(delta) {
   state.avancementZoneId = list[newIdx].id;
   save();
   renderAvancement();
+}
+
+// Zone racine (bâtiment) d'une zone quelconque.
+function getZoneRoot(zoneId) {
+  let z = state.zones.find(x => x.id === zoneId);
+  let guard = 0;
+  while (z && z.parentId && guard++ < 100) {
+    const parent = state.zones.find(x => x.id === z.parentId);
+    if (!parent) break;
+    z = parent;
+  }
+  return z ? z.id : null;
 }
 
 function resolveAvancementZone() {
@@ -3115,9 +3132,19 @@ function renderAvancement() {
 
   // Fiche : en-tête (flèches + titre) + liste de tâches
   fiche.hidden = false;
-  const idx = taskZones.findIndex(z => z.id === zone.id);
-  document.getElementById('ficheprev').disabled = idx <= 0;
-  document.getElementById('fichenext').disabled = idx < 0 || idx >= taskZones.length - 1;
+  // Les flèches restent dans le bâtiment courant : passer de la dernière
+  // zone d'un bâtiment à la première du suivant fait perdre le fil. Au bord,
+  // la flèche est grisée et l'on change de bâtiment par le sélecteur.
+  const root = getZoneRoot(zone.id);
+  const sameB = taskZones.filter(z => getZoneRoot(z.id) === root);
+  const idx = sameB.findIndex(z => z.id === zone.id);
+  const prevBtn = document.getElementById('ficheprev');
+  const nextBtn = document.getElementById('fichenext');
+  prevBtn.disabled = idx <= 0;
+  nextBtn.disabled = idx < 0 || idx >= sameB.length - 1;
+  const bName = (state.zones.find(z => z.id === root) || {}).name || 'ce bâtiment';
+  prevBtn.title = prevBtn.disabled ? 'Première zone de ' + bName + ' — changez de bâtiment ci-dessus' : 'Zone précédente';
+  nextBtn.title = nextBtn.disabled ? 'Dernière zone de ' + bName + ' — changez de bâtiment ci-dessus' : 'Zone suivante';
 
   renderFicheHeader();
   renderProgressList();
@@ -3258,6 +3285,368 @@ function buildProgressItem(zoneId, setup, task, quantity) {
     renderRecap();
   });
   return li;
+}
+
+
+// ================== IMPORT / EXPORT DES ZONES (fichier tableur) ==========
+// Une ligne = une zone, décrite par son chemin (Bâtiment / Étage / Zone /
+// Sous-zone). Les colonnes suivantes portent la quantité de chaque ouvrage
+// pour la zone la plus profonde de la ligne. Format CSV point-virgule, UTF-8
+// avec BOM : Excel FR l'ouvre en colonnes sans rien demander.
+const ZONE_IO_LEVELS = ['Bâtiment', 'Étage', 'Zone', 'Sous-zone'];
+const ZONE_IO_SEP = ';';
+
+// Comparaison de noms tolérante : casse, accents et espaces multiples.
+function zoneKeyOf(name) {
+  return String(name || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/\s+/g, ' ').trim();
+}
+function csvEscape(v) {
+  const s = String(v == null ? '' : v);
+  return /[";\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+// Analyseur CSV complet : guillemets, doublement des guillemets, retours à la
+// ligne dans les champs, séparateur détecté sur la ligne d'en-tête.
+function parseDelimited(text) {
+  const clean = text.replace(/^﻿/, '').replace(/\r\n?/g, '\n');
+  const firstLine = (clean.split('\n').find(l => l.trim() && !l.trim().startsWith('#')) || '');
+  const counts = { ';': 0, ',': 0, '\t': 0 };
+  let q = false;
+  for (const ch of firstLine) {
+    if (ch === '"') q = !q;
+    else if (!q && ch in counts) counts[ch]++;
+  }
+  const sep = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || ZONE_IO_SEP;
+  const rows = [];
+  let row = [], field = '', inQ = false;
+  for (let i = 0; i < clean.length; i++) {
+    const c = clean[i];
+    if (inQ) {
+      if (c === '"') {
+        if (clean[i + 1] === '"') { field += '"'; i++; }
+        else inQ = false;
+      } else field += c;
+      continue;
+    }
+    if (c === '"') { inQ = true; continue; }
+    if (c === sep) { row.push(field); field = ''; continue; }
+    if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; continue; }
+    field += c;
+  }
+  row.push(field);
+  if (row.some(v => v !== '')) rows.push(row);
+  return rows.map(r => r.map(v => v.trim()));
+}
+
+// En-tête d'une colonne d'ouvrage : « Bardage métallique (m²) ».
+function zoneIoOuvrageHeader(setup) {
+  return (setup.name || '(ouvrage sans nom)') + ' (' + (setup.unit || 'm²') + ')';
+}
+// … et l'opération inverse, tolérante : on retire l'unité entre parenthèses
+// puis on compare sur le nom normalisé.
+function zoneIoMatchSetup(header) {
+  const bare = String(header || '').replace(/\s*\([^)]*\)\s*$/, '');
+  const k = zoneKeyOf(bare);
+  if (!k) return null;
+  return state.taskSetups.find(s => zoneKeyOf(s.name) === k)
+    || state.taskSetups.find(s => zoneKeyOf(s.name) === zoneKeyOf(header)) || null;
+}
+
+// Lignes décrivant l'arborescence actuelle, dans l'ordre de l'arbre.
+function zoneIoCurrentRows() {
+  const setups = state.taskSetups;
+  const rows = [];
+  const walk = (parentId, path) => {
+    for (const z of state.zones.filter(x => (x.parentId || null) === parentId)) {
+      const p = path.concat([z.name || '']);
+      if (p.length <= ZONE_IO_LEVELS.length) {
+        const cells = ZONE_IO_LEVELS.map((_, i) => p[i] || '');
+        const assigned = state.zoneOuvrages[z.id] || [];
+        const qty = setups.map(s => {
+          const found = assigned.find(o => o.setupId === s.id);
+          return found ? String(found.quantity || 0).replace('.', ',') : '';
+        });
+        // On n'écrit la ligne que si elle porte des quantités ou si elle est
+        // une feuille : sinon l'arbre se relit à travers ses descendants.
+        const isLeaf = !state.zones.some(x => x.parentId === z.id);
+        if (isLeaf || qty.some(v => v !== '')) rows.push(cells.concat(qty));
+      }
+      walk(z.id, p);
+    }
+  };
+  walk(null, []);
+  return rows;
+}
+
+function zoneIoHeaderRow() {
+  return ZONE_IO_LEVELS.concat(state.taskSetups.map(zoneIoOuvrageHeader));
+}
+// Bloc d'aide en tête de fichier. Préfixé par « # » : l'import l'ignore, et
+// le fichier reste auto-documenté quand il circule par mail.
+function zoneIoInstructions() {
+  const setups = state.taskSetups;
+  return [
+    '# MODÈLE D\'IMPORT DE ZONES — Suivi de chantier',
+    '# ------------------------------------------------------------------',
+    '# Une ligne = une zone. Les 4 premières colonnes décrivent son chemin :',
+    '#   Bâtiment ; Étage ; Zone ; Sous-zone',
+    '# Laissez vides les niveaux inutiles : « Bâtiment A ; RDC » crée le',
+    '# bâtiment A et son étage RDC, sans descendre plus bas.',
+    '# Les niveaux parents sont créés automatiquement s\'ils n\'existent pas.',
+    '# Un nom déjà présent au même endroit est réutilisé, jamais dupliqué.',
+    '#',
+    '# Les colonnes suivantes sont vos ouvrages (Données → Tâches) : indiquez',
+    '# la quantité pour la zone la plus profonde de la ligne. Case vide = pas',
+    '# d\'affectation. Décimales avec la virgule ou le point.',
+    setups.length
+      ? '# Ouvrages disponibles : ' + setups.map(s => (s.name || '?') + ' (' + (s.unit || 'm²') + ')').join(' · ')
+      : '# ATTENTION : aucun ouvrage paramétré. Créez-les dans Données → Tâches,'
+        + ' puis retéléchargez ce modèle pour obtenir leurs colonnes.',
+    '#',
+    '# Les lignes commençant par # sont ignorées : supprimez le # devant les',
+    '# exemples ci-dessous pour vous en servir, ou effacez-les.',
+    '# ------------------------------------------------------------------',
+  ];
+}
+function zoneIoExampleRows() {
+  const n = state.taskSetups.length;
+  const q = (a, b) => Array.from({ length: n }, (_, i) => (i === 0 ? a : (i === 1 ? b : '')));
+  return [
+    ['# Bâtiment A', 'RDC', '', ''].concat(q('320', '')),
+    ['# Bâtiment A', 'R+1', 'Logement 11', ''].concat(q('', '96')),
+    ['# Bâtiment A', 'R+1', 'Logement 12', 'Salle de bain'].concat(q('', '12,5')),
+    ['# Bâtiment B', 'RDC', '', ''].concat(q('410', '150')),
+  ];
+}
+
+function buildZoneCsv(rows, withInstructions, withExamples) {
+  const lines = [];
+  if (withInstructions) lines.push(...zoneIoInstructions());
+  lines.push(zoneIoHeaderRow().map(csvEscape).join(ZONE_IO_SEP));
+  if (withExamples) for (const r of zoneIoExampleRows()) lines.push(r.map(csvEscape).join(ZONE_IO_SEP));
+  for (const r of rows) lines.push(r.map(csvEscape).join(ZONE_IO_SEP));
+  return '﻿' + lines.join('\r\n') + '\r\n';
+}
+function downloadZoneCsv(content, name) {
+  const blob = new Blob([content], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+function exportZoneTemplate() {
+  downloadZoneCsv(buildZoneCsv([], true, true), 'modele-zones.csv');
+  showToast('Modèle téléchargé — complétez-le puis réimportez-le');
+}
+function exportZoneTree() {
+  const rows = zoneIoCurrentRows();
+  if (!rows.length) { showToast('Aucune zone à exporter', 'error'); return; }
+  const d = new Date();
+  const stamp = String(d.getDate()).padStart(2, '0') + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + d.getFullYear();
+  downloadZoneCsv(buildZoneCsv(rows, true, false), 'zones_' + stamp + '.csv');
+  showToast(rows.length + ' ligne' + (rows.length > 1 ? 's' : '') + ' exportée' + (rows.length > 1 ? 's' : ''));
+}
+
+// ---------------------------------------------------------------- import --
+// Analyse SANS rien modifier : on renvoie un plan d'exécution et un rapport,
+// que l'utilisateur valide avant application.
+function planZoneImport(text) {
+  const rows = parseDelimited(text);
+  const plan = {
+    columns: [], unknownColumns: [], newZones: [], reusedZones: 0,
+    assignments: [], updates: 0, errors: [], lines: 0,
+  };
+  const body = rows.filter(r => r.length && !String(r[0] || '').trim().startsWith('#'));
+  if (!body.length) { plan.errors.push('Fichier vide ou entièrement commenté (lignes « # »).'); return plan; }
+
+  // En-tête : les 4 niveaux, puis une colonne par ouvrage.
+  const header = body[0];
+  const levelKeys = ZONE_IO_LEVELS.map(zoneKeyOf);
+  const headOk = header.slice(0, 4).map(zoneKeyOf).every((h, i) => h === levelKeys[i]);
+  if (!headOk) {
+    plan.errors.push('En-tête inattendu. Les quatre premières colonnes doivent être : '
+      + ZONE_IO_LEVELS.join(' ; ') + '. Repartez du modèle téléchargeable.');
+    return plan;
+  }
+  for (let c = 4; c < header.length; c++) {
+    const h = header[c];
+    if (!h) continue;
+    const setup = zoneIoMatchSetup(h);
+    if (setup) plan.columns.push({ index: c, setup });
+    else plan.unknownColumns.push(h);
+  }
+
+  // Arborescence provisoire : les zones existantes, plus celles à créer.
+  const childrenOf = (parentId) => state.zones.filter(z => (z.parentId || null) === parentId);
+  const pending = [];            // zones à créer, dans l'ordre
+  const resolve = (parentId, name) => {
+    const k = zoneKeyOf(name);
+    const existing = childrenOf(parentId).find(z => zoneKeyOf(z.name) === k);
+    if (existing) { plan.reusedZones++; return { id: existing.id, created: false }; }
+    const already = pending.find(p => p.parentKey === String(parentId) && zoneKeyOf(p.name) === k);
+    if (already) return { id: already.tmpId, created: false };
+    const tmpId = '__new_' + pending.length;
+    pending.push({ tmpId, parentKey: String(parentId), parentId, name: String(name).trim() });
+    plan.newZones.push({ tmpId, name: String(name).trim(), parentId });
+    return { id: tmpId, created: true };
+  };
+
+  for (let r = 1; r < body.length; r++) {
+    const row = body[r];
+    const path = ZONE_IO_LEVELS.map((_, i) => String(row[i] || '').trim()).filter(Boolean);
+    const rawPath = ZONE_IO_LEVELS.map((_, i) => String(row[i] || '').trim());
+    if (!path.length) continue;                       // ligne vide : ignorée
+    plan.lines++;
+    // Un trou dans le chemin (Bâtiment vide mais Étage rempli) est ambigu.
+    const firstEmpty = rawPath.findIndex(v => !v);
+    if (firstEmpty !== -1 && rawPath.slice(firstEmpty).some(Boolean)) {
+      plan.errors.push('Ligne ' + (r + 1) + ' : chemin incomplet (« '
+        + rawPath.map(v => v || '—').join(' › ') + ' »). Remplissez les niveaux de gauche à droite.');
+      continue;
+    }
+    let parentId = null;
+    let zoneId = null;
+    for (const name of path) {
+      const res = resolve(parentId, name);
+      zoneId = res.id;
+      parentId = res.id;
+    }
+    for (const col of plan.columns) {
+      const raw = String(row[col.index] || '').trim();
+      if (!raw) continue;
+      const n = parseFloat(raw.replace(/\s/g, '').replace(',', '.'));
+      if (!Number.isFinite(n) || n < 0) {
+        plan.errors.push('Ligne ' + (r + 1) + ', colonne « ' + col.setup.name + ' » : « ' + raw + ' » n\'est pas une quantité valide.');
+        continue;
+      }
+      plan.assignments.push({ zoneId, setupId: col.setup.id, quantity: n, path: path.join(' › '), setupName: col.setup.name });
+    }
+  }
+  plan.pending = pending;
+  // Compte des affectations qui écrasent une valeur existante.
+  for (const a of plan.assignments) {
+    if (String(a.zoneId).startsWith('__new_')) continue;
+    const cur = (state.zoneOuvrages[a.zoneId] || []).find(o => o.setupId === a.setupId);
+    if (cur && (cur.quantity || 0) !== a.quantity) plan.updates++;
+  }
+  return plan;
+}
+
+// Application du plan : création des zones puis affectation des quantités.
+function applyZoneImport(plan) {
+  const idMap = {};
+  for (const p of plan.pending) {
+    const parent = p.parentId && String(p.parentId).startsWith('__new_') ? idMap[p.parentId] : p.parentId;
+    const zone = { id: uid(), name: p.name, parentId: parent || null };
+    state.zones.push(zone);
+    idMap[p.tmpId] = zone.id;
+    if (zone.parentId) delete state.zoneCollapsed[zone.parentId];
+  }
+  let assigned = 0;
+  for (const a of plan.assignments) {
+    const zid = String(a.zoneId).startsWith('__new_') ? idMap[a.zoneId] : a.zoneId;
+    if (!zid || !state.zones.some(z => z.id === zid)) continue;
+    if (!state.zoneOuvrages[zid]) state.zoneOuvrages[zid] = [];
+    const list = state.zoneOuvrages[zid];
+    const found = list.find(o => o.setupId === a.setupId);
+    if (found) found.quantity = a.quantity;
+    else list.push({ setupId: a.setupId, quantity: a.quantity });
+    assigned++;
+  }
+  save();
+  renderZones();
+  renderAvancement();
+  renderZonePlanning();
+  return { zones: plan.pending.length, assigned };
+}
+
+// ------------------------------------------------------- rapport & modale --
+let _zoneImportPlan = null;
+function openZoneImportModal(plan, fileName) {
+  const overlay = document.getElementById('zoneimportmodal');
+  const body = document.getElementById('zoneimportbody');
+  const confirm = document.getElementById('zoneimportconfirm');
+  if (!overlay || !body) return;
+  _zoneImportPlan = plan;
+  body.innerHTML = '';
+  body.appendChild(dbEl('p', 'zone-import-file', fileName));
+
+  const blocking = plan.errors.length > 0 && plan.newZones.length === 0 && plan.assignments.length === 0;
+  const stats = dbEl('div', 'zone-import-stats');
+  const stat = (n, label, cls) => {
+    const s = dbEl('div', 'zone-import-stat' + (cls ? ' ' + cls : ''));
+    s.appendChild(dbEl('span', 'zone-import-stat-n', String(n)));
+    s.appendChild(dbEl('span', 'zone-import-stat-label', label));
+    stats.appendChild(s);
+  };
+  stat(plan.lines, 'ligne' + (plan.lines > 1 ? 's' : '') + ' lue' + (plan.lines > 1 ? 's' : ''));
+  stat(plan.newZones.length, 'zone' + (plan.newZones.length > 1 ? 's' : '') + ' créée' + (plan.newZones.length > 1 ? 's' : ''), 'is-ok');
+  stat(plan.reusedZones, 'réutilisée' + (plan.reusedZones > 1 ? 's' : ''));
+  stat(plan.assignments.length, 'quantité' + (plan.assignments.length > 1 ? 's' : '') + ' affectée' + (plan.assignments.length > 1 ? 's' : ''), 'is-ok');
+  if (plan.updates) stat(plan.updates, 'écrasée' + (plan.updates > 1 ? 's' : ''), 'is-warn');
+  if (plan.errors.length) stat(plan.errors.length, 'erreur' + (plan.errors.length > 1 ? 's' : ''), 'is-err');
+  body.appendChild(stats);
+
+  if (plan.columns.length) {
+    body.appendChild(dbEl('p', 'zone-import-note',
+      'Ouvrages reconnus : ' + plan.columns.map(c => c.setup.name).join(', ') + '.'));
+  }
+  if (plan.unknownColumns.length) {
+    body.appendChild(dbEl('p', 'zone-import-note is-warn',
+      'Colonnes ignorées (aucun ouvrage de ce nom dans Données → Tâches) : '
+      + plan.unknownColumns.join(', ') + '.'));
+  }
+  if (plan.newZones.length) {
+    const list = dbEl('ul', 'zone-import-list');
+    for (const z of plan.newZones.slice(0, 12)) list.appendChild(dbEl('li', null, z.name));
+    if (plan.newZones.length > 12) list.appendChild(dbEl('li', 'is-more', '… et ' + (plan.newZones.length - 12) + ' autres'));
+    body.appendChild(dbEl('p', 'zone-import-note', 'Zones qui seront créées :'));
+    body.appendChild(list);
+  }
+  if (plan.errors.length) {
+    const list = dbEl('ul', 'zone-import-list is-err');
+    for (const e of plan.errors.slice(0, 12)) list.appendChild(dbEl('li', null, e));
+    if (plan.errors.length > 12) list.appendChild(dbEl('li', 'is-more', '… et ' + (plan.errors.length - 12) + ' autres'));
+    body.appendChild(dbEl('p', 'zone-import-note is-warn', 'Lignes non importées :'));
+    body.appendChild(list);
+  }
+  if (!blocking && !plan.newZones.length && !plan.assignments.length) {
+    body.appendChild(dbEl('p', 'zone-import-note', 'Rien à importer : le fichier ne contient aucune zone nouvelle ni quantité.'));
+  }
+  confirm.disabled = blocking || (!plan.newZones.length && !plan.assignments.length);
+  overlay.hidden = false;
+}
+function closeZoneImportModal() {
+  const overlay = document.getElementById('zoneimportmodal');
+  if (overlay) overlay.hidden = true;
+  _zoneImportPlan = null;
+  const input = document.getElementById('zoneimportinput');
+  if (input) input.value = '';       // réimporter le même fichier reste possible
+}
+function confirmZoneImport() {
+  if (!_zoneImportPlan) return;
+  const res = applyZoneImport(_zoneImportPlan);
+  closeZoneImportModal();
+  showToast(res.zones + ' zone' + (res.zones > 1 ? 's' : '') + ' créée' + (res.zones > 1 ? 's' : '')
+    + ' · ' + res.assigned + ' affectation' + (res.assigned > 1 ? 's' : ''));
+}
+function handleZoneImportFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      openZoneImportModal(planZoneImport(String(reader.result || '')), file.name);
+    } catch (e) {
+      console.warn('[Zones] import KO', e);
+      showToast('Fichier illisible : vérifiez qu\'il s\'agit bien d\'un CSV', 'error');
+    }
+  };
+  reader.onerror = () => showToast('Lecture du fichier impossible', 'error');
+  reader.readAsText(file, 'UTF-8');
 }
 
 // ---------- Avancement → Récapitulatif (par bâtiment) ----------
@@ -3850,9 +4239,9 @@ async function exportAvancementToPDF(scope, label) {
       } : { label: 'ÉCART AU PLANNING', value: '—', color: [140,140,140], sub: 'dates de chantier non renseignées' },
       {
         label: model.weighting === 'heures' ? 'HEURES DE MAIN-D\'ŒUVRE' : 'CHARGE PONDÉRÉE',
-        value: formatHours(model.hDone) + unit,
+        value: formatHours(model.hDone) + unit + ' de droit à dépenser',
         color: [40, 40, 40],
-        sub: 'sur ' + formatHours(model.hBudget) + unit + ' — reste ' + formatHours(Math.max(0, model.hBudget - model.hDone)) + unit
+        sub: 'sur ' + formatHours(model.hBudget) + unit + ' budgétées — reste ' + formatHours(Math.max(0, model.hBudget - model.hDone)) + unit
       },
       planning ? {
         label: 'CALENDRIER',
@@ -4331,7 +4720,7 @@ function buildDbKpis(model, planning, velocity) {
   k3.appendChild(dbEl('div', 'db-kpi-label', model.weighting === 'heures' ? 'Heures de main-d\'œuvre' : 'Charge pondérée'));
   const v3 = dbEl('div', 'db-kpi-value');
   v3.appendChild(dbEl('span', 'db-kpi-num', formatHours(model.hDone)));
-  v3.appendChild(dbEl('span', 'db-kpi-unit', model.weighting === 'heures' ? 'h acquises' : 'pts acquis'));
+  v3.appendChild(dbEl('span', 'db-kpi-unit', model.weighting === 'heures' ? 'h droit à dépenser' : 'pts acquis'));
   k3.appendChild(v3);
   k3.appendChild(dbBar(model.pct));
   k3.appendChild(dbEl('div', 'db-kpi-sub',
@@ -4387,86 +4776,193 @@ function buildDbKpis(model, planning, velocity) {
 // Quatre tracés se superposent : l'avancement réel, la trajectoire théorique
 // (linéaire sur la période), le rythme à tenir (du jour à 100 % à l'échéance)
 // et la projection au rythme observé (du jour à 100 % à la date projetée).
-// Un curseur au survol donne la valeur à n'importe quelle date, et une
-// bascule affiche l'axe en % ou en heures.
+// L'échelle de temps se contracte ou se dilate comme celle du planning, et un
+// curseur donne, pour n'importe quelle date, la valeur des quatre courbes.
+const CURVE_ZOOMS = [
+  { key: 'auto',     label: 'Ajusté',   dayW: null },
+  { key: 'mois',     label: 'Mois',     dayW: 62 / 30.4 },
+  { key: 'semaines', label: 'Semaines', dayW: 30 / 7 },
+  { key: 'jours',    label: 'Jours',    dayW: 22 },
+];
+const CURVE_MAX_W = 24000;   // garde-fou : au-delà, le SVG devient inexploitable
+
+// Graduations intermédiaires : un pas « rond » (jour, semaine, mois,
+// trimestre, année) choisi pour laisser au moins ~86 px entre deux dates.
+function curveTicks(t0, t1, plotW, prefer) {
+  const day = 86400000;
+  const days = Math.max(1, Math.round((t1 - t0) / day));
+  const maxTicks = Math.max(2, Math.floor(plotW / 86));
+  let step = days / maxTicks;
+  // L'échelle choisie impose la finesse des repères tant qu'ils ne se
+  // chevauchent pas : sur un chantier court, « Mois » et « Semaines » ne
+  // dilatent rien (la largeur est déjà suffisante) mais doivent tout de même
+  // changer visiblement la graduation.
+  if (prefer) {
+    const pxPerDay = plotW / days;
+    if (prefer === 'jours' && pxPerDay >= 24) step = 1;
+    else if (prefer === 'semaines' && pxPerDay * 7 >= 40) step = 7;
+    else if (prefer === 'mois' && pxPerDay * 30 >= 52) step = 30;
+  }
+  const out = [];
+  const push = (ms, label) => { if (ms >= t0 && ms <= t1) out.push({ ms, label }); };
+  const d0 = new Date(t0);
+  if (step <= 1.2) {
+    for (let ms = t0; ms <= t1; ms += day) push(ms, fmtFR(new Date(ms).toISOString().slice(0, 10)).slice(0, 5));
+  } else if (step <= 3) {
+    for (let ms = t0; ms <= t1; ms += 2 * day) push(ms, fmtFR(new Date(ms).toISOString().slice(0, 10)).slice(0, 5));
+  } else if (step <= 10) {
+    // Lundis : le repère naturel d'un planning de chantier
+    let d = new Date(Date.UTC(d0.getUTCFullYear(), d0.getUTCMonth(), d0.getUTCDate()));
+    while (d.getUTCDay() !== 1) d = new Date(d.getTime() + day);
+    for (let ms = d.getTime(); ms <= t1; ms += 7 * day) push(ms, fmtFR(new Date(ms).toISOString().slice(0, 10)).slice(0, 5));
+  } else if (step <= 20) {
+    let d = new Date(Date.UTC(d0.getUTCFullYear(), d0.getUTCMonth(), d0.getUTCDate()));
+    while (d.getUTCDay() !== 1) d = new Date(d.getTime() + day);
+    for (let ms = d.getTime(); ms <= t1; ms += 14 * day) push(ms, fmtFR(new Date(ms).toISOString().slice(0, 10)).slice(0, 5));
+  } else {
+    const monthStep = step <= 45 ? 1 : (step <= 75 ? 2 : (step <= 120 ? 3 : (step <= 250 ? 6 : 12)));
+    let y = d0.getUTCFullYear(), m = d0.getUTCMonth();
+    // On aligne le premier repère sur un multiple du pas pour éviter les
+    // suites du type « févr., mai, août » quand « janv., avr., juil. » se lit mieux.
+    m = Math.floor(m / monthStep) * monthStep;
+    for (let ms = Date.UTC(y, m, 1); ms <= t1; ) {
+      push(ms, monthStep >= 12
+        ? String(new Date(ms).getUTCFullYear())
+        : GANTT_MONTHS_FR[new Date(ms).getUTCMonth()] + ' ' + String(new Date(ms).getUTCFullYear()).slice(2));
+      m += monthStep;
+      if (m > 11) { y += Math.floor(m / 12); m %= 12; }
+      ms = Date.UTC(y, m, 1);
+    }
+  }
+  return out;
+}
+
 function buildDbCurve(model, planning, scope, velocity) {
   const card = dbCard('Courbe d\'avancement');
   const serie = getAvancementSeries(scope);
-  const keys = serie.map(p => p.date);
-  const hist = {};
-  for (const p of serie) hist[p.date] = { pct: p.pct };
-  // Les heures acquises ne sont mémorisées qu'au niveau global ; pour un
-  // bâtiment on les reconstitue à partir du % et de son budget du jour.
-  const rawHist = state.avancementHistory || {};
   const hBudget = model.hBudget;
   // La bascule n'a de sens qu'en pondération « heures » : sans ratio saisi,
   // model.hBudget est une somme de quantités, pas des heures.
   const canHours = model.weighting === 'heures' && hBudget > 0;
   const mode = (state.recapCurveMode === 'heures' && canHours) ? 'heures' : 'pct';
-  const yMax = mode === 'heures' ? hBudget : 100;
-  const valOf = (dateKey, pct) => {
-    if (mode !== 'heures') return pct;
-    const point = rawHist[dateKey];
-    if (!scope && point && typeof point.hDone === 'number') return point.hDone;
-    return (pct / 100) * hBudget;
-  };
-  const fmtVal = (v) => mode === 'heures' ? formatHours(v) + ' h' : formatPct(Math.round(v * 10) / 10) + ' %';
+  const zoom = CURVE_ZOOMS.find(z => z.key === state.recapCurveZoom) || CURVE_ZOOMS[0];
 
-  // Bascule % / heures : la lecture en heures est celle du droit à dépenser.
+  const head = card.querySelector('.db-card-head');
+  const controls = dbEl('div', 'db-curve-controls');
+  // Échelle de temps, comme au planning : « Ajusté » tient dans la page, les
+  // autres dilatent l'axe et font défiler.
+  const zseg = dbEl('div', 'db-curve-modes');
+  zseg.appendChild(dbEl('span', 'db-curve-modes-label', 'Échelle'));
+  for (const z of CURVE_ZOOMS) {
+    const b = dbEl('button', 'db-curve-mode' + (zoom.key === z.key ? ' is-on' : ''), z.label);
+    b.type = 'button';
+    b.title = z.dayW == null ? 'Toute la période dans la largeur disponible'
+      : 'Dilater l\'axe du temps à l\'échelle : ' + z.label.toLowerCase();
+    b.addEventListener('click', () => { state.recapCurveZoom = z.key; save(); renderRecap(); });
+    zseg.appendChild(b);
+  }
+  controls.appendChild(zseg);
   if (canHours) {
     const seg = dbEl('div', 'db-curve-modes');
     for (const [key, label] of [['pct', '%'], ['heures', 'Heures']]) {
       const b = dbEl('button', 'db-curve-mode' + (mode === key ? ' is-on' : ''), label);
       b.type = 'button';
-      b.title = key === 'pct' ? 'Axe en pourcentage d\'avancement' : 'Axe en heures de main-d\'œuvre acquises';
+      b.title = key === 'pct' ? 'Axe en pourcentage d\'avancement' : 'Axe en heures de main-d\'œuvre';
       b.addEventListener('click', () => { state.recapCurveMode = key; save(); renderRecap(); });
       seg.appendChild(b);
     }
-    card.querySelector('.db-card-head').appendChild(seg);
+    controls.appendChild(seg);
   }
+  head.appendChild(controls);
 
-  // Le viewBox suit la largeur d'écran : sans cela, l'étirement d'un
-  // canevas 760×220 sur un téléphone déforme les libellés d'axes — et sur un
-  // 24 pouces, la même courbe s'étirerait sur près de 500 px de haut.
-  const vw = window.innerWidth || 1024;
-  const narrow = vw < 700;
-  const W = narrow ? 400 : (vw >= 1400 ? 1200 : 760), H = narrow ? 250 : 232;
-  const PAD_L = mode === 'heures' ? 46 : 38, PAD_R = 14, PAD_T = 12, PAD_B = 26;
-
-  if (!keys.length) {
+  if (!serie.length) {
     card.appendChild(dbEl('p', 'db-empty', scope
       ? 'Pas encore de point pour ce bâtiment : la courbe par bâtiment se construit à partir des prochaines saisies d\'avancement.'
       : 'La courbe se construit automatiquement : un point est enregistré chaque jour où l\'avancement évolue.'));
     return card;
   }
-  // Étendue temporelle : le planning s'il existe, l'historique, et la date
-  // de fin projetée si elle sort de la période — sinon la droite serait
-  // tronquée au bord droit du graphique.
+
+  const scroll = dbEl('div', 'db-curve-scroll');
+  const box = dbEl('div', 'db-curve-wrap');
+  scroll.appendChild(box);
+  card.appendChild(scroll);
+  const legend = dbEl('div', 'db-legend');
+  card.appendChild(legend);
+  const notes = dbEl('div', 'db-curve-notes');
+  card.appendChild(notes);
+
+  // Le tracé se dimensionne sur la largeur réelle du conteneur : on attend
+  // donc son insertion dans le document pour le dessiner.
+  requestAnimationFrame(() => {
+    if (!scroll.isConnected) return;
+    drawDbCurve({ scroll, box, legend, notes, model, planning, scope, velocity, serie, mode, zoom, canHours, hBudget });
+  });
+  return card;
+}
+
+function drawDbCurve(ctx) {
+  const { scroll, box, legend, notes, model, planning, scope, velocity, serie, mode, zoom, canHours, hBudget } = ctx;
+  box.innerHTML = '';
+  legend.innerHTML = '';
+  notes.innerHTML = '';
+
   const day = 86400000;
   const ms = (iso) => new Date(iso + 'T00:00:00').getTime();
+  const isoOf = (msVal) => new Date(msVal).toISOString().slice(0, 10);
+  const keys = serie.map(p => p.date);
   const firstHist = ms(keys[0]);
   const lastHist = ms(keys[keys.length - 1]);
   let t0 = planning ? Math.min(firstHist, ms(planning.start)) : firstHist;
   let t1 = planning ? Math.max(lastHist, ms(planning.end)) : Math.max(lastHist, t0 + day);
   if (velocity && velocity.etaISO) t1 = Math.max(t1, ms(velocity.etaISO));
   const span = Math.max(day, t1 - t0);
-  const x = (msVal) => PAD_L + ((msVal - t0) / span) * (W - PAD_L - PAD_R);
+  const totalDays = Math.round(span / day) + 1;
+
+  const avail = Math.max(320, scroll.clientWidth || 760);
+  const H = Math.max(240, Math.min(380, Math.round(avail * 0.3)));
+  const PAD_L = mode === 'heures' ? 52 : 40, PAD_R = 16, PAD_T = 14, PAD_B = 30;
+  const wanted = zoom.dayW ? Math.round(totalDays * zoom.dayW) + PAD_L + PAD_R : avail;
+  const W = Math.max(avail, Math.min(CURVE_MAX_W, wanted));
+
+  const yMax = mode === 'heures' ? hBudget : 100;
+  const rawHist = state.avancementHistory || {};
+  const valOf = (dateKey, pct) => {
+    if (mode !== 'heures') return pct;
+    const point = rawHist[dateKey];
+    if (!scope && point && typeof point.hDone === 'number') return point.hDone;
+    return (pct / 100) * hBudget;
+  };
+  const x = (v) => PAD_L + ((v - t0) / span) * (W - PAD_L - PAD_R);
   const y = (v) => PAD_T + (1 - Math.max(0, Math.min(yMax, v)) / yMax) * (H - PAD_T - PAD_B);
+  const toY = (pct) => mode === 'heures' ? (pct / 100) * hBudget : pct;
+  const fmtV = (pct) => mode === 'heures'
+    ? formatHours((pct / 100) * hBudget) + ' h'
+    : formatPct(Math.round(pct * 10) / 10) + ' %';
 
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svg.setAttribute('class', 'db-curve');
+  svg.style.width = W + 'px';
+  svg.style.height = H + 'px';
   const mk = (tag, attrs) => {
     const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
     for (const k in attrs) el.setAttribute(k, attrs[k]);
     return el;
   };
-  // Grille horizontale + graduations
+  // Grille horizontale + graduations de l'axe des valeurs
   for (const q of [0, 0.25, 0.5, 0.75, 1]) {
     const v = yMax * q;
     svg.appendChild(mk('line', { x1: PAD_L, x2: W - PAD_R, y1: y(v), y2: y(v), class: 'db-curve-grid' }));
     const lab = mk('text', { x: PAD_L - 6, y: y(v) + 4, class: 'db-curve-axis', 'text-anchor': 'end' });
     lab.textContent = mode === 'heures' ? formatHours(v) : Math.round(q * 100) + '%';
+    svg.appendChild(lab);
+  }
+  // Graduations de l'axe du temps
+  const ticks = curveTicks(t0, t1, W - PAD_L - PAD_R, zoom.dayW ? zoom.key : null);
+  for (const tk of ticks) {
+    svg.appendChild(mk('line', { x1: x(tk.ms), x2: x(tk.ms), y1: PAD_T, y2: H - PAD_B, class: 'db-curve-vgrid' }));
+    const lab = mk('text', { x: x(tk.ms), y: H - 10, class: 'db-curve-axis', 'text-anchor': 'middle' });
+    lab.textContent = tk.label;
     svg.appendChild(lab);
   }
   // Repères de fin de bâtiment (période propre saisie dans le planning)
@@ -4492,107 +4988,149 @@ function buildDbCurve(model, planning, scope, velocity) {
     dot.appendChild(t.cloneNode(true));
     svg.appendChild(dot);
   }
-  // Trajectoire théorique (linéaire de 0 à 100 % sur la durée du chantier)
-  if (planning) {
-    svg.appendChild(mk('line', { x1: x(ms(planning.start)), y1: y(0), x2: x(ms(planning.end)), y2: y(yMax), class: 'db-curve-theory' }));
-  }
-  // Projections : rythme à tenir (vert) et rythme observé (bleu ardoise)
-  const lastKey = keys[keys.length - 1];
-  const lastPct = serie[serie.length - 1].pct;
-  const lastVal = valOf(lastKey, lastPct);
+
+  // ----- Les quatre séries, sous forme de fonctions du temps -----
+  const pts = keys.map(k => ({ ms: ms(k), k, pct: serie.find(p => p.date === k).pct }));
+  const realAt = (v) => {
+    if (v < pts[0].ms || v > pts[pts.length - 1].ms) return null;
+    for (let i = 1; i < pts.length; i++) {
+      if (v <= pts[i].ms) {
+        const a = pts[i - 1], b = pts[i];
+        if (b.ms === a.ms) return b.pct;
+        return a.pct + (b.pct - a.pct) * ((v - a.ms) / (b.ms - a.ms));
+      }
+    }
+    return pts[pts.length - 1].pct;
+  };
+  const ps = planning ? ms(planning.start) : null;
+  const pe = planning ? ms(planning.end) : null;
+  const theoryAt = (v) => {
+    if (!planning || pe <= ps) return null;
+    if (v < ps || v > pe) return null;
+    return ((v - ps) / (pe - ps)) * 100;
+  };
+  const lastPct = pts[pts.length - 1].pct;
   const fromMs = Math.max(ms(todayISO()), lastHist);
   const target = computeAvancementTarget(lastPct, planning);
-  const showTarget = !!(target && target.perWeek != null && !target.done);
-  if (showTarget) {
-    svg.appendChild(mk('line', { x1: x(fromMs), y1: y(lastVal), x2: x(ms(planning.end)), y2: y(yMax), class: 'db-curve-target' }));
-  }
-  const showEta = !!(velocity && velocity.etaISO && lastPct < 99.95);
+  const showTarget = !!(target && target.perWeek != null && !target.done && pe > fromMs);
+  const targetAt = (v) => {
+    if (!showTarget || v < fromMs || v > pe) return null;
+    return lastPct + (100 - lastPct) * ((v - fromMs) / (pe - fromMs));
+  };
+  const etaMs = velocity && velocity.etaISO ? ms(velocity.etaISO) : null;
+  const showEta = !!(etaMs && lastPct < 99.95 && etaMs > fromMs);
+  const etaAt = (v) => {
+    if (!showEta || v < fromMs || v > etaMs) return null;
+    return lastPct + (100 - lastPct) * ((v - fromMs) / (etaMs - fromMs));
+  };
+
+  if (planning) svg.appendChild(mk('line', { x1: x(ps), y1: y(0), x2: x(pe), y2: y(yMax), class: 'db-curve-theory' }));
+  if (showTarget) svg.appendChild(mk('line', { x1: x(fromMs), y1: y(toY(lastPct)), x2: x(pe), y2: y(yMax), class: 'db-curve-target' }));
   if (showEta) {
-    svg.appendChild(mk('line', { x1: x(fromMs), y1: y(lastVal), x2: x(ms(velocity.etaISO)), y2: y(yMax), class: 'db-curve-eta' }));
-    svg.appendChild(mk('circle', { cx: x(ms(velocity.etaISO)), cy: y(yMax), r: 3.5, class: 'db-curve-eta-dot' }));
+    svg.appendChild(mk('line', { x1: x(fromMs), y1: y(toY(lastPct)), x2: x(etaMs), y2: y(yMax), class: 'db-curve-eta' }));
+    svg.appendChild(mk('circle', { cx: x(etaMs), cy: y(yMax), r: 3.5, class: 'db-curve-eta-dot' }));
   }
   // Courbe réelle
-  const pts = keys.map(k => ({ x: x(ms(k)), y: y(valOf(k, hist[k].pct)), k, pct: hist[k].pct, val: valOf(k, hist[k].pct) }));
-  if (pts.length > 1) {
-    const d = pts.map((p, i) => (i ? 'L' : 'M') + p.x.toFixed(1) + ' ' + p.y.toFixed(1)).join(' ');
-    const area = d + ` L${pts[pts.length - 1].x.toFixed(1)} ${y(0)} L${pts[0].x.toFixed(1)} ${y(0)} Z`;
+  const drawn = pts.map(p => ({ x: x(p.ms), y: y(valOf(p.k, p.pct)) }));
+  if (drawn.length > 1) {
+    const d = drawn.map((p, i) => (i ? 'L' : 'M') + p.x.toFixed(1) + ' ' + p.y.toFixed(1)).join(' ');
+    const area = d + ` L${drawn[drawn.length - 1].x.toFixed(1)} ${y(0)} L${drawn[0].x.toFixed(1)} ${y(0)} Z`;
     svg.appendChild(mk('path', { d: area, class: 'db-curve-area' }));
     svg.appendChild(mk('path', { d, class: 'db-curve-real' }));
   }
-  const lastPt = pts[pts.length - 1];
-  svg.appendChild(mk('circle', { cx: lastPt.x, cy: lastPt.y, r: 4.5, class: 'db-curve-dot' }));
+  const lastDrawn = drawn[drawn.length - 1];
+  svg.appendChild(mk('circle', { cx: lastDrawn.x, cy: lastDrawn.y, r: 4.5, class: 'db-curve-dot' }));
   // Aujourd'hui
   const todayX = x(ms(todayISO()));
   if (todayX >= PAD_L && todayX <= W - PAD_R) {
     svg.appendChild(mk('line', { x1: todayX, y1: PAD_T, x2: todayX, y2: H - PAD_B, class: 'db-curve-today' }));
   }
-  // Dates aux extrémités
-  const lab0 = mk('text', { x: PAD_L, y: H - 8, class: 'db-curve-axis' });
-  lab0.textContent = fmtFR(new Date(t0).toISOString().slice(0, 10));
-  svg.appendChild(lab0);
-  const lab1 = mk('text', { x: W - PAD_R, y: H - 8, class: 'db-curve-axis', 'text-anchor': 'end' });
-  lab1.textContent = fmtFR(new Date(t1).toISOString().slice(0, 10));
-  svg.appendChild(lab1);
 
   // ----- Curseur de lecture -----
-  // Une ligne verticale, un point sur la courbe et une étiquette suivent le
-  // pointeur : on lit la valeur à n'importe quelle date sans la deviner.
+  // Il se pose sur n'importe quelle DATE de la période, y compris celles sans
+  // relevé : on lit alors la trajectoire théorique et les deux projections,
+  // ce qui permet de se situer même sur les jours creux.
+  const SERIES = [
+    { key: 'real',   cls: 'is-real',   nom: 'Réel',            at: realAt },
+    { key: 'theory', cls: 'is-theory', nom: 'Théorique',       at: theoryAt },
+    { key: 'target', cls: 'is-target', nom: 'Rythme à tenir',  at: targetAt },
+    { key: 'eta',    cls: 'is-eta',    nom: 'Rythme actuel',   at: etaAt },
+  ];
   const cursor = mk('g', { class: 'db-curve-cursor', visibility: 'hidden' });
   const cLine = mk('line', { y1: PAD_T, y2: H - PAD_B, class: 'db-curve-cursor-line' });
-  const cDot = mk('circle', { r: 4, class: 'db-curve-cursor-dot' });
-  cursor.append(cLine, cDot);
+  cursor.appendChild(cLine);
+  const cDots = {};
+  for (const s of SERIES) {
+    cDots[s.key] = mk('circle', { r: 4, class: 'db-curve-cursor-dot ' + s.cls, visibility: 'hidden' });
+    cursor.appendChild(cDots[s.key]);
+  }
   svg.appendChild(cursor);
-  const hit = mk('rect', { x: PAD_L, y: PAD_T, width: Math.max(1, W - PAD_L - PAD_R), height: Math.max(1, H - PAD_T - PAD_B), class: 'db-curve-hit' });
+  const hit = mk('rect', {
+    x: PAD_L, y: PAD_T,
+    width: Math.max(1, W - PAD_L - PAD_R), height: Math.max(1, H - PAD_T - PAD_B),
+    class: 'db-curve-hit',
+  });
   svg.appendChild(hit);
-
-  const box = dbEl('div', 'db-curve-wrap');
   box.appendChild(svg);
+
   const tip = dbEl('div', 'db-curve-tip');
   tip.hidden = true;
   box.appendChild(tip);
-  card.appendChild(box);
 
-  const moveCursor = (ev) => {
-    const r = svg.getBoundingClientRect();
-    if (!(r.width > 0)) return;
-    const vx = ((ev.clientX - r.left) / r.width) * W;
-    let best = pts[0], bestD = Infinity;
-    for (const p of pts) {
-      const d2 = Math.abs(p.x - vx);
-      if (d2 < bestD) { bestD = d2; best = p; }
-    }
-    cursor.setAttribute('visibility', 'visible');
-    cLine.setAttribute('x1', best.x); cLine.setAttribute('x2', best.x);
-    cDot.setAttribute('cx', best.x); cDot.setAttribute('cy', best.y);
-    tip.hidden = false;
-    tip.innerHTML = '';
-    tip.appendChild(dbEl('span', 'db-curve-tip-date', fmtFR(best.k)));
-    tip.appendChild(dbEl('span', 'db-curve-tip-val', formatPct(Math.round(best.pct * 10) / 10) + ' %'));
-    if (canHours) {
-      tip.appendChild(dbEl('span', 'db-curve-tip-sub',
-        formatHours(mode === 'heures' ? best.val : (best.pct / 100) * hBudget) + ' h acquises'));
-    }
-    // L'étiquette suit le point mais reste entièrement dans le cadre : elle
-    // est centrée sur sa position, il faut donc borner sur sa demi-largeur.
-    const px = (best.x / W) * r.width;
-    const half = tip.offsetWidth / 2 + 2;
-    tip.style.left = Math.max(half, Math.min(Math.max(half, r.width - half), px)) + 'px';
-    // Au doigt, il n'y a pas de « sortie du survol » : on referme tout seul.
-    if (ev.pointerType === 'touch') {
-      clearTimeout(hideTimer);
-      hideTimer = setTimeout(hideCursor, 2500);
-    }
-  };
   let hideTimer = null;
   const hideCursor = () => {
     cursor.setAttribute('visibility', 'hidden');
     tip.hidden = true;
   };
+  const moveCursor = (ev) => {
+    const r = svg.getBoundingClientRect();
+    if (!(r.width > 0)) return;
+    const vx = ((ev.clientX - r.left) / r.width) * W;
+    // On se cale sur la journée la plus proche : le curseur parcourt toute la
+    // période, pas seulement les dates relevées.
+    const raw = t0 + ((vx - PAD_L) / Math.max(1, W - PAD_L - PAD_R)) * span;
+    const at = Math.max(t0, Math.min(t1, Math.round(raw / day) * day));
+    const cx = x(at);
+    cursor.setAttribute('visibility', 'visible');
+    cLine.setAttribute('x1', cx); cLine.setAttribute('x2', cx);
+    tip.hidden = false;
+    tip.innerHTML = '';
+    tip.appendChild(dbEl('span', 'db-curve-tip-date', fmtFR(isoOf(at))));
+    let any = false;
+    for (const s of SERIES) {
+      const v = s.at(at);
+      const dot = cDots[s.key];
+      if (v == null) { dot.setAttribute('visibility', 'hidden'); continue; }
+      any = true;
+      dot.setAttribute('visibility', 'visible');
+      dot.setAttribute('cx', cx);
+      dot.setAttribute('cy', y(toY(v)));
+      const line = dbEl('span', 'db-curve-tip-line');
+      line.appendChild(dbEl('span', 'db-curve-tip-swatch ' + s.cls));
+      line.appendChild(dbEl('span', 'db-curve-tip-nom', s.nom));
+      line.appendChild(dbEl('span', 'db-curve-tip-val', fmtV(v)));
+      tip.appendChild(line);
+    }
+    if (!any) tip.appendChild(dbEl('span', 'db-curve-tip-nom', 'Aucune donnée à cette date'));
+    else if (canHours && mode !== 'heures') {
+      const rv = realAt(at);
+      if (rv != null) tip.appendChild(dbEl('span', 'db-curve-tip-sub',
+        formatHours((rv / 100) * hBudget) + ' h de droit à dépenser'));
+    }
+    // L'étiquette suit le curseur mais reste entièrement dans le cadre.
+    const px = (cx / W) * r.width;
+    const half = tip.offsetWidth / 2 + 2;
+    tip.style.left = Math.max(half, Math.min(Math.max(half, r.width - half), px)) + 'px';
+    if (ev.pointerType === 'touch') {
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(hideCursor, 3000);
+    }
+  };
   hit.addEventListener('pointermove', (ev) => { if (ev.pointerType !== 'touch') moveCursor(ev); });
   hit.addEventListener('pointerdown', moveCursor);
   hit.addEventListener('pointerleave', () => { clearTimeout(hideTimer); hideCursor(); });
 
-  const legend = dbEl('div', 'db-legend');
+  // ----- Légende et notes -----
   const mkLeg = (cls, text, title) => {
     const l = dbEl('span', 'db-legend-item');
     l.appendChild(dbEl('span', 'db-legend-swatch ' + cls));
@@ -4613,18 +5151,20 @@ function buildDbCurve(model, planning, scope, velocity) {
   }
   if (markers.length) mkLeg('is-marker', 'Fin des bâtiments', markers.map(m => m.name + ' : ' + fmtFR(m.iso)).join(' · '));
   mkLeg('is-today', 'Aujourd\'hui');
-  card.appendChild(legend);
+
   if (target && !target.done && target.perWeek == null) {
-    card.appendChild(dbEl('p', 'db-note is-warn', target.lastDay
+    notes.appendChild(dbEl('p', 'db-note is-warn', target.lastDay
       ? 'Dernier jour du planning : il reste ' + formatPct(Math.round(target.remaining * 10) / 10) + ' % à réaliser.'
       : 'La date de fin est dépassée : il reste ' + formatPct(Math.round(target.remaining * 10) / 10)
         + ' % à réaliser. Repoussez l\'échéance pour retrouver un rythme à tenir.'));
   }
   if (keys.length < 2) {
-    card.appendChild(dbEl('p', 'db-note',
+    notes.appendChild(dbEl('p', 'db-note',
       'Un seul point pour l\'instant : la courbe se remplira au fil des saisies d\'avancement.'));
   }
-  return card;
+  if (W > scroll.clientWidth + 2) {
+    notes.appendChild(dbEl('p', 'db-note', 'Échelle dilatée : faites défiler la courbe horizontalement.'));
+  }
 }
 
 // ----- 3. Avancement par bâtiment -----
@@ -14939,6 +15479,7 @@ function resetAll() {
   state.eotpUnitsInitialized = false;
   state.recapPeriod = '7';
   state.recapCurveMode = 'pct';
+  state.recapCurveZoom = 'auto';
   state.consoRecapMode = 'product';
   state.projectStart = '';
   state.projectEnd = '';
@@ -17469,7 +18010,7 @@ const SYNC_EXCLUDED_KEYS = new Set([
   'travauxLotFilter',                // filtre de lots dans Travaux (UI)
   'travauxVisitePath', 'travauxVisiteDeep', // lieu sélectionné dans la vue Visite (UI)
   'zonePickerCollapsed',             // branches repliées des sélecteurs de zone (UI)
-  'recapPeriod', 'recapCurveMode',   // réglages d'affichage du récapitulatif (UI)
+  'recapPeriod', 'recapCurveMode', 'recapCurveZoom', // réglages d'affichage du récapitulatif (UI)
   'ganttZoom',                       // échelle du planning des bâtiments (UI)
   'syncStatus', 'syncTimestamp', 'syncLastPulled', 'syncLastSeenRemoteTs',
   'protoPlan', 'protoPlanW', 'protoPlanH' // champs hérités migrés
@@ -17900,6 +18441,28 @@ function init() {
   document.getElementById('zoneaddroot').addEventListener('click', () => addZone(null));
   const zoneBatchClear = document.getElementById('zonebatchclear');
   if (zoneBatchClear) zoneBatchClear.addEventListener('click', clearZoneSelection);
+
+  // Import / export de l'arborescence par fichier tableur
+  const zoneTpl = document.getElementById('zonetemplatebtn');
+  if (zoneTpl) zoneTpl.addEventListener('click', exportZoneTemplate);
+  const zoneExp = document.getElementById('zoneexportbtn');
+  if (zoneExp) zoneExp.addEventListener('click', exportZoneTree);
+  const zoneImpBtn = document.getElementById('zoneimportbtn');
+  const zoneImpInput = document.getElementById('zoneimportinput');
+  if (zoneImpBtn && zoneImpInput) {
+    zoneImpBtn.addEventListener('click', () => zoneImpInput.click());
+    zoneImpInput.addEventListener('change', () => handleZoneImportFile(zoneImpInput.files && zoneImpInput.files[0]));
+  }
+  const zoneImpModal = document.getElementById('zoneimportmodal');
+  if (zoneImpModal) {
+    document.getElementById('zoneimportclose').addEventListener('click', closeZoneImportModal);
+    document.getElementById('zoneimportcancel').addEventListener('click', closeZoneImportModal);
+    document.getElementById('zoneimportconfirm').addEventListener('click', confirmZoneImport);
+    zoneImpModal.addEventListener('click', (e) => { if (e.target === zoneImpModal) closeZoneImportModal(); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !zoneImpModal.hidden) closeZoneImportModal();
+    });
+  }
 
   // Planning des bâtiments : modale de propriétés d'une barre
   const ganttOverlay = document.getElementById('ganttmodal');
