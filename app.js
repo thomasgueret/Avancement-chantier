@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.75';
+const APP_VERSION = '1.76';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -4012,18 +4012,18 @@ function getAvancementSeries(scope) {
   return out;
 }
 
-// Vitesse d'avancement observée sur les 28 derniers jours et date de fin
-// projetée. Tout est compté en JOURS OUVRÉS (lundi-vendredi hors fériés) :
-// une semaine vaut 5 jours de production.
+// Vitesse d'avancement observée et date de fin projetée. La période
+// d'observation court du PREMIER relevé d'avancement au dernier : sur un
+// chantier, le rythme utile est celui tenu depuis le démarrage, pas celui
+// d'une fenêtre glissante arbitraire — laquelle, sur un historique jeune,
+// ne portait d'ailleurs que sur quelques jours. Tout est compté en JOURS
+// OUVRÉS (lundi-vendredi hors fériés) : une semaine vaut 5 jours.
 function computeAvancementVelocity(scope) {
   const serie = getAvancementSeries(scope);
   if (serie.length < 2) return null;
   const last = serie[serie.length - 1];
   const lastD = new Date(last.date + 'T00:00:00');
-  let first = serie[0];
-  for (const p of serie) {
-    if ((lastD - new Date(p.date + 'T00:00:00')) / 86400000 <= 28) { first = p; break; }
-  }
+  const first = serie[0];
   const days = (lastD - new Date(first.date + 'T00:00:00')) / 86400000;
   if (days <= 0) return null;
   // Fenêtre comptée en jours ouvrés : deux points séparés par un week-end
@@ -4035,6 +4035,8 @@ function computeAvancementVelocity(scope) {
   const out = {
     perDay, perWeek: perDay * 5,
     windowDays: Math.round(days), windowWorkDays: workDays,
+    fromISO: first.date, toISO: last.date,
+    fromPct: first.pct, toPct: last.pct,
     etaISO: null, etaDays: null,
   };
   if (perDay > 0.001 && last.pct < 99.95) {
@@ -4286,7 +4288,7 @@ async function exportAvancementToPDF(scope, label) {
       pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(110);
       pdf.text('Rythme observé : ' + formatPct(Math.round(velocity.perWeek * 10) / 10) + ' %/semaine'
         + (velocity.etaISO ? ' — fin projetée le ' + fmtFR(velocity.etaISO) : '')
-        + ' (sur ' + velocity.windowWorkDays + ' jours ouvrés)', MARGIN, y);
+        + ' (depuis le ' + fmtFR(velocity.fromISO) + ', soit ' + velocity.windowWorkDays + ' jours ouvrés)', MARGIN, y);
       pdf.setTextColor(0);
       y += 5;
     }
@@ -4764,8 +4766,11 @@ function buildDbKpis(model, planning, velocity) {
     const rate = dbEl('div', 'db-kpi-sub db-kpi-rate',
       'Rythme observé : ' + formatPct(Math.round(velocity.perWeek * 10) / 10) + ' %/semaine'
       + (velocity.etaISO ? ' · fin projetée le ' + fmtFR(velocity.etaISO) : ''));
-    rate.title = 'Rythme constaté sur les ' + velocity.windowDays + ' derniers jours, soit '
-      + velocity.windowWorkDays + ' jours ouvrés, ramené à une semaine de 5 jours et prolongé jusqu\'à 100 %.';
+    rate.title = 'Rythme constaté depuis le premier relevé, le ' + fmtFR(velocity.fromISO)
+      + ' (' + formatPct(Math.round(velocity.fromPct * 10) / 10) + ' %), jusqu\'au ' + fmtFR(velocity.toISO)
+      + ' (' + formatPct(Math.round(velocity.toPct * 10) / 10) + ' %) : ' + velocity.windowDays
+      + ' jours, soit ' + velocity.windowWorkDays + ' jours ouvrés. Ramené à une semaine de 5 jours,'
+      + ' puis prolongé jusqu\'à 100 %.';
     k4.appendChild(rate);
   }
   row.appendChild(k4);
@@ -5147,7 +5152,8 @@ function drawDbCurve(ctx) {
   }
   if (showEta) {
     mkLeg('is-eta', 'Rythme actuel — fin projetée le ' + fmtFR(velocity.etaISO),
-      'Prolongation du rythme observé sur les ' + velocity.windowWorkDays + ' derniers jours ouvrés.');
+      'Prolongation du rythme observé depuis le premier relevé (' + fmtFR(velocity.fromISO)
+      + '), soit ' + velocity.windowWorkDays + ' jours ouvrés.');
   }
   if (markers.length) mkLeg('is-marker', 'Fin des bâtiments', markers.map(m => m.name + ' : ' + fmtFR(m.iso)).join(' · '));
   mkLeg('is-today', 'Aujourd\'hui');
