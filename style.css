@@ -1780,9 +1780,12 @@ option { background-color: var(--surface); color: var(--text); }
 .db-card-hint { font-size: 11.5px; color: var(--text-3); font-style: italic; }
 .db-empty { margin: 4px 0; font-size: 13px; color: var(--text-3); font-style: italic; }
 .db-note { margin: 10px 0 0; font-size: 11px; color: var(--text-4); font-style: italic; }
-.db-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+.db-grid { display: grid; grid-template-columns: 1fr; gap: 14px; align-items: stretch; }
 @media (min-width: 900px) { .db-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); } }
-.db-grid > .db-card { margin-bottom: 0; }
+/* Les cartes d'une rangée ont la hauteur de la plus haute : en colonne
+   flexible, leur contenu peut occuper toute cette hauteur au lieu de laisser
+   du vide sous un tableau qui défile. */
+.db-grid > .db-card { margin-bottom: 0; display: flex; flex-direction: column; }
 
 /* ----- Courbe d'avancement ----- */
 .db-curve { display: block; max-width: none; }
@@ -1892,6 +1895,7 @@ option { background-color: var(--surface); color: var(--text); }
 
 /* ----- Variations (matrice et récapitulatif par tâche) ----- */
 .db-matrix-delta-col, .db-matrix-delta {
+  width: 1%; white-space: nowrap;
   text-align: right !important;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -1978,18 +1982,36 @@ option { background-color: var(--surface); color: var(--text); }
 /* La matrice est compacte et plafonnée en hauteur : sur un chantier à
    trente zones elle occupait sinon tout l'écran à elle seule. L'en-tête de
    colonnes et la colonne de gauche restent visibles pendant le défilement. */
-.db-matrix-wrap { overflow: auto; max-height: 340px; scrollbar-width: thin; }
-.db-matrix { border-collapse: separate; border-spacing: 2px; font-variant-numeric: tabular-nums; }
+/* La matrice prend toute la hauteur que sa carte lui laisse et ne défile
+   qu'au-delà : un plafond fixe la faisait défiler alors que la carte voisine
+   lui donnait de la place. Le plafond restant n'existe que pour l'empêcher
+   de dominer la page sur un chantier à cinquante zones. */
+.db-matrix-wrap {
+  overflow: auto;
+  flex: 1 1 auto; min-height: 0;
+  max-height: min(68vh, 760px);
+  scrollbar-width: thin;
+}
+/* Les colonnes se partagent la largeur disponible, mais la table est bornée
+   (largeur posée par buildDbMatrix d'après le nombre d'ouvrages) : sans ce
+   plafond, cinq ouvrages sur une carte de 1 200 px donneraient des cellules
+   de 200 px — des bandeaux, plus une carte de chaleur. */
+.db-matrix {
+  width: 100%; table-layout: auto;
+  margin-right: auto;                /* alignée à gauche comme le reste de la carte */
+  border-collapse: separate; border-spacing: 2px;
+  font-variant-numeric: tabular-nums;
+}
 .db-matrix th, .db-matrix td { padding: 0; }
 .db-matrix thead th { position: sticky; top: 0; background: var(--surface); z-index: 3; }
 .db-matrix-corner {
   font-size: 10px; font-weight: 800; letter-spacing: 0.05em;
   text-transform: uppercase; color: var(--text-3);
-  text-align: left; padding-right: 8px;
+  text-align: left; padding-right: 8px; width: 1%;
   position: sticky; left: 0; background: var(--surface); z-index: 4;
 }
 .db-matrix-col {
-  height: 78px; width: 30px; min-width: 30px;
+  height: 78px; width: auto; min-width: 32px;
   vertical-align: bottom;
   font-size: 10.5px; font-weight: 700; color: var(--text-2);
 }
@@ -2003,11 +2025,12 @@ option { background-color: var(--surface); color: var(--text); }
 .db-matrix-row {
   font-size: 11.5px; font-weight: 700; color: var(--text-2);
   text-align: left; padding-right: 8px;
-  max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  width: 1%; max-width: 220px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   position: sticky; left: 0; background: var(--surface); z-index: 1;
 }
 .db-matrix-cell {
-  width: 30px; height: 22px;
+  width: auto; min-width: 32px; height: 24px;
   text-align: center;
   font-size: 10.5px; font-weight: 800;
   border-radius: 5px;

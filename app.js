@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.76';
+const APP_VERSION = '1.77';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -5225,6 +5225,10 @@ function buildDbMatrix(model, scope) {
   };
   const wrap = dbEl('div', 'db-matrix-wrap');
   const table = dbEl('table', 'db-matrix');
+  // Largeur utile : la table s'étire jusqu'à ce plafond puis se centre. Au-delà
+  // les cellules deviendraient des bandeaux ; en deçà, le conteneur défile.
+  const LABEL_W = 200, CELL_MAX = 74, DELTA_W = 62;
+  table.style.maxWidth = (LABEL_W + cols.length * CELL_MAX + DELTA_W) + 'px';
   const thead = dbEl('thead');
   const trh = dbEl('tr');
   trh.appendChild(dbEl('th', 'db-matrix-corner', scope ? 'Zone' : 'Bâtiment'));
