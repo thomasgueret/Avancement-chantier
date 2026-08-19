@@ -369,24 +369,34 @@
 
     <!-- ============== ONGLET : STOCK ============== -->
     <section class="page" id="page-stock">
-      <div class="segmented" role="tablist" data-group="stock" data-position="0" style="--count:3;">
+      <div class="segmented" role="tablist" data-group="stock" data-position="0" style="--count:4;">
         <div class="segmented-thumb"></div>
-        <button class="seg-btn active" data-group="stock" data-sub="enregistrement" role="tab">Enregistrement</button>
-        <button class="seg-btn" data-group="stock" data-sub="stockview" role="tab">Stock</button>
+        <button class="seg-btn active" data-group="stock" data-sub="pilotage" role="tab" title="Ce qu'il faut décider aujourd'hui">Pilotage</button>
+        <button class="seg-btn" data-group="stock" data-sub="stockview" role="tab" title="Le stock article par article">Magasin</button>
+        <button class="seg-btn" data-group="stock" data-sub="enregistrement" role="tab" title="Le journal des mouvements">Mouvements</button>
         <button class="seg-btn" data-group="stock" data-sub="cb" role="tab" title="Vision budget par produit / par eOTP">CB</button>
       </div>
 
-      <!-- Sous-onglet : Enregistrement (saisie + liste compacte + FAB) -->
-      <div class="sub-page active" id="sub-enregistrement" data-group="stock">
-        <ul class="stock-entry-list" id="stockentrylist"></ul>
-        <div class="empty-state" id="stockentryempty"></div>
-        <button class="stock-fab" id="stockfab" type="button" aria-label="Nouvelle entrée">+</button>
+      <!-- Sous-onglet : Pilotage (KPI + décisions) -->
+      <div class="sub-page active" id="sub-pilotage" data-group="stock">
+        <div class="stock-pilot" id="stockpilot"></div>
+        <div class="empty-state" id="stockpilotempty"></div>
       </div>
 
-      <!-- Sous-onglet : Stock (cards par article) -->
+      <!-- Sous-onglet : Magasin (une carte par article) -->
       <div class="sub-page" id="sub-stockview" data-group="stock">
+        <div class="stock-tools" id="stocktools"></div>
         <div class="stock-summary-list" id="stocksummarylist"></div>
         <div class="empty-state" id="stocksummaryempty"></div>
+        <button class="stock-fab" id="stockfab2" type="button" aria-label="Nouveau mouvement">+</button>
+      </div>
+
+      <!-- Sous-onglet : Mouvements (journal groupé par jour + FAB) -->
+      <div class="sub-page" id="sub-enregistrement" data-group="stock">
+        <div class="stock-tools" id="stockmovetools"></div>
+        <ul class="stock-entry-list" id="stockentrylist"></ul>
+        <div class="empty-state" id="stockentryempty"></div>
+        <button class="stock-fab" id="stockfab" type="button" aria-label="Nouveau mouvement">+</button>
       </div>
 
       <!-- Sous-onglet : CB (vision budget : par produit ou par eOTP) -->
@@ -672,6 +682,9 @@
 
   <div class="toast" id="toast" hidden></div>
 
+  <!-- Bandeau d'annulation d'une suppression de mouvement de stock -->
+  <div class="stock-undo" id="stockundo" hidden></div>
+
   <!-- ===== Rapport d'import de zones (avant application) ===== -->
   <div class="modal-overlay" id="zoneimportmodal" hidden>
     <div class="modal-content zone-import-modal" role="dialog" aria-modal="true" aria-labelledby="zoneimporttitle">
@@ -761,9 +774,10 @@
         <button class="modal-close" id="stockentrysheetclose" type="button" aria-label="Fermer">×</button>
       </div>
       <div class="modal-body">
-        <div class="segmented stock-type-seg" data-position="0" style="--count:2;" role="tablist">
+        <div class="segmented stock-type-seg" data-position="0" style="--count:3;" role="tablist">
           <div class="segmented-thumb"></div>
           <button class="seg-btn active" data-stock-entry-type="reception" type="button" role="tab">Réception</button>
+          <button class="seg-btn" data-stock-entry-type="sortie" type="button" role="tab">Sortie</button>
           <button class="seg-btn" data-stock-entry-type="inventaire" type="button" role="tab">Inventaire</button>
         </div>
         <p class="stock-type-hint" id="stocktypehint">Ajoute la quantité reçue au stock courant.</p>
@@ -781,6 +795,15 @@
             <label class="stock-form-label" for="stockunit">Unité</label>
             <select id="stockunit" class="stock-form-input"></select>
           </div>
+        </div>
+
+        <p class="stock-form-stock" id="stockcurrent" hidden></p>
+
+        <!-- Destination : uniquement pour une sortie. Elle relie le mouvement
+             à l'arborescence de zones déjà saisie dans Données → Zones. -->
+        <div class="stock-dest-field" id="stockdestfield" hidden>
+          <label class="stock-form-label" for="stockdest">Destination (optionnel)</label>
+          <select id="stockdest" class="stock-form-input"></select>
         </div>
 
         <!-- Champs CB (prix + eOTP) — visibles uniquement pour la réception
@@ -804,7 +827,11 @@
         <label class="stock-form-label" for="stocknotes">Notes (optionnel)</label>
         <input id="stocknotes" class="stock-form-input" type="text" maxlength="80" placeholder="Fournisseur, zone de dépôt…">
 
-        <button class="btn-primary stock-submit-btn" id="stockentrysave" type="button">Enregistrer</button>
+        <div class="stock-submit-row">
+          <button class="btn-secondary stock-submit-again" id="stockentrysaveagain" type="button"
+                  title="Enregistre et garde la feuille ouverte pour le mouvement suivant">Enregistrer et enchaîner</button>
+          <button class="btn-primary stock-submit-btn" id="stockentrysave" type="button">Enregistrer</button>
+        </div>
       </div>
     </div>
   </div>

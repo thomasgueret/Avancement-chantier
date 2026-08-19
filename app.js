@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.77';
+const APP_VERSION = '1.78';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -81,7 +81,16 @@ const state = {
   echeckinCollapsed: {},  // { [companyId]: true } — entreprises repliées dans eCheckIn
   presences: {},          // { 'YYYY-MM-DD': [{ id, companyId, count }] }
   weather:   {},          // { 'YYYY-MM-DD': { [companyId]: true } } — entreprises en intempéries ce jour-là
-  stockEntries: [],       // [{ id, type: 'reception' | 'inventaire', article, qty, unit, unitPrice, eOTP, date, notes }]
+  stockEntries: [],
+  // Catalogue optionnel : { [clé normalisée du nom] : { key, name, unit,
+  // min, leadDays, supplier, eOTP, notes } }. Une fiche s'ajoute à la volée
+  // et n'est jamais un préalable à la saisie d'un mouvement.
+  stockArticles: {},
+  stockSettings: { alertDays: 7, coverDays: 15 },  // réglages projet
+  stockPeriod: '30',      // fenêtre de consommation du Stock (UI)
+  stockSort: 'statut',    // tri du Magasin (UI)
+  stockQuery: '',         // recherche du Magasin (UI)
+  stockMoveFilter: 'all', // filtre de type du journal (UI)       // [{ id, type: 'reception' | 'inventaire', article, qty, unit, unitPrice, eOTP, date, notes }]
   consommableEntries: [], // [{ id, orderId, date, notes, product, reference, qty, unit, unitPrice, eOTP }]
   consoProducts: [],      // registre canonique : [{ name, reference, unitPrice }]
   eotps: [],              // lignes de budget eOTP : [{ id, code, label, budget }]
@@ -231,6 +240,11 @@ function load() {
     if (data.presences) state.presences = data.presences;
     if (data.weather)   state.weather   = data.weather;
     if (data.stockEntries) state.stockEntries = data.stockEntries;
+    if (data.stockArticles && typeof data.stockArticles === 'object') state.stockArticles = data.stockArticles;
+    if (data.stockSettings && typeof data.stockSettings === 'object') state.stockSettings = data.stockSettings;
+    if (typeof data.stockPeriod === 'string') state.stockPeriod = data.stockPeriod;
+    if (typeof data.stockSort === 'string') state.stockSort = data.stockSort;
+    if (typeof data.stockMoveFilter === 'string') state.stockMoveFilter = data.stockMoveFilter;
     if (data.consommableEntries) state.consommableEntries = data.consommableEntries;
     if (data.consoProducts) state.consoProducts = data.consoProducts;
     if (data.eotps) state.eotps = data.eotps;
@@ -346,6 +360,11 @@ function buildPersistedData() {
     presences: state.presences,
     weather: state.weather,
     stockEntries: state.stockEntries,
+    stockArticles: state.stockArticles,
+    stockSettings: state.stockSettings,
+    stockPeriod: state.stockPeriod,
+    stockSort: state.stockSort,
+    stockMoveFilter: state.stockMoveFilter,
     consommableEntries: state.consommableEntries,
     consoProducts: state.consoProducts,
     eotps: state.eotps,
@@ -1061,16 +1080,18 @@ function computeProjectAlerts() {
   push('warning', nDanger, 'ouvrier dont un document expire sous 3 jours', 'ouvriers dont un document expire sous 3 jours', 'Administratif → eCheckIn', 'administratif');
   push('info', nWarning, 'ouvrier dont un document expire sous 7 jours', 'ouvriers dont un document expire sous 7 jours', 'Administratif → eCheckIn', 'administratif');
 
-  // Stock
-  let nOut = 0, nCrit = 0;
-  for (const item of getStockSummary()) {
-    const dep = getArticleDepletion(item.article, item.stock);
-    if (dep.days === null || dep.days < 0) continue;
-    if (dep.days <= 0) nOut++;
-    else if (dep.days <= STOCK_ALERT_THRESHOLD_DAYS) nCrit++;
+  // Stock — statuts issus du modèle (couverture, mini et délai d'appro par article)
+  const stockModel = computeStockModel();
+  const nOut = stockModel.articles.filter(a => a.status === 'rupture').length;
+  const nCrit = stockModel.articles.filter(a => a.status === 'critique').length;
+  const nOrder = getStockReorderList().length;
+  push('danger', nOut, 'article en rupture de stock', 'articles en rupture de stock',
+    'Stock → Pilotage', 'stock', ['stock', 'pilotage']);
+  push('warning', nCrit, 'article sous son seuil de réapprovisionnement', 'articles sous leur seuil de réapprovisionnement',
+    'Stock → Pilotage', 'stock', ['stock', 'pilotage']);
+  if (!nOut && !nCrit && nOrder) {
+    push('info', nOrder, 'référence à commander', 'références à commander', 'Stock → Pilotage', 'stock', ['stock', 'pilotage']);
   }
-  push('danger', nOut, 'article en rupture de stock', 'articles en rupture de stock', 'Stock', 'stock');
-  push('warning', nCrit, 'article épuisé sous ' + STOCK_ALERT_THRESHOLD_DAYS + ' jours ouvrés', 'articles épuisés sous ' + STOCK_ALERT_THRESHOLD_DAYS + ' jours ouvrés', 'Stock', 'stock');
 
   // Budget eOTP — dépassement projeté en fin de chantier
   const elapsed = getProjectMonthsElapsed(), totalProj = getProjectMonthsTotal();
@@ -1578,15 +1599,14 @@ function renderDashboardStockAlerts() {
   el.innerHTML = '';
   el.appendChild(dashboardCardHeader('Stock critique', 'stock'));
 
-  const summary = getStockSummary();
-  const critical = [];
-  for (const item of summary) {
-    const dep = getArticleDepletion(item.article, item.stock);
-    if (dep.days !== null && dep.days >= 0 && dep.days <= STOCK_ALERT_THRESHOLD_DAYS) {
-      critical.push({ ...item, depletion: dep });
-    }
-  }
-  critical.sort((a, b) => a.depletion.days - b.depletion.days);
+  // Le statut vient du modèle : il combine la couverture, le stock mini et le
+  // délai d'appro propres à chaque article, au lieu d'un unique seuil global.
+  const model = computeStockModel();
+  const critical = model.articles
+    .filter(a => a.status === 'rupture' || a.status === 'critique')
+    .map(a => ({ article: a.name, unit: a.unit, stock: a.stock, status: a.status, depletion: { days: a.days } }))
+    .sort((a, b) => (a.depletion.days == null ? 1e9 : a.depletion.days) - (b.depletion.days == null ? 1e9 : b.depletion.days));
+  const summary = model.articles;
 
   const body = document.createElement('div');
   body.className = 'dash-stock';
@@ -1603,9 +1623,11 @@ function renderDashboardStockAlerts() {
     for (const it of critical) {
       const days = it.depletion.days;
       const li = document.createElement('li');
-      const klass = days <= 0 ? 'is-empty' : (days <= 3 ? 'is-danger' : 'is-warning');
+      const klass = it.status === 'rupture' ? 'is-empty' : (days != null && days <= 3 ? 'is-danger' : 'is-warning');
       li.className = 'dash-stock-row ' + klass;
-      const label = days <= 0 ? 'épuisé' : (days === 1 ? '1 j ouvré' : `${days} j ouvrés`);
+      const label = it.status === 'rupture' ? 'rupture'
+        : days == null ? 'sous le mini'
+        : (days === 1 ? '1 j ouvré' : `${days} j ouvrés`);
       li.innerHTML = `
         <span class="dash-stock-name"></span>
         <span class="dash-stock-stock"></span>
@@ -7358,13 +7380,19 @@ function fmtFR(dateStr) {
 }
 // ---------- Sub-tabs ----------
 function switchSubPage(group, name) {
+  // Certains segmented ne pilotent pas de sous-page (le sélecteur de type de
+  // la feuille de saisie Stock, par exemple) : leurs boutons portent la même
+  // classe et déclenchaient ici une erreur silencieuse à chaque clic.
+  if (!group) return;
+  const seg = document.querySelector(`.segmented[data-group="${group}"]`);
+  if (!seg) return;
   const buttons = Array.from(document.querySelectorAll(`.seg-btn[data-group="${group}"]`));
   const idx = buttons.findIndex(b => b.dataset.sub === name);
   buttons.forEach((b, i) => b.classList.toggle('active', i === idx));
   document.querySelectorAll(`.sub-page[data-group="${group}"]`).forEach(p => {
     p.classList.toggle('active', p.id === `sub-${name}`);
   });
-  document.querySelector(`.segmented[data-group="${group}"]`).dataset.position = String(idx < 0 ? 0 : idx);
+  seg.dataset.position = String(idx < 0 ? 0 : idx);
   if (group === 'effectifs' && name === 'graphique') {
     renderChart();
     renderLegend();
@@ -7379,7 +7407,7 @@ function switchSubPage(group, name) {
     if (page) page.classList.toggle('is-wide', name === 'heures');
   }
   if (group === 'proto' && name === 'recap') renderProtoRecap();
-  if (group === 'stock' && name === 'cb') renderStockCB();
+  if (group === 'stock') renderStock();
   if (group === 'travaux') renderTravaux();
   // Le planning se mesure sur la largeur réelle de sa piste : il doit être
   // (re)dessiné une fois son onglet visible.
@@ -7483,50 +7511,254 @@ function toggleCompanyWeather(companyId) {
   renderRecapTable();
 }
 
-// ---------- Stock (entrées + consultation) ----------
+// ---------- Stock : catalogue, mouvements, modèle de calcul ----------
+// Le journal `state.stockEntries` reste la seule source de vérité : une suite
+// d'événements immuables rejoués dans l'ordre. Trois verbes désormais :
+//   réception (+)  ajoute au stock
+//   sortie (−)     retire du stock, éventuellement affectée à une zone
+//   inventaire (=) recale le compteur sur la quantité comptée
+// La sortie est la nouveauté qui débloque tout le reste : sans elle, la
+// consommation ne pouvait être déduite qu'entre deux campagnes d'inventaire.
 const STOCK_UNITS = ['u', 'sacs', 'palettes', 'kg', 't', 'm³', 'm²', 'ml', 'L'];
+const STOCK_TYPES = {
+  reception:  { label: 'Réception',  short: 'Réception',  sign: '+', dir: 1 },
+  sortie:     { label: 'Sortie',     short: 'Sortie',     sign: '−', dir: -1 },
+  inventaire: { label: 'Inventaire', short: 'Inventaire', sign: '=', dir: 0 },
+};
+function stockTypeOf(e) { return STOCK_TYPES[e && e.type] ? e.type : 'reception'; }
+
+// Clé canonique d'un article : le nom, insensible à la casse, aux accents et
+// aux espaces multiples. Dérivée du nom (et non d'un identifiant tiré au sort),
+// deux appareils créent donc la même clé pour la même référence — la fusion par
+// union de la synchro ne peut pas produire de doublon.
+function stockKey(name) {
+  return String(name || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/\s+/g, ' ').trim();
+}
+function getStockArticles() {
+  if (!state.stockArticles || typeof state.stockArticles !== 'object') state.stockArticles = {};
+  return state.stockArticles;
+}
+function getStockArticle(name) {
+  const k = stockKey(name);
+  return k ? (getStockArticles()[k] || null) : null;
+}
+// Fiche article : entièrement OPTIONNELLE. Elle se crée à la volée avec le seul
+// nom et ne bloque jamais une saisie ; tous ses champs servent à affiner les
+// alertes (mini, délai d'appro, fournisseur, eOTP par défaut).
+function upsertStockArticle(name, patch) {
+  const k = stockKey(name);
+  if (!k) return null;
+  const all = getStockArticles();
+  if (!all[k]) all[k] = { key: k, name: String(name).trim(), unit: '', min: 0, leadDays: 0, supplier: '', eOTP: '', notes: '' };
+  if (patch) Object.assign(all[k], patch);
+  if (name) all[k].name = String(name).trim();
+  return all[k];
+}
+function getStockSettings() {
+  const s = state.stockSettings && typeof state.stockSettings === 'object' ? state.stockSettings : {};
+  return {
+    alertDays: Number.isFinite(s.alertDays) && s.alertDays > 0 ? s.alertDays : STOCK_ALERT_THRESHOLD_DAYS,
+    coverDays: Number.isFinite(s.coverDays) && s.coverDays > 0 ? s.coverDays : 15,
+  };
+}
+function setStockSetting(field, value) {
+  if (!state.stockSettings || typeof state.stockSettings !== 'object') state.stockSettings = {};
+  const n = parseInt(String(value).replace(/\D/g, ''), 10);
+  state.stockSettings[field] = Number.isFinite(n) && n > 0 ? n : undefined;
+  save();
+  invalidateStockModel();
+  renderStock();
+}
 
 function compareStockEntries(a, b) {
-  // Ordre chronologique (asc), à date égale : par id pour stabilité
-  return a.date.localeCompare(b.date) || String(a.id || '').localeCompare(String(b.id || ''));
+  // Ordre chronologique. À date égale, l'heure départage quand elle est
+  // renseignée ; l'identifiant ne sert plus que de dernier recours (stabilité).
+  return (a.date || '').localeCompare(b.date || '')
+    || (a.time || '').localeCompare(b.time || '')
+    || String(a.id || '').localeCompare(String(b.id || ''));
 }
-// Agrégation : pour chaque article, on calcule le stock courant en
-// parcourant les entrées triées par date asc. Réception = ajout,
-// Inventaire = remise au compteur. La dernière entrée détermine
-// l'unité affichée.
-function getStockSummary() {
+
+// ---------------------------------------------------------------- modèle ----
+// Le journal est rejoué UNE fois par rendu, pas une fois par carte. Le résultat
+// est mémorisé le temps d'un cycle : renderStock() est appelé par renderAll(),
+// lui-même déclenché après chaque fusion de synchro entrante.
+let _stockModel = null, _stockModelAt = 0;
+function invalidateStockModel() { _stockModel = null; }
+function computeStockModel() {
+  const now = Date.now();
+  if (_stockModel && now - _stockModelAt < 1200) return _stockModel;
+  const settings = getStockSettings();
+  const entries = (state.stockEntries || []).slice().sort(compareStockEntries);
   const map = new Map();
-  const sorted = state.stockEntries.slice().sort(compareStockEntries);
-  for (const e of sorted) {
-    const key = (e.article || '').trim().toLowerCase();
-    if (!key) continue;
-    if (!map.has(key)) {
-      map.set(key, { article: e.article, unit: e.unit, stock: 0, lastEntry: e, count: 0 });
+  for (const e of entries) {
+    const k = stockKey(e.article);
+    if (!k) continue;
+    if (!map.has(k)) {
+      map.set(k, {
+        key: k, name: e.article, unit: e.unit || 'u', units: new Set(),
+        stock: 0, entries: [], received: 0, releasedQty: 0, inventories: 0,
+        spend: 0, receivedQty: 0, lastEntry: null, firstDate: e.date,
+      });
     }
-    const cur = map.get(key);
-    cur.article = e.article;       // garde la dernière casse saisie
-    cur.unit = e.unit;
-    cur.lastEntry = e;
-    cur.count++;
-    if (e.type === 'inventaire') cur.stock = Number(e.qty) || 0;
-    else cur.stock += Number(e.qty) || 0;
+    const a = map.get(k);
+    a.name = e.article;                  // dernière casse saisie
+    a.lastEntry = e;
+    a.entries.push(e);
+    if (e.unit) a.units.add(e.unit);
+    const t = stockTypeOf(e);
+    const q = Number(e.qty) || 0;
+    if (t === 'inventaire') { a.stock = q; a.inventories++; }
+    else if (t === 'sortie') { a.stock -= q; a.releasedQty += q; }
+    else {
+      a.stock += q;
+      a.receivedQty += q;
+      a.spend += q * (Number(e.unitPrice) || 0);
+    }
   }
-  return Array.from(map.values()).sort((a, b) => a.article.localeCompare(b.article, 'fr'));
+  const period = getStockPeriod();
+  const list = [];
+  let totalValue = 0, totalSpend = 0, unpriced = 0, mixedUnits = 0;
+  for (const a of map.values()) {
+    const fiche = getStockArticles()[a.key] || null;
+    // L'unité affichée vient de la fiche si elle en fixe une, sinon de la
+    // dernière saisie. Un mélange d'unités est signalé plutôt que masqué :
+    // l'ancien code écrasait l'unité à chaque itération et affichait
+    // « 510 sacs » pour 10 palettes puis 500 sacs.
+    a.unit = (fiche && fiche.unit) || a.unit;
+    a.mixedUnits = a.units.size > 1;
+    if (a.mixedUnits) mixedUnits++;
+    a.pmp = a.receivedQty > 0 ? a.spend / a.receivedQty : 0;
+    a.value = Math.max(0, a.stock) * a.pmp;
+    totalValue += a.value;
+    totalSpend += a.spend;
+    a.unpriced = a.entries.filter(e => stockTypeOf(e) === 'reception' && !(Number(e.unitPrice) > 0)).length;
+    unpriced += a.unpriced;
+    a.min = fiche && Number(fiche.min) > 0 ? Number(fiche.min) : 0;
+    a.leadDays = fiche && Number(fiche.leadDays) > 0 ? Number(fiche.leadDays) : 0;
+    a.supplier = fiche ? (fiche.supplier || '') : '';
+    a.eOTP = fiche ? (fiche.eOTP || '') : '';
+    Object.assign(a, getStockConsumption(a, period.days));
+    Object.assign(a, getStockDepletion(a, settings));
+    list.push(a);
+  }
+  list.sort((x, y) => x.name.localeCompare(y.name, 'fr'));
+  _stockModel = {
+    articles: list, settings, period,
+    totals: {
+      references: list.length,
+      value: totalValue,
+      spend: totalSpend,
+      unpriced,
+      mixedUnits,
+      moves: entries.length,
+      movesPeriod: entries.filter(e => e.date >= dayToISO(isoToDay(todayISO()) - (period.days || 3650))).length,
+      alerts: list.filter(a => a.status === 'rupture' || a.status === 'critique').length,
+    },
+  };
+  _stockModelAt = now;
+  return _stockModel;
 }
-// Historique d'un article (le plus récent en premier) pour la modale détail
+
+// Consommation journalière d'un article. Deux sources possibles, dans cet
+// ordre : les SORTIES réellement saisies sur la fenêtre (mesure directe), à
+// défaut la déduction entre deux inventaires (méthode historique, conservée
+// telle quelle). La provenance est renvoyée pour être affichée : l'application
+// ne doit jamais laisser croire qu'un chiffre déduit a été mesuré.
+function getStockConsumption(a, windowDays) {
+  const today = isoToDay(todayISO());
+  const fromISO = windowDays ? dayToISO(today - windowDays) : (a.firstDate || todayISO());
+  const sorties = a.entries.filter(e => stockTypeOf(e) === 'sortie' && e.date >= fromISO);
+  if (sorties.length) {
+    const first = sorties[0].date < fromISO ? fromISO : sorties[0].date;
+    const days = Math.max(1, businessDaysBetweenISO(first, todayISO()));
+    const qty = sorties.reduce((s, e) => s + (Number(e.qty) || 0), 0);
+    return { daily: qty / days, dailySource: 'sorties', dailySample: sorties.length, dailyDays: days };
+  }
+  const daily = getArticleDailyConsumption(a.name);
+  return {
+    daily: daily === null ? null : daily,
+    dailySource: daily === null ? null : 'inventaires',
+    dailySample: a.inventories,
+    dailyDays: null,
+  };
+}
+// Couverture restante et statut. Le seuil combine le délai d'appro de l'article
+// (le ciment arrive en 48 h, la résine en trois semaines) et le seuil global.
+function getStockDepletion(a, settings) {
+  const daily = a.daily;
+  const out = { days: null, date: null, status: 'inconnu' };
+  if (a.stock <= 0) { out.days = 0; out.date = todayISO(); out.status = 'rupture'; return out; }
+  if (a.min > 0 && a.stock <= a.min) out.status = 'critique';
+  if (daily === null || daily <= 0) {
+    if (out.status === 'inconnu') out.status = a.min > 0 ? 'ok' : 'inconnu';
+    return out;
+  }
+  // Plancher plutôt qu'arrondi : 0,4 jour restant, c'est aujourd'hui, pas demain.
+  out.days = Math.floor(a.stock / daily);
+  out.date = addBusinessDaysISO(todayISO(), out.days);
+  const seuil = settings.alertDays + (a.leadDays || 0);
+  if (out.days <= 0) out.status = 'rupture';
+  else if (out.days <= seuil) out.status = 'critique';
+  else if (out.days <= seuil * 2) out.status = 'bas';
+  else if (out.status === 'inconnu') out.status = 'ok';
+  return out;
+}
+const STOCK_STATUS = {
+  rupture:  { label: 'Rupture',   rank: 0 },
+  critique: { label: 'Critique',  rank: 1 },
+  bas:      { label: 'À surveiller', rank: 2 },
+  ok:       { label: 'OK',        rank: 3 },
+  inconnu:  { label: 'Sans conso', rank: 4 },
+};
+// Quantité à commander : de quoi couvrir la période cible, au-delà du mini,
+// arrondie à l'unité supérieure. Rien à commander → null.
+function getStockReorderQty(a, settings) {
+  const cover = settings.coverDays + (a.leadDays || 0);
+  const besoinConso = a.daily != null && a.daily > 0 ? a.daily * cover : 0;
+  const cible = Math.max(besoinConso, a.min || 0);
+  const manque = cible - Math.max(0, a.stock);
+  if (!(manque > 0)) return null;
+  return Math.ceil(manque * 100) / 100;
+}
+function getStockReorderList() {
+  const m = computeStockModel();
+  const out = [];
+  for (const a of m.articles) {
+    if (a.status !== 'rupture' && a.status !== 'critique') continue;
+    const qty = getStockReorderQty(a, m.settings);
+    if (qty == null) continue;
+    out.push({ ...a, reorderQty: qty, reorderCost: qty * (a.pmp || 0) });
+  }
+  return out.sort((x, y) => STOCK_STATUS[x.status].rank - STOCK_STATUS[y.status].rank
+    || (x.days == null ? 1e9 : x.days) - (y.days == null ? 1e9 : y.days));
+}
+
+// Agrégation historique conservée pour compatibilité : les modules qui
+// n'avaient besoin que du stock courant continuent d'appeler getStockSummary.
+function getStockSummary() {
+  return computeStockModel().articles.map(a => ({
+    article: a.name, unit: a.unit, stock: a.stock, lastEntry: a.lastEntry, count: a.entries.length,
+  }));
+}
+// Historique d'un article (le plus récent en premier) pour la fiche
 function getArticleHistory(articleName) {
-  const key = (articleName || '').trim().toLowerCase();
-  return state.stockEntries
-    .filter(e => (e.article || '').trim().toLowerCase() === key)
+  const key = stockKey(articleName);
+  return (state.stockEntries || [])
+    .filter(e => stockKey(e.article) === key)
     .sort(compareStockEntries)
     .reverse();
 }
-// Liste unique des noms d'articles déjà saisis, pour le datalist
+// Liste unique des noms d'articles : ceux du journal ET ceux du catalogue,
+// pour qu'une fiche créée d'avance soit proposée à la saisie.
 function getAllArticleNames() {
-  const set = new Map(); // clé = lowercase, valeur = dernière casse
-  for (const e of state.stockEntries) {
-    const k = (e.article || '').trim().toLowerCase();
+  const set = new Map();
+  for (const e of (state.stockEntries || [])) {
+    const k = stockKey(e.article);
     if (k) set.set(k, e.article);
+  }
+  for (const f of Object.values(getStockArticles())) {
+    if (f && f.key && !set.has(f.key)) set.set(f.key, f.name);
   }
   return Array.from(set.values()).sort((a, b) => a.localeCompare(b, 'fr'));
 }
@@ -7577,13 +7809,22 @@ function getArticleDailyConsumption(articleName) {
     // car le chantier n'est pas actif.
     const days = businessDaysBetweenISO(prev.date, cur.date);
     if (days <= 0) continue;
+    // Bornes par POSITION dans le journal trié, pas par comparaison de dates :
+    // une réception datée le jour même d'un inventaire était exclue ici alors
+    // que le calcul du stock la comptait — les deux modules divergeaient.
+    const iPrev = sorted.indexOf(prev), iCur = sorted.indexOf(cur);
     const received = sorted
-      .filter(e => e.type === 'reception' && e.date > prev.date && e.date < cur.date)
+      .slice(iPrev + 1, iCur)
+      .filter(e => stockTypeOf(e) === 'reception')
+      .reduce((s, e) => s + (Number(e.qty) || 0), 0);
+    const released = sorted
+      .slice(iPrev + 1, iCur)
+      .filter(e => stockTypeOf(e) === 'sortie')
       .reduce((s, e) => s + (Number(e.qty) || 0), 0);
     // On borne à 0 : un net négatif (stock qui monte sans réception
     // enregistrée) indique probablement une réception oubliée, on
     // l'ignore pour ne pas biaiser la moyenne.
-    const consumed = Math.max(0, (Number(prev.qty) || 0) + received - (Number(cur.qty) || 0));
+    const consumed = Math.max(0, (Number(prev.qty) || 0) + received - released - (Number(cur.qty) || 0));
     totalConsumed += consumed;
     totalDays += days;
   }
@@ -7592,11 +7833,17 @@ function getArticleDailyConsumption(articleName) {
 }
 // À partir du stock courant et de la conso moyenne, estime le nombre de
 // jours ouvrés restants + la date d'épuisement (à compter d'aujourd'hui).
+// Épuisement estimé. Passe par le modèle : la consommation vient des sorties
+// saisies dès qu'il y en a, et seulement à défaut de la déduction entre deux
+// inventaires — c'est ce qui rend la carte « Stock critique » du tableau de
+// bord vivante sans attendre deux campagnes de comptage.
 function getArticleDepletion(articleName, currentStock) {
+  const a = computeStockModel().articles.find(x => x.key === stockKey(articleName));
+  if (a) return { daily: a.daily, days: a.days, date: a.date, source: a.dailySource, status: a.status };
   const daily = getArticleDailyConsumption(articleName);
   if (daily === null || daily <= 0) return { daily, days: null, date: null };
   if (currentStock <= 0) return { daily, days: 0, date: todayISO() };
-  const days = Math.round(currentStock / daily);
+  const days = Math.floor(currentStock / daily);
   return { daily, days, date: addBusinessDaysISO(todayISO(), days) };
 }
 function fmtRate(n) {
@@ -9622,97 +9869,563 @@ function buildCREntry(companyId, weekId, sectionKey, entry) {
   return row;
 }
 
-// ----- Rendu : liste des entrées (sous-onglet Enregistrement) -----
-function renderStockEntries() {
-  const list = document.getElementById('stockentrylist');
-  const empty = document.getElementById('stockentryempty');
-  if (!list || !empty) return;
-  list.innerHTML = '';
-  empty.classList.remove('show');
-  if (state.stockEntries.length === 0) {
-    empty.innerHTML = '<p>Aucune entrée enregistrée.</p><p class="hint">Tapez le bouton + en bas à droite pour en ajouter une.</p>';
-    empty.classList.add('show');
-    return;
-  }
-  const sorted = state.stockEntries.slice().sort(compareStockEntries).reverse();
-  for (const e of sorted) {
-    list.appendChild(buildStockEntryRow(e));
-  }
+// ================= STOCK : PILOTAGE, MAGASIN, MOUVEMENTS =================
+// Le Stock reprend le vocabulaire visuel du récapitulatif d'avancement :
+// bandeau de KPI, cartes .db-card à titre orange, sélecteur de période,
+// recherche et tri. On lit d'abord ce qu'il faut décider, ensuite l'état du
+// magasin, enfin le journal — l'ordre dans lequel se pose les questions.
+
+const STOCK_PERIODS = [
+  { key: '7',   label: '7 j',  days: 7 },
+  { key: '30',  label: '30 j', days: 30 },
+  { key: 'all', label: 'Tout', days: null },
+];
+function getStockPeriod() {
+  return STOCK_PERIODS.find(p => p.key === state.stockPeriod) || STOCK_PERIODS[1];
 }
-function buildStockEntryRow(entry) {
-  const li = document.createElement('li');
-  li.className = 'stock-entry-row type-' + entry.type;
-  li.setAttribute('data-entry-id', entry.id);
-  const sign = entry.type === 'inventaire' ? '=' : '+';
-  li.innerHTML = `
-    <span class="stock-entry-date"></span>
-    <span class="stock-entry-name"></span>
-    <span class="stock-entry-qty"></span>
-    <button class="stock-entry-delete" type="button" aria-label="Supprimer cette entrée">
-      <svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
-    </button>
-  `;
-  li.querySelector('.stock-entry-date').textContent = fmtDateShortFR(entry.date);
-  li.querySelector('.stock-entry-name').textContent = entry.article;
-  li.querySelector('.stock-entry-qty').textContent = `${sign} ${fmtStockQty(entry.qty)} ${entry.unit}`;
-  li.querySelector('.stock-entry-delete').addEventListener('click', () => removeStockEntry(entry.id));
-  return li;
+const STOCK_SORTS = [
+  { key: 'statut', label: 'Urgence', cmp: (a, b) => STOCK_STATUS[a.status].rank - STOCK_STATUS[b.status].rank
+      || (a.days == null ? 1e9 : a.days) - (b.days == null ? 1e9 : b.days) },
+  { key: 'valeur', label: 'Valeur', cmp: (a, b) => b.value - a.value },
+  { key: 'conso',  label: 'Conso',  cmp: (a, b) => (b.daily || 0) - (a.daily || 0) },
+  { key: 'nom',    label: 'Nom',    cmp: (a, b) => a.name.localeCompare(b.name, 'fr') },
+];
+function fmtEurShort(n) {
+  const v = Number(n) || 0;
+  if (Math.abs(v) >= 10000) return Math.round(v / 1000).toLocaleString('fr-FR') + ' k€';
+  return v.toLocaleString('fr-FR', { maximumFractionDigits: 0 }) + ' €';
+}
+// Libellé honnête de la provenance du chiffre de consommation : l'application
+// ne doit jamais laisser croire qu'un chiffre déduit a été mesuré.
+function stockConsoSource(a) {
+  if (a.dailySource === 'sorties') {
+    return 'mesurée sur ' + a.dailySample + ' sortie' + (a.dailySample > 1 ? 's' : '')
+      + ' (' + a.dailyDays + ' j ouvrés)';
+  }
+  if (a.dailySource === 'inventaires') return 'déduite de ' + a.dailySample + ' inventaires';
+  return a.inventories >= 2 ? 'aucune conso observée' : 'saisissez des sorties, ou 2 inventaires';
 }
 
-// ----- Rendu : cards par article (sous-onglet Stock) -----
-function renderStockSummary() {
-  const list = document.getElementById('stocksummarylist');
-  const empty = document.getElementById('stocksummaryempty');
-  if (!list || !empty) return;
-  list.innerHTML = '';
+// ------------------------------------------------------------- PILOTAGE ----
+function renderStockPilot() {
+  const host = document.getElementById('stockpilot');
+  const empty = document.getElementById('stockpilotempty');
+  if (!host || !empty) return;
+  host.innerHTML = '';
   empty.classList.remove('show');
-  const summary = getStockSummary();
-  if (summary.length === 0) {
-    empty.innerHTML = '<p>Aucun stock à afficher.</p><p class="hint">Commencez par saisir une entrée dans Enregistrement.</p>';
+  const m = computeStockModel();
+  if (!m.articles.length) {
+    empty.innerHTML = '<p>Aucun mouvement enregistré.</p><p class="hint">Le bouton <strong>+</strong> de l\'onglet <strong>Mouvements</strong> ouvre la saisie : réception, sortie ou inventaire.</p>';
     empty.classList.add('show');
     return;
   }
-  for (const item of summary) {
-    list.appendChild(buildStockSummaryCard(item));
+  host.appendChild(buildStockKpis(m));
+  const reorder = getStockReorderList();
+  host.appendChild(buildStockReorderCard(reorder, m));
+  const grid = dbEl('div', 'db-grid');
+  grid.appendChild(buildStockConsoCard(m));
+  grid.appendChild(buildStockIssuesCard(m, reorder));
+  host.appendChild(grid);
+}
+
+function buildStockKpis(m) {
+  const row = dbEl('div', 'db-kpis');
+  const t = m.totals;
+
+  const k1 = dbEl('div', 'db-kpi db-kpi-main');
+  k1.appendChild(dbEl('div', 'db-kpi-label', 'Valeur du stock'));
+  const v1 = dbEl('div', 'db-kpi-value');
+  v1.appendChild(dbEl('span', 'db-kpi-num', fmtEurShort(t.value)));
+  k1.appendChild(v1);
+  k1.appendChild(dbEl('div', 'db-kpi-sub',
+    'au prix moyen pondéré des réceptions' + (t.unpriced ? ' · ' + t.unpriced + ' sans prix' : '')));
+  k1.title = 'Somme, pour chaque article, du stock courant multiplié par son prix moyen pondéré.';
+  row.appendChild(k1);
+
+  const k2 = dbEl('div', 'db-kpi');
+  k2.appendChild(dbEl('div', 'db-kpi-label', 'À commander'));
+  const reorder = getStockReorderList();
+  const v2 = dbEl('div', 'db-kpi-value' + (reorder.length ? ' is-neg' : ' is-pos'));
+  v2.appendChild(dbEl('span', 'db-kpi-num', String(reorder.length)));
+  v2.appendChild(dbEl('span', 'db-kpi-unit', reorder.length > 1 ? 'références' : 'référence'));
+  k2.appendChild(v2);
+  const nRupture = reorder.filter(a => a.status === 'rupture').length;
+  if (nRupture) k2.appendChild(dbEl('div', 'db-kpi-tag is-neg', nRupture + ' en rupture'));
+  k2.appendChild(dbEl('div', 'db-kpi-sub', reorder.length
+    ? 'environ ' + fmtEurShort(reorder.reduce((s, a) => s + a.reorderCost, 0)) + ' à engager'
+    : 'aucune référence sous son seuil'));
+  row.appendChild(k2);
+
+  const k3 = dbEl('div', 'db-kpi');
+  k3.appendChild(dbEl('div', 'db-kpi-label', 'Références suivies'));
+  const v3 = dbEl('div', 'db-kpi-value');
+  v3.appendChild(dbEl('span', 'db-kpi-num', String(t.references)));
+  k3.appendChild(v3);
+  const withConso = m.articles.filter(a => a.daily != null && a.daily > 0).length;
+  k3.appendChild(dbEl('div', 'db-kpi-sub',
+    withConso + ' avec une consommation connue · ' + (t.references - withConso) + ' sans'));
+  row.appendChild(k3);
+
+  const k4 = dbEl('div', 'db-kpi');
+  k4.appendChild(dbEl('div', 'db-kpi-label', 'Mouvements'));
+  const v4 = dbEl('div', 'db-kpi-value');
+  v4.appendChild(dbEl('span', 'db-kpi-num', String(t.movesPeriod)));
+  v4.appendChild(dbEl('span', 'db-kpi-unit', 'sur ' + m.period.label.toLowerCase()));
+  k4.appendChild(v4);
+  k4.appendChild(dbEl('div', 'db-kpi-sub', t.moves + ' depuis le début · ' + fmtEurShort(t.spend) + ' reçus'));
+  row.appendChild(k4);
+  return row;
+}
+
+// Carte de décision : c'est l'unique raison d'ouvrir l'onglet un mardi matin.
+function buildStockReorderCard(list, m) {
+  const card = dbCard('À commander', 'couverture cible : ' + m.settings.coverDays + ' j ouvrés');
+  if (!list.length) {
+    card.appendChild(dbEl('p', 'db-empty', 'Aucune référence sous son seuil. Rien à commander aujourd\'hui.'));
+    return card;
+  }
+  const head = card.querySelector('.db-card-head');
+  const copy = dbEl('button', 'stock-copy-btn', '⧉ Copier la liste');
+  copy.type = 'button';
+  copy.title = 'Copie un texte prêt à coller dans un mail de commande';
+  copy.addEventListener('click', () => copyStockReorderList(list));
+  head.appendChild(copy);
+
+  const wrap = dbEl('div', 'db-tasks-wrap');
+  const tbl = dbEl('table', 'db-tasks stock-reorder-table');
+  const thead = dbEl('thead');
+  const trh = dbEl('tr');
+  for (const [label, cls] of [['Article', ''], ['Stock', 'num'], ['Couverture', 'num'],
+    ['À commander', 'num'], ['Montant', 'num'], ['Fournisseur', ''], ['eOTP', '']]) {
+    trh.appendChild(dbEl('th', cls, label));
+  }
+  thead.appendChild(trh);
+  tbl.appendChild(thead);
+  const tbody = dbEl('tbody');
+  for (const a of list) {
+    const tr = dbEl('tr', 'is-' + a.status);
+    const name = dbEl('td', 'db-task-name');
+    name.appendChild(dbEl('span', 'stock-dot is-' + a.status));
+    const nb = dbEl('button', 'stock-link', a.name);
+    nb.type = 'button';
+    nb.addEventListener('click', () => openStockDetail(a.name));
+    name.appendChild(nb);
+    tr.appendChild(name);
+    tr.appendChild(dbEl('td', 'num', fmtStockQty(a.stock) + ' ' + a.unit));
+    // Le motif du déclenchement doit être lisible : sans lui, une couverture
+    // de 56 jours dans une ligne « à commander » passe pour une incohérence.
+    const cov = dbEl('td', 'num');
+    if (a.min > 0 && a.stock <= a.min) {
+      cov.appendChild(dbEl('span', 'stock-tag is-warn', 'sous le mini'));
+      cov.title = 'Stock ' + fmtStockQty(a.stock) + ' ' + a.unit + ' ≤ mini ' + fmtStockQty(a.min) + ' ' + a.unit
+        + (a.days != null ? ' — couverture ' + a.days + ' j ouvrés' : '');
+    } else {
+      cov.textContent = a.days == null ? '—' : (a.days <= 0 ? 'épuisé' : a.days + ' j');
+    }
+    tr.appendChild(cov);
+    tr.appendChild(dbEl('td', 'num stock-strong', fmtStockQty(a.reorderQty) + ' ' + a.unit));
+    tr.appendChild(dbEl('td', 'num', a.pmp > 0 ? fmtEurShort(a.reorderCost) : '—'));
+    tr.appendChild(dbEl('td', null, a.supplier || '—'));
+    tr.appendChild(dbEl('td', null, a.eOTP || '—'));
+    tbody.appendChild(tr);
+  }
+  tbl.appendChild(tbody);
+  wrap.appendChild(tbl);
+  card.appendChild(wrap);
+  card.appendChild(dbEl('p', 'db-note',
+    'Quantité proposée = de quoi couvrir ' + m.settings.coverDays + ' jours ouvrés de consommation'
+    + ' (plus le délai d\'appro de l\'article), au-delà du mini. Ajustez les seuils dans la fiche d\'un article.'));
+  return card;
+}
+function copyStockReorderList(list) {
+  const bySupplier = new Map();
+  for (const a of list) {
+    const k = a.supplier || 'Fournisseur non renseigné';
+    if (!bySupplier.has(k)) bySupplier.set(k, []);
+    bySupplier.get(k).push(a);
+  }
+  const lines = ['Demande d\'approvisionnement — ' + fmtFR(todayISO()), ''];
+  for (const [sup, arr] of bySupplier) {
+    lines.push(sup);
+    for (const a of arr) {
+      lines.push('  - ' + a.name + ' : ' + fmtStockQty(a.reorderQty) + ' ' + a.unit
+        + (a.eOTP ? '  [' + a.eOTP + ']' : '')
+        + '   (stock ' + fmtStockQty(a.stock) + ' ' + a.unit
+        + (a.days != null ? ', couverture ' + a.days + ' j' : '') + ')');
+    }
+    lines.push('');
+  }
+  const total = list.reduce((s, a) => s + a.reorderCost, 0);
+  if (total > 0) lines.push('Montant estimé : ' + fmtEurShort(total));
+  const txt = lines.join('\n');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt).then(
+      () => showToast('Liste copiée — collez-la dans votre mail'),
+      () => showToast('Copie impossible', 'error'));
+  } else {
+    showToast('Copie non disponible sur cet appareil', 'error');
   }
 }
-function buildStockSummaryCard(item) {
-  const card = document.createElement('button');
-  card.type = 'button';
-  card.className = 'stock-summary-card';
-  card.setAttribute('aria-label', `Détails de ${item.article}`);
-  const lastVerb = item.lastEntry.type === 'inventaire' ? 'Inventaire' : 'Réception';
-  const lastSign = item.lastEntry.type === 'inventaire' ? '=' : '+';
-  card.innerHTML = `
-    <div class="stock-summary-head">
-      <span class="stock-summary-name"></span>
-      <span class="stock-summary-total"></span>
-    </div>
-    <div class="stock-summary-sub"></div>
-  `;
-  card.querySelector('.stock-summary-name').textContent = item.article;
-  card.querySelector('.stock-summary-total').textContent = `${fmtStockQty(item.stock)} ${item.unit}`;
-  card.querySelector('.stock-summary-sub').textContent =
-    `Dernière entrée : ${fmtDateShortFR(item.lastEntry.date)} — ${lastVerb} ${lastSign}${fmtStockQty(item.lastEntry.qty)} ${item.unit}`;
-  card.addEventListener('click', () => openStockDetail(item.article));
+
+// Consommation : qui pèse, et sur quelle base le chiffre est établi.
+function buildStockConsoCard(m) {
+  const card = dbCard('Consommation', 'sur ' + m.period.label.toLowerCase());
+  const head = card.querySelector('.db-card-head');
+  const seg = dbEl('div', 'db-periods');
+  seg.appendChild(dbEl('span', 'db-periods-label', 'Fenêtre'));
+  for (const p of STOCK_PERIODS) {
+    const b = dbEl('button', 'db-period' + (m.period.key === p.key ? ' is-on' : ''), p.label);
+    b.type = 'button';
+    b.addEventListener('click', () => { state.stockPeriod = p.key; save(); invalidateStockModel(); renderStock(); });
+    seg.appendChild(b);
+  }
+  head.appendChild(seg);
+
+  const top = m.articles.filter(a => a.daily != null && a.daily > 0)
+    .sort((a, b) => (b.daily * (b.pmp || 0)) - (a.daily * (a.pmp || 0)) || b.daily - a.daily)
+    .slice(0, 8);
+  if (!top.length) {
+    card.appendChild(dbEl('p', 'db-empty',
+      'Aucune consommation mesurable. Saisissez des sorties au fil de l\'eau, ou deux inventaires successifs sur un même article.'));
+    return card;
+  }
+  const max = Math.max(...top.map(a => a.daily));
+  const list = dbEl('div', 'db-rows');
+  for (const a of top) {
+    const row = dbEl('div', 'db-row');
+    const h = dbEl('div', 'db-row-head');
+    const nb = dbEl('button', 'stock-link db-row-name', a.name);
+    nb.type = 'button';
+    nb.addEventListener('click', () => openStockDetail(a.name));
+    h.appendChild(nb);
+    h.appendChild(dbEl('span', 'db-row-pct', fmtRate(a.daily) + ' ' + a.unit + '/j'));
+    row.appendChild(h);
+    const bar = dbEl('div', 'db-bar');
+    const fill = dbEl('div', 'db-bar-fill is-good');
+    fill.style.width = Math.max(3, (a.daily / max) * 100) + '%';
+    bar.appendChild(fill);
+    row.appendChild(bar);
+    const sub = dbEl('div', 'db-row-sub');
+    sub.appendChild(dbEl('span', null, stockConsoSource(a)));
+    if (a.pmp > 0) sub.appendChild(dbEl('span', 'db-delta', fmtEurShort(a.daily * a.pmp * 21) + '/mois'));
+    row.appendChild(sub);
+    list.appendChild(row);
+  }
+  card.appendChild(list);
   return card;
 }
 
+// Qualité des données : ce qui fausse les chiffres, dit clairement.
+function buildStockIssuesCard(m, reorder) {
+  const card = dbCard('Points d\'attention');
+  const notes = [];
+  const t = m.totals;
+  if (t.unpriced) {
+    notes.push(['is-warn', t.unpriced + ' réception(s) sans prix unitaire : elles entrent à 0 € dans la vision budget et faussent la valeur du stock.']);
+  }
+  if (t.mixedUnits) {
+    const noms = m.articles.filter(a => a.mixedUnits).map(a => a.name).slice(0, 3).join(', ');
+    notes.push(['is-warn', t.mixedUnits + ' article(s) saisis avec des unités différentes (' + noms + ') : le total additionne des grandeurs distinctes. Fixez l\'unité dans leur fiche.']);
+  }
+  const negatifs = m.articles.filter(a => a.stock < 0);
+  if (negatifs.length) {
+    notes.push(['is-warn', negatifs.length + ' article(s) en stock négatif (' + negatifs.map(a => a.name).slice(0, 3).join(', ') + ') : une réception manque, ou une sortie est en trop.']);
+  }
+  const sansConso = m.articles.filter(a => a.daily == null);
+  if (sansConso.length) {
+    notes.push(['', sansConso.length + ' article(s) sans consommation connue : ni sortie saisie, ni deux inventaires. Leur épuisement ne peut pas être estimé.']);
+  }
+  const dormants = m.articles.filter(a => a.lastEntry && a.lastEntry.date < dayToISO(isoToDay(todayISO()) - 60));
+  if (dormants.length) {
+    notes.push(['', dormants.length + ' article(s) sans mouvement depuis plus de 60 jours.']);
+  }
+  if (!notes.length) notes.push(['is-ok', 'Prix, unités et mouvements sont cohérents : les chiffres du stock sont fiables.']);
+  for (const [cls, txt] of notes) {
+    const el = dbEl('div', 'db-focus-note ' + cls);
+    el.textContent = txt;
+    card.appendChild(el);
+  }
+  const counts = dbEl('div', 'db-focus-counts');
+  counts.textContent = t.references + ' références · ' + t.moves + ' mouvements · '
+    + m.articles.filter(a => a.entries.some(e => stockTypeOf(e) === 'sortie')).length + ' avec sorties saisies';
+  card.appendChild(counts);
+  return card;
+}
+
+// -------------------------------------------------------------- MAGASIN ----
+function renderStockSummary() {
+  const list = document.getElementById('stocksummarylist');
+  const empty = document.getElementById('stocksummaryempty');
+  const tools = document.getElementById('stocktools');
+  if (!list || !empty) return;
+  list.innerHTML = '';
+  empty.classList.remove('show');
+  const m = computeStockModel();
+  if (tools) renderStockTools(tools, m);
+  if (m.articles.length === 0) {
+    empty.innerHTML = '<p>Aucun article en stock.</p><p class="hint">Enregistrez une réception avec le bouton <strong>+</strong>.</p>';
+    empty.classList.add('show');
+    if (tools) tools.innerHTML = '';
+    return;
+  }
+  const q = stockKey(state.stockQuery || '');
+  const sort = STOCK_SORTS.find(s => s.key === state.stockSort) || STOCK_SORTS[0];
+  const shown = m.articles
+    .filter(a => !q || a.key.includes(q) || stockKey(a.supplier).includes(q))
+    .sort(sort.cmp);
+  if (!shown.length) {
+    empty.innerHTML = '<p>Aucun article ne correspond à « ' + escapeHtml(state.stockQuery) + ' ».</p>';
+    empty.classList.add('show');
+    return;
+  }
+  for (const a of shown) list.appendChild(buildStockSummaryCard(a));
+}
+function renderStockTools(host, m) {
+  host.innerHTML = '';
+  const search = document.createElement('input');
+  search.type = 'search';
+  search.className = 'stock-search';
+  search.placeholder = 'Rechercher un article, un fournisseur…';
+  search.value = state.stockQuery || '';
+  search.addEventListener('input', () => {
+    state.stockQuery = search.value;
+    renderStockSummary();
+    const again = document.querySelector('#stocktools .stock-search');
+    if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+  });
+  host.appendChild(search);
+
+  const sorts = dbEl('div', 'db-ouvrage-sorts');
+  sorts.appendChild(dbEl('span', 'db-ouvrage-sorts-label', 'Trier par'));
+  for (const s of STOCK_SORTS) {
+    const b = dbEl('button', 'db-ouvrage-sort' + ((state.stockSort || 'statut') === s.key ? ' is-on' : ''), s.label);
+    b.type = 'button';
+    b.addEventListener('click', () => { state.stockSort = s.key; save(); renderStockSummary(); });
+    sorts.appendChild(b);
+  }
+  host.appendChild(sorts);
+
+  const counts = dbEl('div', 'stock-tools-counts');
+  const byStatus = {};
+  for (const a of m.articles) byStatus[a.status] = (byStatus[a.status] || 0) + 1;
+  for (const key of ['rupture', 'critique', 'bas', 'ok', 'inconnu']) {
+    if (!byStatus[key]) continue;
+    const chip = dbEl('span', 'stock-status-chip is-' + key);
+    chip.appendChild(dbEl('span', 'stock-dot is-' + key));
+    chip.appendChild(dbEl('span', null, byStatus[key] + ' ' + STOCK_STATUS[key].label.toLowerCase()));
+    counts.appendChild(chip);
+  }
+  host.appendChild(counts);
+}
+function buildStockSummaryCard(a) {
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = 'stock-summary-card is-' + a.status;
+  card.setAttribute('aria-label', 'Fiche de ' + a.name);
+  const head = dbEl('div', 'stock-summary-head');
+  const id = dbEl('div', 'stock-summary-id');
+  const nameRow = dbEl('div', 'stock-summary-nameline');
+  nameRow.appendChild(dbEl('span', 'stock-dot is-' + a.status));
+  nameRow.appendChild(dbEl('span', 'stock-summary-name', a.name));
+  if (a.mixedUnits) {
+    const w = dbEl('span', 'stock-tag is-warn', 'unités mêlées');
+    w.title = 'Cet article a été saisi avec plusieurs unités : le total additionne des grandeurs différentes.';
+    nameRow.appendChild(w);
+  }
+  id.appendChild(nameRow);
+  const sub = dbEl('div', 'stock-summary-sub');
+  sub.textContent = a.daily != null && a.daily > 0
+    ? fmtRate(a.daily) + ' ' + a.unit + '/j ouvré · ' + stockConsoSource(a)
+    : stockConsoSource(a);
+  id.appendChild(sub);
+  head.appendChild(id);
+  const right = dbEl('div', 'stock-summary-right');
+  right.appendChild(dbEl('span', 'stock-summary-total', fmtStockQty(a.stock) + ' ' + a.unit));
+  if (a.value > 0) right.appendChild(dbEl('span', 'stock-summary-value', fmtEurShort(a.value)));
+  head.appendChild(right);
+  card.appendChild(head);
+
+  // Barre de couverture : la part du seuil d'alerte encore couverte.
+  const seuil = (a.days != null) ? (computeStockModel().settings.alertDays + (a.leadDays || 0)) : 0;
+  const bar = dbEl('div', 'db-bar stock-summary-bar');
+  const fill = dbEl('div', 'db-bar-fill is-' + a.status);
+  const pct = a.days == null ? 0 : Math.max(4, Math.min(100, (a.days / Math.max(1, seuil * 3)) * 100));
+  fill.style.width = pct + '%';
+  bar.appendChild(fill);
+  card.appendChild(bar);
+
+  const foot = dbEl('div', 'stock-summary-foot');
+  foot.appendChild(dbEl('span', 'stock-summary-status is-' + a.status,
+    a.status === 'rupture' ? 'Rupture'
+    : a.days == null ? STOCK_STATUS[a.status].label
+    : 'Couverture ' + a.days + ' j ouvrés'));
+  if (a.date && a.days != null && a.days > 0) foot.appendChild(dbEl('span', null, 'épuisé le ' + fmtFR(a.date)));
+  if (a.min > 0) foot.appendChild(dbEl('span', null, 'mini ' + fmtStockQty(a.min) + ' ' + a.unit));
+  if (a.supplier) foot.appendChild(dbEl('span', null, a.supplier));
+  if (a.lastEntry) {
+    foot.appendChild(dbEl('span', null, 'dernier mouvement ' + fmtDateShortFR(a.lastEntry.date)));
+  }
+  card.appendChild(foot);
+  card.addEventListener('click', () => openStockDetail(a.name));
+  return card;
+}
+
+// ----------------------------------------------------------- MOUVEMENTS ----
+const STOCK_MOVE_PAGE = 120;
+let _stockMoveLimit = STOCK_MOVE_PAGE;
+function renderStockEntries() {
+  const list = document.getElementById('stockentrylist');
+  const empty = document.getElementById('stockentryempty');
+  const tools = document.getElementById('stockmovetools');
+  if (!list || !empty) return;
+  list.innerHTML = '';
+  empty.classList.remove('show');
+  if (tools) renderStockMoveTools(tools);
+  if ((state.stockEntries || []).length === 0) {
+    empty.innerHTML = '<p>Aucun mouvement enregistré.</p><p class="hint">Le bouton <strong>+</strong> ouvre la saisie : réception, sortie ou inventaire.</p>';
+    empty.classList.add('show');
+    if (tools) tools.innerHTML = '';
+    return;
+  }
+  const filter = state.stockMoveFilter || 'all';
+  const q = stockKey(state.stockQuery || '');
+  const all = state.stockEntries.slice().sort(compareStockEntries).reverse()
+    .filter(e => filter === 'all' || stockTypeOf(e) === filter)
+    .filter(e => !q || stockKey(e.article).includes(q));
+  if (!all.length) {
+    empty.innerHTML = '<p>Aucun mouvement ne correspond à ce filtre.</p>';
+    empty.classList.add('show');
+    return;
+  }
+  // Regroupement par jour, avec le net du jour : c'est la lecture d'un carnet
+  // de magasin, pas d'un tableau plat de trois cents lignes.
+  const shown = all.slice(0, _stockMoveLimit);
+  let currentDay = null;
+  for (const e of shown) {
+    if (e.date !== currentDay) {
+      currentDay = e.date;
+      const sameDay = all.filter(x => x.date === currentDay);
+      const li = document.createElement('li');
+      li.className = 'stock-day-head';
+      li.appendChild(dbEl('span', 'stock-day-date', fmtDateShortFR(currentDay)));
+      const counts = [];
+      for (const t of ['reception', 'sortie', 'inventaire']) {
+        const n = sameDay.filter(x => stockTypeOf(x) === t).length;
+        if (n) counts.push(n + ' ' + STOCK_TYPES[t].short.toLowerCase() + (n > 1 ? 's' : ''));
+      }
+      li.appendChild(dbEl('span', 'stock-day-count', counts.join(' · ')));
+      list.appendChild(li);
+    }
+    list.appendChild(buildStockEntryRow(e));
+  }
+  if (all.length > shown.length) {
+    const li = document.createElement('li');
+    li.className = 'stock-more';
+    const b = dbEl('button', 'btn-secondary', 'Afficher ' + Math.min(STOCK_MOVE_PAGE, all.length - shown.length) + ' mouvements de plus');
+    b.type = 'button';
+    b.addEventListener('click', () => { _stockMoveLimit += STOCK_MOVE_PAGE; renderStockEntries(); });
+    li.appendChild(b);
+    li.appendChild(dbEl('span', 'stock-more-count', shown.length + ' / ' + all.length + ' affichés'));
+    list.appendChild(li);
+  }
+}
+function renderStockMoveTools(host) {
+  host.innerHTML = '';
+  const search = document.createElement('input');
+  search.type = 'search';
+  search.className = 'stock-search';
+  search.placeholder = 'Rechercher un article…';
+  search.value = state.stockQuery || '';
+  search.addEventListener('input', () => {
+    state.stockQuery = search.value;
+    _stockMoveLimit = STOCK_MOVE_PAGE;
+    renderStockEntries();
+    const again = document.querySelector('#stockmovetools .stock-search');
+    if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+  });
+  host.appendChild(search);
+  const seg = dbEl('div', 'db-ouvrage-sorts');
+  seg.appendChild(dbEl('span', 'db-ouvrage-sorts-label', 'Type'));
+  const opts = [['all', 'Tous'], ['reception', 'Réceptions'], ['sortie', 'Sorties'], ['inventaire', 'Inventaires']];
+  for (const [key, label] of opts) {
+    const b = dbEl('button', 'db-ouvrage-sort' + ((state.stockMoveFilter || 'all') === key ? ' is-on' : ''), label);
+    b.type = 'button';
+    b.addEventListener('click', () => {
+      state.stockMoveFilter = key; save();
+      _stockMoveLimit = STOCK_MOVE_PAGE;
+      renderStockEntries();
+    });
+    seg.appendChild(b);
+  }
+  host.appendChild(seg);
+}
+function buildStockEntryRow(entry) {
+  const t = stockTypeOf(entry);
+  const def = STOCK_TYPES[t];
+  const li = document.createElement('li');
+  li.className = 'stock-entry-row type-' + t;
+  li.setAttribute('data-entry-id', entry.id);
+  const main = dbEl('div', 'stock-entry-main');
+  // Le type est écrit en clair, pas seulement porté par une couleur : un
+  // écran de téléphone en plein soleil ne distingue pas le vert du bleu.
+  main.appendChild(dbEl('span', 'stock-entry-type is-' + t, def.short));
+  main.appendChild(dbEl('span', 'stock-entry-name', entry.article));
+  main.appendChild(dbEl('span', 'stock-entry-qty is-' + t, def.sign + ' ' + fmtStockQty(entry.qty) + ' ' + entry.unit));
+  li.appendChild(main);
+
+  const meta = dbEl('div', 'stock-entry-meta');
+  if (t === 'reception' && Number(entry.unitPrice) > 0) {
+    meta.appendChild(dbEl('span', null, fmtEurShort(entry.qty * entry.unitPrice)));
+  }
+  if (entry.eOTP) meta.appendChild(dbEl('span', null, entry.eOTP));
+  if (entry.zoneId) {
+    const z = state.zones.find(x => x.id === entry.zoneId);
+    if (z) meta.appendChild(dbEl('span', null, '→ ' + travauxZoneLabel(entry.zoneId)));
+  }
+  if (entry.notes) meta.appendChild(dbEl('span', 'stock-entry-notes', entry.notes));
+  if (meta.childElementCount) li.appendChild(meta);
+
+  const actions = dbEl('div', 'stock-entry-actions');
+  const again = dbEl('button', 'stock-entry-again', '↻');
+  again.type = 'button';
+  again.title = 'Refaire ce mouvement (reprend article, quantité et unité)';
+  again.setAttribute('aria-label', 'Refaire ce mouvement');
+  again.addEventListener('click', (ev) => { ev.stopPropagation(); repeatStockEntry(entry); });
+  actions.appendChild(again);
+  const del = document.createElement('button');
+  del.className = 'stock-entry-delete';
+  del.type = 'button';
+  del.setAttribute('aria-label', 'Supprimer ce mouvement');
+  del.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>';
+  del.addEventListener('click', (ev) => { ev.stopPropagation(); removeStockEntry(entry.id); });
+  actions.appendChild(del);
+  li.appendChild(actions);
+  return li;
+}
+
 function renderStock() {
+  invalidateStockModel();
+  renderStockPilot();
   renderStockEntries();
   renderStockSummary();
   renderStockCB();
   refreshArticleControl();
 }
+
 // Peuple le dropdown des articles à partir de ceux déjà saisis. Si la
 // liste est vide, on bascule directement sur le champ texte. Sinon le
 // dropdown contient toutes les références + une entrée « + Nouveau
 // article… » qui révèle le champ texte au choix.
 const NEW_ARTICLE_SENTINEL = '__new__';
-function refreshArticleControl() {
+function refreshArticleControl(keep) {
   const sel = document.getElementById('stockarticleselect');
   const inp = document.getElementById('stockarticlenew');
   if (!sel || !inp) return;
+  // La saisie en cours est préservée : renderStock() est appelé après chaque
+  // fusion de synchro entrante, et vidait jusqu'ici le champ sous les doigts
+  // de l'utilisateur en train de taper le nom d'un article.
+  const keepValue = keep || document.activeElement === inp || document.activeElement === sel;
+  const prevSel = sel.value, prevInp = inp.value, prevHidden = inp.hidden;
   const names = getAllArticleNames();
   sel.innerHTML = '';
   if (names.length === 0) {
@@ -9720,7 +10433,7 @@ function refreshArticleControl() {
     // texte (rien à choisir, l'utilisateur tape directement).
     sel.hidden = true;
     inp.hidden = false;
-    inp.value = '';
+    if (!keepValue) inp.value = '';
     return;
   }
   sel.hidden = false;
@@ -9730,8 +10443,14 @@ function refreshArticleControl() {
   sel.appendChild(placeholder);
   for (const n of names) sel.appendChild(new Option(n, n));
   sel.appendChild(new Option('+ Nouveau article…', NEW_ARTICLE_SENTINEL));
-  inp.hidden = true;
-  inp.value = '';
+  if (keepValue) {
+    if (prevSel && [...sel.options].some(o => o.value === prevSel)) sel.value = prevSel;
+    inp.hidden = prevHidden;
+    inp.value = prevInp;
+  } else {
+    inp.hidden = true;
+    inp.value = '';
+  }
 }
 // Récupère l'article à enregistrer : si l'utilisateur a basculé sur la
 // saisie nouvelle, c'est elle qui prime ; sinon on prend la sélection.
@@ -9754,7 +10473,19 @@ function onArticleSelectChange() {
   } else {
     inp.hidden = true;
     inp.value = '';
+    // L'unité de la fiche prime : elle évite qu'un même article soit reçu
+    // en sacs puis compté en palettes sans que rien ne le signale.
+    const fiche = getStockArticle(sel.value);
+    const unitSel = document.getElementById('stockunit');
+    if (fiche && fiche.unit && unitSel && [...unitSel.options].some(o => o.value === fiche.unit)) {
+      unitSel.value = fiche.unit;
+    }
+    if (fiche && fiche.eOTP && currentStockEntryType === 'reception') {
+      const e = document.getElementById('stockeotp');
+      if (e && [...e.options].some(o => o.value === fiche.eOTP)) e.value = fiche.eOTP;
+    }
   }
+  refreshStockCurrentHint();
 }
 function fmtDateShortFR(iso) {
   // (formatDateShortFR existe déjà ; alias pour éviter de re-déclarer)
@@ -9762,46 +10493,123 @@ function fmtDateShortFR(iso) {
 }
 
 // ----- CRUD -----
-function addStockEntry({ type, article, qty, unit, unitPrice, eOTP, date, notes }) {
+function addStockEntry({ type, article, qty, unit, unitPrice, eOTP, date, notes, zoneId }) {
   if (!article || !article.trim()) { showToast('Article requis', 'error'); return false; }
   const q = parseFloat(String(qty).replace(',', '.'));
   if (!Number.isFinite(q) || q < 0) { showToast('Quantité invalide', 'error'); return false; }
   if (!date) { showToast('Date requise', 'error'); return false; }
-  // Prix unitaire (optionnel) — utilisé pour la vision budget CB. Pas
-  // appliqué aux inventaires (recalage de stock physique, pas un achat).
+  const t = STOCK_TYPES[type] ? type : 'reception';
+  // Prix unitaire (optionnel) — utilisé pour la vision budget CB. Ni
+  // l'inventaire (recalage physique) ni la sortie (mouvement interne) ne
+  // sont des achats : ils ne portent donc ni prix ni imputation.
   let priceVal = 0;
   if (unitPrice != null && unitPrice !== '') {
     priceVal = parseFloat(String(unitPrice).replace(',', '.'));
     if (!Number.isFinite(priceVal) || priceVal < 0) priceVal = 0;
   }
-  const isReception = type !== 'inventaire';
+  const isReception = t === 'reception';
+  const now = new Date();
   state.stockEntries.push({
     id: uid(),
-    type: isReception ? 'reception' : 'inventaire',
+    type: t,
     article: article.trim(),
     qty: q,
     unit: unit || 'u',
     unitPrice: isReception ? priceVal : 0,
     eOTP: isReception ? (eOTP || '').trim() : '',
+    zoneId: t === 'sortie' ? (zoneId || '') : '',
     date,
+    // L'heure départage deux mouvements du même jour : sans elle, l'ordre
+    // dépendait de l'ordre de saisie, donc du hasard après une synchro.
+    time: String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0'),
     notes: (notes || '').trim()
   });
+  // Fiche créée à la volée avec ce qu'on sait : jamais un préalable, juste un
+  // enregistrement de ce qui vient d'être saisi.
+  const fiche = upsertStockArticle(article, null);
+  if (fiche && !fiche.unit && unit) fiche.unit = unit;
+  if (fiche && isReception && !fiche.eOTP && eOTP) fiche.eOTP = String(eOTP).trim();
   save();
+  invalidateStockModel();
   renderStock();
   return true;
 }
+// Refaire un mouvement : la feuille s'ouvre pré-remplie avec l'article, la
+// quantité et l'unité de la ligne. Les livraisons de chantier se répètent.
+function repeatStockEntry(entry) {
+  openStockEntrySheet();
+  setStockEntryType(stockTypeOf(entry));
+  const sel = document.getElementById('stockarticleselect');
+  const inp = document.getElementById('stockarticlenew');
+  if (sel && [...sel.options].some(o => o.value === entry.article)) {
+    sel.value = entry.article;
+    if (inp) { inp.hidden = true; inp.value = ''; }
+  } else if (inp) {
+    inp.hidden = false;
+    inp.value = entry.article;
+  }
+  document.getElementById('stockqty').value = fmtStockQty(entry.qty);
+  const unitSel = document.getElementById('stockunit');
+  if (unitSel && [...unitSel.options].some(o => o.value === entry.unit)) unitSel.value = entry.unit;
+  if (stockTypeOf(entry) === 'reception' && Number(entry.unitPrice) > 0) {
+    document.getElementById('stockprice').value = fmtPriceForInput(entry.unitPrice);
+  }
+  if (entry.eOTP) {
+    const e = document.getElementById('stockeotp');
+    if (e && [...e.options].some(o => o.value === entry.eOTP)) e.value = entry.eOTP;
+  }
+  if (entry.zoneId) {
+    const z = document.getElementById('stockdest');
+    if (z && [...z.options].some(o => o.value === entry.zoneId)) z.value = entry.zoneId;
+  }
+  refreshStockCurrentHint();
+}
+// Suppression immédiate et annulable, plutôt qu'une boîte de confirmation :
+// sur un téléphone tenu d'une main, un « Annuler » qui reste trois secondes
+// est plus sûr qu'un dialogue qu'on valide sans lire.
+let _stockUndo = null;
 function removeStockEntry(id) {
   const entry = state.stockEntries.find(e => e.id === id);
   if (!entry) return;
-  const label = `${entry.article} (${entry.type === 'inventaire' ? 'inventaire' : 'réception'} ${fmtStockQty(entry.qty)} ${entry.unit} du ${fmtDateShortFR(entry.date)})`;
-  if (!confirm(`Supprimer l'entrée ${label} ?`)) return;
   state.stockEntries = state.stockEntries.filter(e => e.id !== id);
+  _stockUndo = entry;
   save();
-  // Si la modale détail est ouverte sur cet article, on la rafraîchit
-  if (stockDetailArticle && stockDetailArticle.toLowerCase() === entry.article.toLowerCase()) {
+  invalidateStockModel();
+  if (stockDetailArticle && stockKey(stockDetailArticle) === stockKey(entry.article)) {
     renderStockDetailBody();
   }
   renderStock();
+  showStockUndoToast(entry);
+}
+function showStockUndoToast(entry) {
+  const def = STOCK_TYPES[stockTypeOf(entry)];
+  const el = document.getElementById('stockundo');
+  if (!el) {
+    showToast(def.short + ' supprimée');
+    return;
+  }
+  el.innerHTML = '';
+  el.appendChild(dbEl('span', null, def.short + ' ' + def.sign + fmtStockQty(entry.qty) + ' '
+    + entry.unit + ' — ' + entry.article + ' supprimée'));
+  const b = dbEl('button', 'stock-undo-btn', 'Annuler');
+  b.type = 'button';
+  b.addEventListener('click', undoStockDelete);
+  el.appendChild(b);
+  el.hidden = false;
+  clearTimeout(showStockUndoToast._t);
+  showStockUndoToast._t = setTimeout(() => { el.hidden = true; _stockUndo = null; }, 6000);
+}
+function undoStockDelete() {
+  if (!_stockUndo) return;
+  state.stockEntries.push(_stockUndo);
+  _stockUndo = null;
+  save();
+  invalidateStockModel();
+  renderStock();
+  if (stockDetailArticle) renderStockDetailBody();
+  const el = document.getElementById('stockundo');
+  if (el) el.hidden = true;
+  showToast('Mouvement rétabli');
 }
 
 // ----- Bottom sheet de saisie -----
@@ -9828,6 +10636,8 @@ function openStockEntrySheet() {
   // Champs CB : prix vide, eOTP repeuplé depuis Données → eOTP
   document.getElementById('stockprice').value = '';
   refreshStockEOTPSelect();
+  refreshStockDestSelect();
+  refreshStockCurrentHint();
   sheet.hidden = false;
   document.body.style.overflow = 'hidden';
   // Focus : champ texte si pas de référence connue, sinon le select
@@ -9844,7 +10654,7 @@ function closeStockEntrySheet() {
   document.body.style.overflow = '';
 }
 function setStockEntryType(type) {
-  currentStockEntryType = type === 'inventaire' ? 'inventaire' : 'reception';
+  currentStockEntryType = STOCK_TYPES[type] ? type : 'reception';
   const seg = document.querySelector('.stock-type-seg');
   if (seg) {
     const buttons = seg.querySelectorAll('.seg-btn');
@@ -9858,12 +10668,48 @@ function setStockEntryType(type) {
   if (hint) {
     hint.textContent = currentStockEntryType === 'reception'
       ? 'Ajoute la quantité reçue au stock courant.'
-      : 'Remplace le stock courant par la quantité comptée (recalage).';
+      : currentStockEntryType === 'sortie'
+        ? 'Retire la quantité servie du stock courant, avec sa destination.'
+        : 'Remplace le stock courant par la quantité comptée (recalage).';
   }
-  // Cache les champs CB (prix + eOTP) pour l'inventaire — c'est un
-  // recalage physique, pas un achat avec coût budgétaire.
+  // Prix et eOTP n'ont de sens que pour un achat ; la destination, que pour
+  // une sortie. On masque plutôt que de laisser saisir ce qui sera ignoré.
   const cb = document.getElementById('stockcbfields');
   if (cb) cb.hidden = currentStockEntryType !== 'reception';
+  const dest = document.getElementById('stockdestfield');
+  if (dest) dest.hidden = currentStockEntryType !== 'sortie';
+  refreshStockCurrentHint();
+}
+// Rappel du stock courant de l'article choisi, sous le sélecteur : on sait
+// tout de suite si l'on est en train de sortir plus que ce qui reste.
+function refreshStockCurrentHint() {
+  const el = document.getElementById('stockcurrent');
+  if (!el) return;
+  const name = getStockArticleFromForm();
+  const a = name ? computeStockModel().articles.find(x => x.key === stockKey(name)) : null;
+  if (!a) { el.hidden = true; return; }
+  el.hidden = false;
+  el.className = 'stock-form-stock' + (a.stock <= 0 ? ' is-warn' : '');
+  el.textContent = 'Stock courant : ' + fmtStockQty(a.stock) + ' ' + a.unit
+    + (a.days != null ? ' · couverture ' + a.days + ' j ouvrés' : '')
+    + (a.min > 0 ? ' · mini ' + fmtStockQty(a.min) + ' ' + a.unit : '');
+}
+// Destinations d'une sortie : l'arborescence de zones déjà saisie ailleurs.
+function refreshStockDestSelect() {
+  const sel = document.getElementById('stockdest');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = '';
+  const none = document.createElement('option');
+  none.value = ''; none.textContent = '— Non affectée —';
+  sel.appendChild(none);
+  for (const z of state.zones) {
+    const opt = document.createElement('option');
+    opt.value = z.id;
+    opt.textContent = travauxZoneLabel(z.id);
+    sel.appendChild(opt);
+  }
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
 }
 // Peuple le dropdown eOTP du sheet de saisie Stock depuis Données → eOTP.
 // Une option vide « — » permet de ne pas affecter l'achat à une ligne.
@@ -9884,22 +10730,35 @@ function refreshStockEOTPSelect() {
   }
   if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
 }
-function submitStockEntry() {
+// `again` : on enregistre et l'on garde la feuille ouverte, article et unité
+// conservés, quantité vidée. C'est le geste du magasinier qui sert quatre
+// équipes de suite depuis le même dépôt.
+function submitStockEntry(again) {
   const article   = getStockArticleFromForm();
   const qty       = document.getElementById('stockqty').value;
   const unit      = document.getElementById('stockunit').value;
   const unitPrice = document.getElementById('stockprice').value;
   const eOTP      = document.getElementById('stockeotp').value;
+  const zoneId    = (document.getElementById('stockdest') || {}).value || '';
   const date      = document.getElementById('stockdate').value;
   const notes     = document.getElementById('stocknotes').value;
-  const ok = addStockEntry({ type: currentStockEntryType, article, qty, unit, unitPrice, eOTP, date, notes });
-  if (ok) {
-    showToast(currentStockEntryType === 'inventaire' ? 'Inventaire enregistré' : 'Réception enregistrée');
-    closeStockEntrySheet();
+  const ok = addStockEntry({ type: currentStockEntryType, article, qty, unit, unitPrice, eOTP, date, notes, zoneId });
+  if (!ok) return;
+  const label = STOCK_TYPES[currentStockEntryType].short;
+  if (again) {
+    showToast(label + ' enregistrée — au suivant');
+    const q = document.getElementById('stockqty');
+    q.value = '';
+    refreshArticleControl(true);
+    refreshStockCurrentHint();
+    q.focus();
+    return;
   }
+  showToast(label + ' enregistrée');
+  closeStockEntrySheet();
 }
 
-// ----- Modale détail d'un article -----
+// ----- Fiche d'un article : état, courbe, réglages, historique -----
 let stockDetailArticle = null;
 function openStockDetail(article) {
   stockDetailArticle = article;
@@ -9922,111 +10781,206 @@ function renderStockDetailBody() {
   const body = document.getElementById('stockdetailbody');
   if (!body) return;
   body.innerHTML = '';
-  const summary = getStockSummary().find(s =>
-    s.article.toLowerCase() === stockDetailArticle.toLowerCase()
-  );
-  // Bandeau résumé
-  const head = document.createElement('div');
-  head.className = 'stock-detail-head';
-  if (summary) {
-    head.innerHTML = `
-      <div class="stock-detail-label">Stock courant</div>
-      <div class="stock-detail-value">${fmtStockQty(summary.stock)} ${escapeHtml(summary.unit)}</div>
-    `;
-  } else {
-    head.innerHTML = `<div class="stock-detail-label">Aucun stock enregistré pour cet article.</div>`;
+  const m = computeStockModel();
+  const a = m.articles.find(x => x.key === stockKey(stockDetailArticle));
+  if (!a) {
+    body.appendChild(dbEl('p', 'db-empty', 'Aucun mouvement enregistré pour cet article.'));
+    return;
   }
+
+  // Bandeau : stock, couverture, valeur, consommation
+  const head = dbEl('div', 'stock-fiche-kpis');
+  const kpi = (label, value, sub, cls) => {
+    const k = dbEl('div', 'stock-fiche-kpi' + (cls ? ' ' + cls : ''));
+    k.appendChild(dbEl('div', 'stock-fiche-kpi-label', label));
+    k.appendChild(dbEl('div', 'stock-fiche-kpi-value', value));
+    if (sub) k.appendChild(dbEl('div', 'stock-fiche-kpi-sub', sub));
+    head.appendChild(k);
+  };
+  kpi('Stock courant', fmtStockQty(a.stock) + ' ' + a.unit,
+    a.lastEntry ? 'dernier mouvement le ' + fmtDateShortFR(a.lastEntry.date) : '',
+    a.stock <= 0 ? 'is-rupture' : '');
+  kpi('Couverture',
+    a.days == null ? '—' : (a.days <= 0 ? 'épuisé' : a.days + ' j ouvrés'),
+    a.date && a.days > 0 ? 'jusqu\'au ' + fmtFR(a.date) : STOCK_STATUS[a.status].label,
+    'is-' + a.status);
+  kpi('Consommation', a.daily != null && a.daily > 0 ? fmtRate(a.daily) + ' ' + a.unit + '/j' : '—',
+    stockConsoSource(a));
+  kpi('Valeur', a.pmp > 0 ? fmtEurShort(a.value) : '—',
+    a.pmp > 0 ? fmtRate(a.pmp) + ' €/' + a.unit + ' en moyenne' : 'aucun prix saisi');
   body.appendChild(head);
 
-  // Encarts : conso moyenne / jours restants estimés.
-  if (summary) {
-    const stats = document.createElement('div');
-    stats.className = 'stock-detail-stats';
-    const { daily, days, date } = getArticleDepletion(summary.article, summary.stock);
-
-    // Conso moyenne
-    const consoCard = document.createElement('div');
-    consoCard.className = 'stock-detail-stat';
-    if (daily !== null && daily > 0) {
-      consoCard.innerHTML = `
-        <div class="stock-detail-stat-label">Conso moyenne</div>
-        <div class="stock-detail-stat-value"></div>
-        <div class="stock-detail-stat-sub">par jour ouvré</div>
-      `;
-      consoCard.querySelector('.stock-detail-stat-value').textContent = `${fmtRate(daily)} ${summary.unit}`;
-    } else {
-      consoCard.innerHTML = `
-        <div class="stock-detail-stat-label">Conso moyenne</div>
-        <div class="stock-detail-stat-value stock-detail-stat-empty">—</div>
-        <div class="stock-detail-stat-sub"></div>
-      `;
-      consoCard.querySelector('.stock-detail-stat-sub').textContent =
-        daily === null ? '2 inventaires min.' : 'Aucune conso observée';
-    }
-    stats.appendChild(consoCard);
-
-    // Épuisement estimé
-    const depletionCard = document.createElement('div');
-    depletionCard.className = 'stock-detail-stat';
-    if (days !== null && date) {
-      const valueText = days === 0 ? 'épuisé' : (days === 1 ? 'dans 1 j ouvré' : `dans ${days} j ouvrés`);
-      depletionCard.innerHTML = `
-        <div class="stock-detail-stat-label">Épuisement estimé</div>
-        <div class="stock-detail-stat-value"></div>
-        <div class="stock-detail-stat-sub"></div>
-      `;
-      depletionCard.querySelector('.stock-detail-stat-value').textContent = valueText;
-      depletionCard.querySelector('.stock-detail-stat-sub').textContent =
-        days === 0 ? '' : `(${formatDateShortFR(date)})`;
-    } else {
-      depletionCard.innerHTML = `
-        <div class="stock-detail-stat-label">Épuisement estimé</div>
-        <div class="stock-detail-stat-value stock-detail-stat-empty">—</div>
-        <div class="stock-detail-stat-sub">Conso indispo.</div>
-      `;
-    }
-    stats.appendChild(depletionCard);
-
-    body.appendChild(stats);
+  if (a.mixedUnits) {
+    body.appendChild(dbEl('p', 'db-note is-warn',
+      'Cet article a été saisi avec plusieurs unités (' + [...a.units].join(', ')
+      + ') : le stock additionne des grandeurs différentes. Fixez une unité ci-dessous.'));
   }
 
-  const history = getArticleHistory(stockDetailArticle);
-  if (history.length === 0) return;
+  // Courbe du niveau de stock, rejouée mouvement par mouvement.
+  body.appendChild(buildStockCurve(a));
 
-  const title = document.createElement('div');
-  title.className = 'stock-detail-section-title';
-  title.textContent = 'Historique';
+  // Réglages de la fiche : tout est optionnel et se remplit quand on veut.
+  const fiche = upsertStockArticle(a.name, null);
+  const form = dbEl('div', 'stock-fiche-form');
+  form.appendChild(dbEl('div', 'stock-fiche-form-title', 'Réglages de l\'article'));
+  const grid = dbEl('div', 'stock-fiche-grid');
+  const field = (label, node, title) => {
+    const w = dbEl('label', 'stock-fiche-field');
+    const l = dbEl('span', 'stock-fiche-field-label', label);
+    if (title) l.title = title;
+    w.appendChild(l);
+    w.appendChild(node);
+    grid.appendChild(w);
+  };
+  const mkInput = (value, attrs, onChange) => {
+    const i = document.createElement('input');
+    i.className = 'stock-form-input';
+    Object.assign(i, attrs);
+    i.value = value == null ? '' : value;
+    i.addEventListener('change', () => onChange(i.value));
+    return i;
+  };
+  const unitSel = document.createElement('select');
+  unitSel.className = 'stock-form-input';
+  unitSel.appendChild(new Option('— dernière saisie —', ''));
+  for (const u of STOCK_UNITS) unitSel.appendChild(new Option(u, u));
+  unitSel.value = fiche.unit || '';
+  unitSel.addEventListener('change', () => setStockArticleField(a.name, 'unit', unitSel.value));
+  field('Unité de référence', unitSel, 'Fixe l\'unité de l\'article : la saisie s\'y cale, et les mélanges d\'unités cessent.');
+  field('Stock mini', mkInput(fiche.min || '', { type: 'text', inputMode: 'decimal', placeholder: '0' },
+    v => setStockArticleField(a.name, 'min', v)), 'En dessous, l\'article passe en critique quelle que soit la consommation.');
+  field('Délai d\'appro (j ouvrés)', mkInput(fiche.leadDays || '', { type: 'text', inputMode: 'numeric', placeholder: '0' },
+    v => setStockArticleField(a.name, 'leadDays', v)), 'S\'ajoute au seuil d\'alerte : le ciment arrive en 48 h, la résine en trois semaines.');
+  field('Fournisseur', mkInput(fiche.supplier || '', { type: 'text', maxLength: 60, placeholder: 'Nom du fournisseur' },
+    v => setStockArticleField(a.name, 'supplier', v)));
+  const eotpSel = document.createElement('select');
+  eotpSel.className = 'stock-form-input';
+  eotpSel.appendChild(new Option('— Aucun —', ''));
+  for (const e of getEOTPs()) {
+    if (!e.code || !e.code.trim() || isHourEOTP(e)) continue;
+    eotpSel.appendChild(new Option(e.label ? e.code + ' — ' + e.label : e.code, e.code));
+  }
+  eotpSel.value = fiche.eOTP || '';
+  eotpSel.addEventListener('change', () => setStockArticleField(a.name, 'eOTP', eotpSel.value));
+  field('eOTP par défaut', eotpSel, 'Proposé automatiquement à chaque réception de cet article.');
+  form.appendChild(grid);
+  body.appendChild(form);
+
+  // Historique
+  const history = getArticleHistory(a.name);
+  if (!history.length) return;
+  const title = dbEl('div', 'stock-detail-section-title', 'Historique — ' + history.length + ' mouvements');
   body.appendChild(title);
-
-  const ul = document.createElement('ul');
-  ul.className = 'stock-history';
+  const ul = dbEl('ul', 'stock-history');
+  let running = a.stock;
   for (const e of history) {
-    const li = document.createElement('li');
-    li.className = 'stock-history-item type-' + e.type;
-    const sign = e.type === 'inventaire' ? '=' : '+';
-    const verb = e.type === 'inventaire' ? 'Inventaire' : 'Réception';
-    li.innerHTML = `
-      <div class="stock-history-line">
-        <span class="stock-history-date"></span>
-        <span class="stock-history-type"></span>
-        <span class="stock-history-qty"></span>
-        <button class="stock-history-delete" type="button" aria-label="Supprimer cette entrée">
-          <svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
-        </button>
-      </div>
-      <div class="stock-history-notes"></div>
-    `;
-    li.querySelector('.stock-history-date').textContent = fmtDateShortFR(e.date);
-    li.querySelector('.stock-history-type').textContent = verb;
-    li.querySelector('.stock-history-qty').textContent = `${sign}${fmtStockQty(e.qty)} ${e.unit}`;
-    const notesEl = li.querySelector('.stock-history-notes');
-    if (e.notes) notesEl.textContent = e.notes; else notesEl.remove();
-    li.querySelector('.stock-history-delete').addEventListener('click', () => removeStockEntry(e.id));
+    const t = stockTypeOf(e);
+    const def = STOCK_TYPES[t];
+    const li = dbEl('li', 'stock-history-item type-' + t);
+    const line = dbEl('div', 'stock-history-line');
+    line.appendChild(dbEl('span', 'stock-history-date', fmtDateShortFR(e.date)));
+    line.appendChild(dbEl('span', 'stock-history-type is-' + t, def.short));
+    line.appendChild(dbEl('span', 'stock-history-qty is-' + t, def.sign + fmtStockQty(e.qty) + ' ' + e.unit));
+    line.appendChild(dbEl('span', 'stock-history-after', '→ ' + fmtStockQty(running) + ' ' + a.unit));
+    const del = document.createElement('button');
+    del.className = 'stock-history-delete';
+    del.type = 'button';
+    del.setAttribute('aria-label', 'Supprimer ce mouvement');
+    del.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>';
+    del.addEventListener('click', () => removeStockEntry(e.id));
+    line.appendChild(del);
+    li.appendChild(line);
+    const extra = [];
+    if (t === 'reception' && Number(e.unitPrice) > 0) extra.push(fmtRate(e.unitPrice) + ' €/' + e.unit + ' · ' + fmtEurShort(e.qty * e.unitPrice));
+    if (e.eOTP) extra.push(e.eOTP);
+    if (e.zoneId && state.zones.some(z => z.id === e.zoneId)) extra.push('→ ' + travauxZoneLabel(e.zoneId));
+    if (e.notes) extra.push(e.notes);
+    if (extra.length) li.appendChild(dbEl('div', 'stock-history-notes', extra.join(' · ')));
     ul.appendChild(li);
+    // Remonte le temps : on retire l'effet du mouvement pour obtenir l'état
+    // qui le précédait, affiché sur la ligne suivante (plus ancienne).
+    if (t === 'inventaire') running = null;
+    else if (t === 'sortie') running = running == null ? null : running + (Number(e.qty) || 0);
+    else running = running == null ? null : running - (Number(e.qty) || 0);
+    if (running == null) running = 0;
   }
   body.appendChild(ul);
 }
+function setStockArticleField(name, field, value) {
+  const patch = {};
+  if (field === 'min' || field === 'leadDays') {
+    const n = parseFloat(String(value).replace(',', '.'));
+    patch[field] = Number.isFinite(n) && n >= 0 ? n : 0;
+  } else {
+    patch[field] = String(value || '').trim();
+  }
+  upsertStockArticle(name, patch);
+  save();
+  invalidateStockModel();
+  renderStock();
+  renderStockDetailBody();
+}
 
+// Courbe du niveau de stock : le journal rejoué dans l'ordre, en escalier.
+// Un inventaire pose une marche, une réception monte, une sortie descend.
+function buildStockCurve(a) {
+  const box = dbEl('div', 'stock-fiche-curve');
+  const pts = [];
+  let lvl = 0;
+  const sorted = a.entries.slice().sort(compareStockEntries);
+  for (const e of sorted) {
+    const t = stockTypeOf(e);
+    const q = Number(e.qty) || 0;
+    if (t === 'inventaire') lvl = q;
+    else if (t === 'sortie') lvl -= q;
+    else lvl += q;
+    pts.push({ ms: new Date(e.date + 'T00:00:00').getTime(), v: lvl });
+  }
+  if (pts.length < 2) {
+    box.appendChild(dbEl('p', 'db-note', 'La courbe apparaîtra dès le deuxième mouvement.'));
+    return box;
+  }
+  const W = 560, H = 130, PAD_L = 44, PAD_R = 10, PAD_T = 10, PAD_B = 20;
+  const t0 = pts[0].ms, t1 = Math.max(pts[pts.length - 1].ms, t0 + 86400000);
+  const vMax = Math.max(1, ...pts.map(p => p.v), a.min || 0);
+  const x = (ms) => PAD_L + ((ms - t0) / (t1 - t0)) * (W - PAD_L - PAD_R);
+  const y = (v) => PAD_T + (1 - Math.max(0, Math.min(vMax, v)) / vMax) * (H - PAD_T - PAD_B);
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  svg.setAttribute('class', 'db-curve stock-curve');
+  const mk = (tag, attrs) => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const k in attrs) el.setAttribute(k, attrs[k]);
+    return el;
+  };
+  for (const q of [0, 0.5, 1]) {
+    const v = vMax * q;
+    svg.appendChild(mk('line', { x1: PAD_L, x2: W - PAD_R, y1: y(v), y2: y(v), class: 'db-curve-grid' }));
+    const lab = mk('text', { x: PAD_L - 5, y: y(v) + 3.5, class: 'db-curve-axis', 'text-anchor': 'end' });
+    lab.textContent = fmtStockQty(Math.round(v * 10) / 10);
+    svg.appendChild(lab);
+  }
+  if (a.min > 0 && a.min <= vMax) {
+    svg.appendChild(mk('line', { x1: PAD_L, x2: W - PAD_R, y1: y(a.min), y2: y(a.min), class: 'stock-curve-min' }));
+  }
+  // Tracé en escalier : entre deux mouvements, le stock ne bouge pas.
+  let d = 'M' + x(pts[0].ms).toFixed(1) + ' ' + y(pts[0].v).toFixed(1);
+  for (let i = 1; i < pts.length; i++) {
+    d += ' L' + x(pts[i].ms).toFixed(1) + ' ' + y(pts[i - 1].v).toFixed(1)
+      + ' L' + x(pts[i].ms).toFixed(1) + ' ' + y(pts[i].v).toFixed(1);
+  }
+  svg.appendChild(mk('path', { d: d + ' L' + x(pts[pts.length - 1].ms).toFixed(1) + ' ' + y(0) + ' L' + x(pts[0].ms).toFixed(1) + ' ' + y(0) + ' Z', class: 'db-curve-area' }));
+  svg.appendChild(mk('path', { d, class: 'db-curve-real' }));
+  svg.appendChild(mk('circle', { cx: x(pts[pts.length - 1].ms), cy: y(pts[pts.length - 1].v), r: 3.5, class: 'db-curve-dot' }));
+  const l0 = mk('text', { x: PAD_L, y: H - 6, class: 'db-curve-axis' });
+  l0.textContent = fmtDateShortFR(new Date(t0).toISOString().slice(0, 10));
+  svg.appendChild(l0);
+  const l1 = mk('text', { x: W - PAD_R, y: H - 6, class: 'db-curve-axis', 'text-anchor': 'end' });
+  l1.textContent = fmtDateShortFR(new Date(t1).toISOString().slice(0, 10));
+  svg.appendChild(l1);
+  box.appendChild(svg);
+  return box;
+}
 
 // ---------- Consommables (commandes groupées + récap mensuel) ----------
 const CONSO_UNITS = ['u', 'paires', 'boîtes', 'sacs', 'palettes', 'kg', 't', 'm³', 'm²', 'ml', 'L'];
@@ -14505,8 +15459,11 @@ function renderConsommableRecapByEOTP(wrap, empty, entries) {
 //   - Mode produit : lignes = articles, colonnes = mois × quantités
 //   - Mode eOTP    : lignes = eOTP, colonnes = mois × dépenses €,
 //                    avec Budget / RAD / FDC / Écart FDC
+// Achats seuls : ni les inventaires (recalage physique) ni les sorties
+// (mouvement interne) ne sont des dépenses. Le filtre « tout sauf inventaire »
+// aurait compté chaque sortie comme un achat dans toute la vision budget.
 function getStockReceptions() {
-  return (state.stockEntries || []).filter(e => e.type !== 'inventaire');
+  return (state.stockEntries || []).filter(e => stockTypeOf(e) === 'reception');
 }
 function renderStockCB() {
   const wrap  = document.getElementById('stockcbwrap');
@@ -14525,6 +15482,16 @@ function renderStockCB() {
     empty.innerHTML = '<p>Aucune réception à afficher.</p><p class="hint">Enregistre une réception (avec un prix unitaire) pour faire apparaître la vision budget.</p>';
     empty.classList.add('show');
     return;
+  }
+  // Une réception sans prix entre à 0 € et fausse silencieusement le RAD, le
+  // FDC et l'écart : on le dit, plutôt que de laisser croire au chiffre.
+  const unpriced = entries.filter(e => !(Number(e.unitPrice) > 0)).length;
+  if (unpriced) {
+    const warn = dbEl('p', 'stock-cb-warn',
+      unpriced + ' réception' + (unpriced > 1 ? 's' : '') + ' sans prix unitaire : '
+      + (unpriced > 1 ? 'elles comptent' : 'elle compte') + ' pour 0 € dans ce tableau.');
+    warn.title = 'Ouvrez la fiche de l\'article concerné pour compléter le prix des réceptions.';
+    wrap.appendChild(warn);
   }
   if (mode === 'eotp') renderStockCBByEOTP(wrap, empty, entries);
   else                 renderStockCBByProduct(wrap, empty, entries);
@@ -14604,6 +15571,9 @@ function renderStockCBByProduct(wrap, empty, entries) {
   buildRecapTable(wrap, months, products, 'Article', rowBuilder, cellAccess, [], trailingCols);
 }
 
+// Les lignes de budget en heures sont écartées : leur budget est un volume de
+// main-d'œuvre, pas une enveloppe en euros — le comparer à des achats
+// afficherait « 1 200 € » là où la ligne vaut 1 200 heures.
 function renderStockCBByEOTP(wrap, empty, entries) {
   const monthSet = new Set();
   const eotpRows = new Map();
@@ -14613,8 +15583,9 @@ function renderStockCBByEOTP(wrap, empty, entries) {
     if (!monthKey) continue;
     const code = (e.eOTP || '').trim();
     monthSet.add(monthKey);
+    const reg = code ? getEOTP(code) : null;
+    if (reg && isHourEOTP(reg)) continue;      // ligne en heures : hors budget €
     if (!eotpRows.has(code)) {
-      const reg = code ? getEOTP(code) : null;
       eotpRows.set(code, {
         code,
         label: reg?.label || '',
@@ -15418,6 +16389,8 @@ function importData(file) {
       state.presences = data.presences;
       state.weather = data.weather || {};
       state.stockEntries = data.stockEntries || [];
+      state.stockArticles = (data.stockArticles && typeof data.stockArticles === 'object') ? data.stockArticles : {};
+      state.stockSettings = (data.stockSettings && typeof data.stockSettings === 'object') ? data.stockSettings : { alertDays: 7, coverDays: 15 };
       state.consommableEntries = data.consommableEntries || [];
       state.consoProducts = data.consoProducts || [];
       state.eotps = data.eotps || [];
@@ -15482,6 +16455,8 @@ function resetAll() {
   state.presences = {};
   state.weather = {};
   state.stockEntries = [];
+  state.stockArticles = {};
+  state.stockSettings = { alertDays: 7, coverDays: 15 };
   state.consommableEntries = [];
   state.consoProducts = [];
   state.eotps = [];
@@ -18007,6 +18982,7 @@ const SYNC_EXCLUDED_KEYS = new Set([
   'chartHidden', 'chartRange',       // filtres graphique perso
   'consoRecapMode',                  // mode récap conso perso
   'stockCBMode',                     // mode récap CB stock perso
+  'stockPeriod', 'stockSort', 'stockQuery', 'stockMoveFilter', // affichage du Stock (UI)
   'protoActivePlanId',               // plan en cours d'édition
   'protoFilterLotId', 'protoFilterTitle', 'protoFilterStatuses', // filtres Proto
   'echeckinCollapsed',               // sections eCheckIn pliées/dépliées
@@ -18185,7 +19161,7 @@ async function doSyncPull(initial = false, opts = {}) {
 // retard (il « réapparaît » — bénin et rare, contre une perte de données
 // catastrophique).
 const SYNC_UNION_DICT_KEYS = new Set([
-  'presences', 'weather', 'taskProgress', 'zoneUpdated', 'avancementHistory', 'zoneDates',
+  'presences', 'weather', 'taskProgress', 'zoneUpdated', 'avancementHistory', 'zoneDates', 'stockArticles',
   'adminDocs', 'workerDocs', 'heuresData', 'crEntries', 'stEntries',
   'travauxCells'
 ]);
@@ -18606,11 +19582,15 @@ function init() {
   // ----- Stock : FAB + bottom sheet + modale détail -----
   const stockFab = document.getElementById('stockfab');
   if (stockFab) stockFab.addEventListener('click', openStockEntrySheet);
+  const stockFab2 = document.getElementById('stockfab2');
+  if (stockFab2) stockFab2.addEventListener('click', openStockEntrySheet);
   const stockSheet = document.getElementById('stockentrysheet');
   if (stockSheet) {
     document.getElementById('stockentrysheetclose').addEventListener('click', closeStockEntrySheet);
     stockSheet.addEventListener('click', (e) => { if (e.target === stockSheet) closeStockEntrySheet(); });
-    document.getElementById('stockentrysave').addEventListener('click', submitStockEntry);
+    document.getElementById('stockentrysave').addEventListener('click', () => submitStockEntry(false));
+    const againBtn = document.getElementById('stockentrysaveagain');
+    if (againBtn) againBtn.addEventListener('click', () => submitStockEntry(true));
     // Boutons Réception / Inventaire dans le segmented
     stockSheet.querySelectorAll('[data-stock-entry-type]').forEach(b => {
       b.addEventListener('click', () => setStockEntryType(b.dataset.stockEntryType));
@@ -18618,6 +19598,8 @@ function init() {
     // Dropdown article : bascule sur le champ texte si « Nouveau »
     const articleSel = document.getElementById('stockarticleselect');
     if (articleSel) articleSel.addEventListener('change', onArticleSelectChange);
+    const articleNew = document.getElementById('stockarticlenew');
+    if (articleNew) articleNew.addEventListener('input', refreshStockCurrentHint);
   }
   const stockDetailModalEl = document.getElementById('stockdetailmodal');
   if (stockDetailModalEl) {
