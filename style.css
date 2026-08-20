@@ -7316,6 +7316,27 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   border-radius: 4px;
 }
 .heures-label-text { display: block; overflow: hidden; text-overflow: ellipsis; }
+
+/* ----- Cadre d'une rubrique : on voit d'un coup d'œil ses lignes -----
+   Traits en `box-shadow: inset` et non en `border` : avec `table-layout:
+   fixed`, une bordure sur certaines lignes seulement décalerait le contenu
+   de la colonne figée d'un cran. Le bandeau orange ferme le cadre en haut,
+   la dernière ligne visible le referme en bas. */
+.heures-table tbody tr.is-grouped .heures-cell-label {
+  box-shadow: inset 3px 0 0 0 var(--accent);
+  padding-left: 18px;                       /* décrochement : la ligne est « dans » la rubrique */
+}
+.heures-table tbody tr.is-grouped td:last-child { box-shadow: inset -3px 0 0 0 var(--accent); }
+.heures-table tbody tr.is-grouped.is-last-of-group .heures-cell-label {
+  box-shadow: inset 3px 0 0 0 var(--accent), inset 0 -3px 0 0 var(--accent);
+}
+.heures-table tbody tr.is-grouped.is-last-of-group td {
+  box-shadow: inset 0 -3px 0 0 var(--accent);
+}
+.heures-table tbody tr.is-grouped.is-last-of-group td:last-child {
+  box-shadow: inset -3px 0 0 0 var(--accent), inset 0 -3px 0 0 var(--accent);
+}
+
 /* Ligne en cours de déplacement + repères de dépôt (avant / après la cible) */
 .heures-table tr.is-dragging { opacity: 0.4; }
 .heures-table tr.is-drop-before th,

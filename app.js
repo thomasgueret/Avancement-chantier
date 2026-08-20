@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.79';
+const APP_VERSION = '1.80';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -12018,6 +12018,16 @@ function renderHeuresTable() {
   const selIds = new Set(selected.map(e => e.id));
   const byId = new Map(candidates.map(e => [e.id, e]));
   const layout = getHeuresLayout();
+  // Une rubrique et ses lignes forment un bloc encadré : l'en-tête ouvre le
+  // cadre, la dernière ligne visible le referme. `lastOfGroup` retient donc
+  // quelle ligne porte le trait de fermeture — la dernière *cochée*, pas la
+  // dernière de la disposition.
+  const lastOfGroup = new Set();
+  for (const it of layout) {
+    if (it.t !== 'g') continue;
+    const vis = getHeuresGroupMembers(layout, it.id).filter(m => selIds.has(m.id));
+    if (vis.length) lastOfGroup.add(vis[vis.length - 1].id);
+  }
   for (const it of layout) {
     if (it.t === 'g') {
       // Membres visibles de la rubrique, pour la semaine active.
@@ -12027,7 +12037,7 @@ function renderHeuresTable() {
       continue;
     }
     if (!selIds.has(it.id)) continue;
-    tbody.appendChild(buildHeuresRow(byId.get(it.id), model));
+    tbody.appendChild(buildHeuresRow(byId.get(it.id), model, it.g, lastOfGroup.has(it.id)));
   }
   table.appendChild(tbody);
 
@@ -12037,11 +12047,16 @@ function renderHeuresTable() {
   wrap.appendChild(table);
 }
 
-function buildHeuresRow(eotp, model) {
+function buildHeuresRow(eotp, model, groupId, lastOfGroup) {
   const { row, link, orphan, setup } = resolveHeuresRow(eotp, model || getHeuresAvancementModel());
   const tr = document.createElement('tr');
   tr.setAttribute('data-heures-id', eotp.id);
   if (link) tr.classList.add('is-linked');
+  if (groupId) {
+    tr.classList.add('is-grouped');
+    tr.dataset.groupId = groupId;
+    if (lastOfGroup) tr.classList.add('is-last-of-group');
+  }
 
   heuresAttachDrag(tr, eotp.id);
   for (const col of HEURES_COLUMNS) {
