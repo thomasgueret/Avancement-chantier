@@ -7165,14 +7165,15 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   border-radius: var(--radius);
   background: var(--surface);
 }
-/* Largeurs figées : les 16 colonnes tiennent dans la page sans défilement
-   dès ~1 180 px. En deçà (tablette, téléphone), le conteneur défile. */
+/* Largeurs figées. Les 20 colonnes tiennent sans défilement à partir de
+   ~1 460 px ; en deçà (petit écran, tablette, téléphone), le conteneur défile
+   et la colonne des tâches reste accrochée à gauche. */
 .heures-table {
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
   width: 100%;
-  min-width: 1180px;
+  min-width: 1460px;
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
 }
@@ -7218,17 +7219,18 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   text-align: left;
   font-weight: 700;
   color: var(--text);
-  width: 15%;
+  width: 13.5%;
   white-space: normal;
   border-right: 1px solid var(--border);
 }
-/* Les quinze colonnes de chiffres se partagent le reste à parts égales ;
-   trois d'entre elles, plus étroites, rendent quelques pixels aux autres. */
+/* Les dix-neuf colonnes de chiffres se partagent le reste à parts égales ;
+   les quatre plus courtes rendent quelques pixels aux autres. */
 .heures-table th:not(.heures-col-taches),
-.heures-table td:not(.heures-cell-label):not(.heures-col-taches) { width: 5.8%; }
+.heures-table td:not(.heures-cell-label):not(.heures-col-taches) { width: 4.75%; }
 .heures-table .heures-col-unite,
-.heures-table .heures-col-rad,
-.heures-table .heures-col-avancement { width: 4.6%; }
+.heures-table .heures-col-ratio,
+.heures-table .heures-col-ratioActuel,
+.heures-table .heures-col-avancement { width: 3.7%; }
 .heures-table thead .heures-col-taches { z-index: 3; background: var(--surface-2); }
 .heures-table tbody tr:nth-child(even) .heures-cell-label { background: var(--surface-2); }
 .heures-table tbody tr:nth-child(even) td { background: var(--surface-2); }
@@ -7274,11 +7276,21 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
-/* Écart au stade : vert si dans le budget, rouge si dépassement */
-.heures-table .heures-calc-ecart.is-positive,
-.heures-table tfoot .heures-col-ecart.is-positive { color: var(--success); }
-.heures-table .heures-calc-ecart.is-negative,
-.heures-table tfoot .heures-col-ecart.is-negative { color: var(--danger); }
+/* Projection faite au ratio théorique (rien de réalisé sur la ligne) et
+   totaux qui ne portent pas sur toutes les lignes : signalés, jamais tus. */
+.heures-table td.is-estimated,
+.heures-table td.is-partial {
+  font-style: italic;
+  text-decoration: underline dotted var(--text-3);
+  text-underline-offset: 3px;
+  cursor: help;
+}
+
+/* Écart au stade et écart FDC : vert si dans le budget, rouge si dépassement */
+.heures-table td.is-positive { color: var(--success); }
+.heures-table td.is-negative { color: var(--danger); }
+.heures-table tbody tr.heures-group td.is-positive,
+.heures-table tbody tr.heures-group td.is-negative { color: #fff; }
 
 /* Pied de tableau : totaux */
 .heures-table tfoot th, .heures-table tfoot td {
