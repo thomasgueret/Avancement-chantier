@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.78';
+const APP_VERSION = '1.79';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -98,7 +98,11 @@ const state = {
   eotpUnitsInitialized: false,    // flag de migration des unités € / h (une fois)
   // Suivi des heures : données par eOTP (indexées par eotpId, survit au renommage du code).
   // Suivi des heures organisé par semaines (instantanés pour comparer les écarts).
-  heuresWeeks: [],          // [{ id, name, createdAt, sapDate }]
+  heuresWeeks: [],
+  // Ordre et regroupement des lignes du suivi des heures, communs à toutes
+  // les semaines : [{ t: 'g', id, name }, { t: 'e', id: <eotpId> }, …].
+  // Une ligne appartient à la rubrique qui la précède dans cette liste.
+  heuresLayout: [],
   heuresActiveWeekId: '',   // id de la semaine affichée
   // Données par semaine puis par eOTP :
   // { [weekId]: { [eotpId]: { selected, budgetHeures, unite, qteTotal, qteRealisee, sap, correction, pumaCumule } } }
@@ -253,6 +257,7 @@ function load() {
     if (data.heuresData && typeof data.heuresData === 'object') state.heuresData = data.heuresData;
     if (typeof data.heuresSapDate === 'string') state.heuresSapDate = data.heuresSapDate;
     if (Array.isArray(data.heuresWeeks)) state.heuresWeeks = data.heuresWeeks;
+    if (Array.isArray(data.heuresLayout)) state.heuresLayout = data.heuresLayout;
     if (typeof data.heuresActiveWeekId === 'string') state.heuresActiveWeekId = data.heuresActiveWeekId;
     if (data.consoRecapMode === 'product' || data.consoRecapMode === 'eotp') state.consoRecapMode = data.consoRecapMode;
     if (data.stockCBMode === 'product' || data.stockCBMode === 'eotp') state.stockCBMode = data.stockCBMode;
@@ -373,6 +378,7 @@ function buildPersistedData() {
     heuresData: state.heuresData,
     heuresSapDate: state.heuresSapDate,
     heuresWeeks: state.heuresWeeks,
+    heuresLayout: state.heuresLayout,
     heuresActiveWeekId: state.heuresActiveWeekId,
     consoRecapMode: state.consoRecapMode,
     stockCBMode: state.stockCBMode,
@@ -11380,6 +11386,11 @@ function renderHeures() {
   renderHeuresWeekTabs();
   renderHeuresEOTPSelect();
   renderHeuresTable();
+  const addGroup = document.getElementById('heuresaddgroup');
+  if (addGroup && !addGroup.dataset.bound) {
+    addGroup.dataset.bound = '1';
+    addGroup.addEventListener('click', addHeuresGroup);
+  }
 }
 
 // Onglets de semaines, design « classeur ». L'onglet actif porte un champ
@@ -11624,6 +11635,332 @@ function heuresCalcText(key, comp) {
   }
 }
 
+// ----- Ordre et rubriques du suivi des heures -----
+// `state.heuresLayout` est une liste à plat qui donne l'ordre d'affichage :
+// des rubriques `{ t:'g', id, name }` et des lignes `{ t:'e', id, g }`.
+// L'appartenance à une rubrique est portée par la ligne elle-même (`g`), pas
+// par sa position : déplacer une rubrique n'avale donc pas les lignes qui la
+// suivent, et des lignes libres peuvent vivre sous une rubrique remplie.
+// La position, elle, reste libre — la même mécanique de glissé sert au
+// réordonnancement et au regroupement.
+function getHeuresLayoutRaw() {
+  if (!Array.isArray(state.heuresLayout)) state.heuresLayout = [];
+  return state.heuresLayout;
+}
+// Réconcilie la disposition avec les lignes de budget réellement présentes
+// (on retire ce qui n'existe plus, on ajoute ce qui vient d'apparaître) puis
+// normalise : chaque ligne se range juste sous l'en-tête de sa rubrique.
+function getHeuresLayout() {
+  const candidates = getHeuresCandidates();
+  const known = new Set(candidates.map(e => e.id));
+  const raw = getHeuresLayoutRaw();
+  const groupIds = new Set(raw.filter(i => i && i.t === 'g' && i.id).map(i => i.id));
+  const items = [];
+  const seen = new Set();
+  for (const it of raw) {
+    if (!it || !it.id || seen.has(it.id)) continue;
+    if (it.t === 'g') { seen.add(it.id); items.push({ t: 'g', id: it.id, name: it.name }); continue; }
+    if (!known.has(it.id)) continue;
+    seen.add(it.id);
+    items.push({ t: 'e', id: it.id, g: groupIds.has(it.g) ? it.g : null });
+  }
+  for (const e of candidates) if (!seen.has(e.id)) items.push({ t: 'e', id: e.id, g: null });
+
+  const byGroup = new Map();
+  for (const it of items) {
+    if (it.t !== 'e' || !it.g) continue;
+    if (!byGroup.has(it.g)) byGroup.set(it.g, []);
+    byGroup.get(it.g).push(it);
+  }
+  const out = [];
+  for (const it of items) {
+    if (it.t === 'g') { out.push(it); out.push(...(byGroup.get(it.id) || [])); continue; }
+    if (!it.g) out.push(it);
+  }
+  return out;
+}
+// Lignes d'une rubrique, dans l'ordre.
+function getHeuresGroupMembers(list, groupId) {
+  return list.filter(i => i.t === 'e' && i.g === groupId);
+}
+function saveHeuresLayout(list) {
+  state.heuresLayout = list;
+  save();
+}
+function addHeuresGroup() {
+  const list = getHeuresLayout();
+  const n = list.filter(i => i.t === 'g').length + 1;
+  const id = 'hg_' + uid();
+  // En tête du tableau : la rubrique est visible tout de suite, et naît vide
+  // — l'appartenance étant explicite, rien ne la rejoint sans un dépôt.
+  list.unshift({ t: 'g', id, name: 'Rubrique ' + n });
+  saveHeuresLayout(list);
+  renderHeures();
+  requestAnimationFrame(() => {
+    const inp = document.querySelector('.heures-group-name[data-group-id="' + cssEscape(id) + '"]');
+    if (inp) { inp.focus(); inp.select(); }
+  });
+}
+function renameHeuresGroup(id, name) {
+  const g = getHeuresLayoutRaw().find(i => i.t === 'g' && i.id === id);
+  if (!g) return;
+  g.name = String(name || '');
+  save();
+  // Pas de re-rendu : l'utilisateur tape, on ne casse pas le focus.
+}
+// Supprimer une rubrique ne supprime pas ses lignes : elles redeviennent
+// libres, là où elles étaient.
+function removeHeuresGroup(id) {
+  const list = getHeuresLayout().filter(i => !(i.t === 'g' && i.id === id));
+  for (const it of list) if (it.t === 'e' && it.g === id) it.g = null;
+  saveHeuresLayout(list);
+  renderHeures();
+  showToast('Rubrique supprimée — ses lignes restent en place');
+}
+// Déplace un élément (ligne ou rubrique) avant ou après une cible. Déplacer
+// une rubrique emporte ses lignes : sans cela, réordonner les rubriques
+// disloquerait l'affichage. Une ligne déposée hérite de la rubrique de la
+// ligne au-dessus d'elle — déposée juste sous un en-tête, elle y entre ;
+// déposée au-dessus, elle en sort.
+function moveHeuresItem(dragId, targetId, after) {
+  if (dragId === targetId) return;
+  const list = getHeuresLayout();
+  const from = list.findIndex(i => i.id === dragId);
+  if (from < 0) return;
+  const dragged = list[from];
+  const block = dragged.t === 'g'
+    ? [dragged, ...getHeuresGroupMembers(list, dragged.id)]
+    : [dragged];
+  if (block.some(i => i.id === targetId)) return;   // dépôt à l'intérieur de soi
+
+  const rest = list.filter(i => !block.includes(i));
+  let at = rest.findIndex(i => i.id === targetId);
+  if (at < 0) at = rest.length;
+  else if (after) at += 1;
+  if (dragged.t === 'e') {
+    const prev = rest[at - 1];
+    dragged.g = !prev ? null : (prev.t === 'g' ? prev.id : (prev.g || null));
+  }
+  rest.splice(at, 0, ...block);
+  saveHeuresLayout(rest);
+  renderHeures();
+}
+
+// Glisser-déposer des lignes du tableau. La poignée seule arme le glissé :
+// la ligne porte des champs de saisie, la rendre draggable en permanence
+// empêcherait de sélectionner du texte dedans.
+let _heuresDrag = null;
+function heuresAttachDrag(tr, id) {
+  tr.dataset.layoutId = id;
+  tr.addEventListener('dragstart', (e) => {
+    _heuresDrag = { id };
+    tr.classList.add('is-dragging');
+    if (e.dataTransfer) { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', id); }
+  });
+  tr.addEventListener('dragend', () => {
+    tr.classList.remove('is-dragging');
+    tr.draggable = false;
+    heuresClearDropMarks();
+    _heuresDrag = null;
+  });
+  tr.addEventListener('dragover', (e) => {
+    if (!_heuresDrag || _heuresDrag.id === id) return;
+    e.preventDefault();
+    const r = tr.getBoundingClientRect();
+    const after = (e.clientY - r.top) > r.height / 2;
+    heuresClearDropMarks();
+    tr.classList.add(after ? 'is-drop-after' : 'is-drop-before');
+  });
+  tr.addEventListener('drop', (e) => {
+    if (!_heuresDrag) return;
+    e.preventDefault();
+    const r = tr.getBoundingClientRect();
+    const after = (e.clientY - r.top) > r.height / 2;
+    const dragId = _heuresDrag.id;
+    heuresClearDropMarks();
+    _heuresDrag = null;
+    moveHeuresItem(dragId, id, after);
+  });
+}
+function heuresClearDropMarks() {
+  document.querySelectorAll('.heures-table tr.is-drop-before, .heures-table tr.is-drop-after')
+    .forEach(el => el.classList.remove('is-drop-before', 'is-drop-after'));
+}
+// Au doigt, le glissé natif HTML5 n'existe pas : on suit le pointeur nous-mêmes
+// et on lit la ligne sous le doigt. Même repères visuels, même dépôt.
+function heuresTouchDrag(startEvt, tr, id) {
+  const table = tr.closest('.heures-table');
+  if (!table) return;
+  let target = null, after = false, moved = false;
+  const onMove = (e) => {
+    e.preventDefault();
+    if (!moved) { moved = true; tr.classList.add('is-dragging'); }
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const row = el && el.closest('tr[data-layout-id]');
+    heuresClearDropMarks();
+    if (!row || row === tr || !table.contains(row)) { target = null; return; }
+    const r = row.getBoundingClientRect();
+    after = (e.clientY - r.top) > r.height / 2;
+    target = row.dataset.layoutId;
+    row.classList.add(after ? 'is-drop-after' : 'is-drop-before');
+  };
+  const onEnd = () => {
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onEnd);
+    document.removeEventListener('pointercancel', onEnd);
+    tr.classList.remove('is-dragging');
+    heuresClearDropMarks();
+    if (target) moveHeuresItem(id, target, after);
+  };
+  document.addEventListener('pointermove', onMove, { passive: false });
+  document.addEventListener('pointerup', onEnd);
+  document.addEventListener('pointercancel', onEnd);
+  startEvt.preventDefault();
+}
+// Poignée : n'arme le glissé qu'au moment où on l'attrape, et propose les
+// flèches au clavier — le glissé natif n'existe pas au doigt.
+function buildHeuresHandle(tr, id, label) {
+  const h = dbEl('button', 'heures-handle');
+  h.type = 'button';
+  h.title = label + ' — glissez pour déplacer, ou utilisez ↑ ↓ au clavier';
+  h.setAttribute('aria-label', 'Déplacer ' + label);
+  h.textContent = '⠿';
+  h.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'touch') { heuresTouchDrag(e, tr, id); return; }
+    tr.draggable = true;
+  });
+  h.addEventListener('pointerup', () => { tr.draggable = false; });
+  h.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    e.preventDefault();
+    moveHeuresItemBy(id, e.key === 'ArrowUp' ? -1 : 1);
+    requestAnimationFrame(() => {
+      const again = document.querySelector('.heures-handle[data-layout-id="' + cssEscape(id) + '"]');
+      if (again) again.focus();
+    });
+  });
+  h.dataset.layoutId = id;
+  return h;
+}
+// Déplacement au clavier : d'un cran, en sautant le bloc d'une rubrique.
+function moveHeuresItemBy(id, delta) {
+  const list = getHeuresLayout();
+  const from = list.findIndex(i => i.id === id);
+  if (from < 0) return;
+  const item = list[from];
+  const size = item.t === 'g' ? 1 + getHeuresGroupMembers(list, item.id).length : 1;
+  const target = delta < 0 ? from - 1 : from + size;
+  if (target < 0 || target >= list.length) return;
+  moveHeuresItem(id, list[target].id, delta > 0);
+}
+
+// Ligne de rubrique : un bandeau contrasté qui totalise les lignes qu'elle
+// contient. Les colonnes additives (heures, écarts) se somment ; les autres
+// (unité, quantités, ratios) ne le peuvent que si toutes les lignes partagent
+// la même unité — sinon on additionnerait des mètres carrés et des mètres
+// linéaires, et l'on affiche « — » plutôt qu'un chiffre faux.
+function buildHeuresGroupRow(group, members, model) {
+  const tr = document.createElement('tr');
+  tr.className = 'heures-group';
+  tr.setAttribute('data-group-row', group.id);
+  heuresAttachDrag(tr, group.id);
+
+  const agg = { budget: 0, droit: 0, sap: 0, corr: 0, puma: 0, pumaEcart: 0, fdc: 0, ecart: 0,
+                qteTotal: 0, qteReal: 0, rad: 0 };
+  const units = new Set();
+  let fdcKnown = true, radKnown = true;
+  for (const e of members) {
+    const { row } = resolveHeuresRow(e, model);
+    const comp = computeHeuresRow(row);
+    agg.budget += Number(row.budgetHeures) || 0;
+    agg.sap += Number(row.sap) || 0;
+    agg.corr += Number(row.correction) || 0;
+    agg.puma += Number(row.pumaCumule) || 0;
+    agg.droit += comp.droit;
+    agg.pumaEcart += comp.pumaEcart;
+    agg.ecart += comp.ecart;
+    if (comp.fdcAuto == null) fdcKnown = false; else agg.fdc += comp.fdcAuto;
+    if (comp.rad == null) radKnown = false; else agg.rad += comp.rad;
+    agg.qteTotal += Number(row.qteTotal) || 0;
+    agg.qteReal += Number(row.qteRealisee) || 0;
+    if (row.unite) units.add(row.unite);
+  }
+  const sameUnit = units.size === 1 ? [...units][0] : null;
+  const avancement = agg.budget > 0 ? agg.droit / agg.budget : null;
+  const ratio = sameUnit && agg.qteTotal > 0 ? agg.budget / agg.qteTotal : null;
+  const ratioActuel = sameUnit && agg.qteReal > 0 ? agg.pumaEcart / agg.qteReal : null;
+
+  const values = {
+    budgetHeures: fmtHeures(agg.budget) + ' h',
+    unite: sameUnit || '—',
+    ratio: ratio != null ? fmtHeures(ratio) : '—',
+    qteTotal: sameUnit ? fmtHeures(agg.qteTotal) : '—',
+    qteRealisee: sameUnit ? fmtHeures(agg.qteReal) : '—',
+    rad: sameUnit && radKnown ? fmtHeures(agg.rad) : '—',
+    avancement: avancement != null ? Math.round(avancement * 100) + ' %' : '—',
+    droit: fmtHeures(agg.droit) + ' h',
+    sap: fmtHeures(agg.sap) + ' h',
+    correction: fmtHeures(agg.corr) + ' h',
+    pumaCumule: fmtHeures(agg.puma) + ' h',
+    pumaEcart: fmtHeures(agg.pumaEcart) + ' h',
+    ratioActuel: ratioActuel != null ? fmtHeures(ratioActuel) : '—',
+    fdcAuto: fdcKnown ? fmtHeures(agg.fdc) + ' h' : '—',
+    ecart: fmtHeures(agg.ecart) + ' h',
+  };
+
+  const th = document.createElement('th');
+  th.scope = 'row';
+  th.className = 'heures-cell-label heures-group-label';
+  const bar = dbEl('div', 'heures-group-bar');
+  bar.appendChild(buildHeuresHandle(tr, group.id, group.name || 'cette rubrique'));
+  const inp = document.createElement('input');
+  inp.type = 'text';
+  inp.className = 'heures-group-name';
+  inp.dataset.groupId = group.id;
+  inp.value = group.name || '';
+  inp.maxLength = 40;
+  inp.placeholder = 'Nom de la rubrique';
+  inp.setAttribute('aria-label', 'Nom de la rubrique');
+  inp.addEventListener('input', () => renameHeuresGroup(group.id, inp.value));
+  bar.appendChild(inp);
+  if (members.length) {
+    const count = dbEl('span', 'heures-group-count', String(members.length));
+    count.title = members.length + (members.length > 1 ? ' lignes' : ' ligne') + ' dans cette rubrique';
+    bar.appendChild(count);
+  }
+  const del = dbEl('button', 'heures-group-del', '×');
+  del.type = 'button';
+  del.title = 'Supprimer la rubrique (les lignes restent)';
+  del.setAttribute('aria-label', 'Supprimer la rubrique');
+  del.addEventListener('click', () => removeHeuresGroup(group.id));
+  bar.appendChild(del);
+  th.appendChild(bar);
+  tr.appendChild(th);
+
+  // Rubrique vide : plutôt que quinze tirets, une invite qui dit le geste.
+  if (!members.length) {
+    const hint = document.createElement('td');
+    hint.className = 'heures-group-hint';
+    hint.colSpan = HEURES_COLUMNS.length - 1;
+    hint.textContent = 'Faites glisser une ligne juste en dessous pour la ranger ici';
+    tr.appendChild(hint);
+    return tr;
+  }
+
+  for (const col of HEURES_COLUMNS) {
+    if (col.kind === 'label') continue;
+    const td = document.createElement('td');
+    td.className = 'heures-col-' + col.key;
+    td.textContent = values[col.key];
+    if (col.key === 'ecart') {
+      td.classList.toggle('is-positive', agg.ecart >= 0);
+      td.classList.toggle('is-negative', agg.ecart < 0);
+    }
+    tr.appendChild(td);
+  }
+  return tr;
+}
+
 function renderHeuresTable() {
   const wrap = document.getElementById('heurestablewrap');
   if (!wrap) return;
@@ -11674,10 +12011,23 @@ function renderHeuresTable() {
   thead.appendChild(hr);
   table.appendChild(thead);
 
-  // TBODY
+  // TBODY — l'ordre et les rubriques viennent de state.heuresLayout. Les
+  // lignes non cochées pour la semaine active sont masquées, mais gardent
+  // leur place : recocher une ligne la remet où elle était.
   const tbody = document.createElement('tbody');
-  for (const e of selected) {
-    tbody.appendChild(buildHeuresRow(e, model));
+  const selIds = new Set(selected.map(e => e.id));
+  const byId = new Map(candidates.map(e => [e.id, e]));
+  const layout = getHeuresLayout();
+  for (const it of layout) {
+    if (it.t === 'g') {
+      // Membres visibles de la rubrique, pour la semaine active.
+      const members = getHeuresGroupMembers(layout, it.id)
+        .filter(m => selIds.has(m.id)).map(m => byId.get(m.id));
+      tbody.appendChild(buildHeuresGroupRow(it, members, model));
+      continue;
+    }
+    if (!selIds.has(it.id)) continue;
+    tbody.appendChild(buildHeuresRow(byId.get(it.id), model));
   }
   table.appendChild(tbody);
 
@@ -11693,12 +12043,14 @@ function buildHeuresRow(eotp, model) {
   tr.setAttribute('data-heures-id', eotp.id);
   if (link) tr.classList.add('is-linked');
 
+  heuresAttachDrag(tr, eotp.id);
   for (const col of HEURES_COLUMNS) {
     if (col.kind === 'label') {
       const th = document.createElement('th');
       th.scope = 'row';
       th.className = 'heures-cell-label';
-      th.appendChild(dbEl('span', null, eotpDisplay(eotp) || '(sans code)'));
+      th.appendChild(buildHeuresHandle(tr, eotp.id, eotpDisplay(eotp) || 'cette ligne'));
+      th.appendChild(dbEl('span', 'heures-label-text', eotpDisplay(eotp) || '(sans code)'));
       if (link) {
         const tag = dbEl('span', 'heures-link-tag', '⇄ ' + link.name);
         tag.title = 'Quantités et avancement repris de l\'ouvrage « ' + link.name
@@ -11781,6 +12133,39 @@ function refreshHeuresComputed(eotpId) {
   if (tfoot) {
     const fresh = buildHeuresFoot(selected);
     tfoot.replaceWith(fresh);
+  }
+  refreshHeuresGroupRows(model, selected);
+}
+
+// Les rubriques totalisent leurs lignes : une saisie dans une ligne change
+// leur bandeau. On les reconstruit sur place, sans re-rendre le tableau —
+// le champ en cours de saisie garde le focus.
+function refreshHeuresGroupRows(model, selected) {
+  const rows = document.querySelectorAll('.heures-table tr.heures-group');
+  if (!rows.length) return;
+  const active = document.activeElement;
+  const selIds = new Set(selected.map(e => e.id));
+  const byId = new Map(getHeuresCandidates().map(e => [e.id, e]));
+  const layout = getHeuresLayout();
+  for (const tr of rows) {
+    const gid = tr.getAttribute('data-group-row');
+    const group = layout.find(it => it.t === 'g' && it.id === gid);
+    if (!group) continue;
+    // Une rubrique dont on édite le nom ne doit pas être remplacée sous les
+    // doigts de l'utilisateur : seules ses cellules chiffrées sont refaites.
+    const editing = active && tr.contains(active);
+    const members = getHeuresGroupMembers(layout, gid)
+      .filter(m => selIds.has(m.id)).map(m => byId.get(m.id));
+    const fresh = buildHeuresGroupRow(group, members, model);
+    if (!editing) { tr.replaceWith(fresh); continue; }
+    for (const col of HEURES_COLUMNS) {
+      if (col.kind === 'label') continue;
+      const from = fresh.querySelector('.heures-col-' + col.key);
+      const to = tr.querySelector('.heures-col-' + col.key);
+      if (!from || !to) continue;
+      to.textContent = from.textContent;
+      to.className = from.className;
+    }
   }
 }
 
