@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.82';
+const APP_VERSION = '1.83';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -11476,6 +11476,11 @@ function renderHeures() {
     addGroup.dataset.bound = '1';
     addGroup.addEventListener('click', addHeuresGroup);
   }
+  const exp = document.getElementById('heuresexport');
+  if (exp && !exp.dataset.bound) {
+    exp.dataset.bound = '1';
+    exp.addEventListener('click', () => exportHeuresToPDF());
+  }
 }
 
 // Bandeau d'une semaine close. Il est posé AVANT le conteneur du tableau,
@@ -12652,6 +12657,618 @@ function buildHeuresFoot(selected, prevEcarts) {
   }
   tfoot.appendChild(tr);
   return tfoot;
+}
+
+
+// ====================================================================
+//   Export PDF du suivi des heures — A4 PAYSAGE
+//   Le tableau porte vingt colonnes : en portrait il faudrait le couper
+//   en deux, et le document perdrait ce qui fait sa valeur — lire l'écart
+//   d'une ligne d'un bout à l'autre. Tout est dessiné en jsPDF pur
+//   (rect / line / triangle / text), sans bibliothèque de graphiques.
+// ====================================================================
+
+// Données du rapport. LECTURE SEULE : rien n'est écrit dans l'état, et la
+// semaine précédente est lue sans passer par getHeuresRow, qui la réécrirait.
+function buildHeuresReportData() {
+  const week = getHeuresActiveWeek();
+  const weeks = getHeuresWeeks();
+  const prevWeek = getHeuresPrevWeek(week);
+  const prevEcarts = getHeuresPrevEcarts();
+  const model = getHeuresAvancementModel();
+  const selected = getHeuresCandidates().filter(e => getHeuresRow(e.id).selected);
+
+  const lignes = [];
+  for (const e of selected) {
+    const { row, link } = resolveHeuresRow(e, model);
+    const comp = withHeuresEcartSem(computeHeuresRow(row), e.id, prevEcarts);
+    lignes.push({ id: e.id, nom: eotpDisplay(e) || '(sans code)', lien: link ? link.name : '', row, comp });
+  }
+
+  // Totaux : mêmes règles que le pied du tableau, y compris la différence
+  // des totaux pour l'écart de la semaine.
+  const t = { budget: 0, droit: 0, sap: 0, corr: 0, puma: 0, pumaEcart: 0, ecart: 0,
+              radHeures: 0, fdc: 0, ecartFdc: 0, ecartFdcCorrige: 0, radCorrige: 0 };
+  let fdcManquants = 0, ss1Manquants = 0;
+  for (const l of lignes) {
+    t.budget += l.comp.budget; t.droit += l.comp.droit;
+    t.sap += Number(l.row.sap) || 0; t.corr += Number(l.row.correction) || 0;
+    t.puma += Number(l.row.pumaCumule) || 0;
+    t.pumaEcart += l.comp.pumaEcart; t.ecart += l.comp.ecart;
+    t.ecartFdcCorrige += l.comp.ecartFdcCorrige; t.radCorrige += l.comp.radCorrige;
+    if (l.comp.fdcAuto == null) fdcManquants++;
+    else { t.fdc += l.comp.fdcAuto; t.radHeures += l.comp.radHeures; t.ecartFdc += l.comp.ecartFdc; }
+    if (l.comp.ecartSem == null) ss1Manquants++;
+  }
+  t.avancement = t.budget > 0 ? t.droit / t.budget : null;
+  let ss1Total = null;
+  if (prevEcarts && prevEcarts.size) {
+    let p = 0;
+    for (const v of prevEcarts.values()) p += v;
+    ss1Total = t.ecart - p;
+  }
+
+  // Avancement par bâtiment. Sur un chantier suivi uniquement par les heures,
+  // aucune zone ne porte d'ouvrage : le modèle d'avancement est alors vide et
+  // ce bloc n'aurait rien à montrer. On se rabat sur les rubriques que le
+  // conducteur a lui-même créées dans cet onglet — c'est SON regroupement.
+  const av = computeAvancementModel('');
+  let familles = [], familleSource = 'batiments';
+  if (av.buildings.length && av.hBudget > 0) {
+    familles = av.buildings.map(b => ({ nom: b.name, pct: b.pct, done: b.hDone, budget: b.hBudget,
+                                        detail: b.zones + (b.zones > 1 ? ' zones' : ' zone') }));
+  } else {
+    familleSource = 'rubriques';
+    const layout = getHeuresLayout();
+    const parId = new Map(lignes.map(l => [l.id, l]));
+    for (const it of layout) {
+      if (it.t !== 'g') continue;
+      const membres = getHeuresGroupMembers(layout, it.id).map(m => parId.get(m.id)).filter(Boolean);
+      if (!membres.length) continue;
+      let bud = 0, dr = 0;
+      for (const m of membres) { bud += m.comp.budget; dr += m.comp.droit; }
+      familles.push({ nom: it.name || 'Rubrique', pct: bud > 0 ? (dr / bud) * 100 : 0,
+                      done: dr, budget: bud,
+                      detail: membres.length + (membres.length > 1 ? ' lignes' : ' ligne') });
+    }
+    const libres = lignes.filter(l => !layout.some(i => i.t === 'e' && i.id === l.id && i.g));
+    if (familles.length && libres.length) {
+      let bud = 0, dr = 0;
+      for (const m of libres) { bud += m.comp.budget; dr += m.comp.droit; }
+      familles.push({ nom: 'Hors rubrique', pct: bud > 0 ? (dr / bud) * 100 : 0,
+                      done: dr, budget: bud,
+                      detail: libres.length + (libres.length > 1 ? ' lignes' : ' ligne') });
+    }
+  }
+
+  return { week, weeks, prevWeek, lignes, totaux: t, ss1Total, ss1Manquants, fdcManquants,
+           familles, familleSource, avModel: av, layout: getHeuresLayout(),
+           verrouillee: isHeuresWeekLocked(week) };
+}
+
+// Colonnes du tableau détaillé, en millimètres. La somme fait exactement
+// CONTENT_W (277 mm) en paysage — vérifié par assertion au premier export.
+const HEURES_PDF_COLS = [
+  { key: 'taches',          w: 42, al: 'left'  },
+  { key: 'budgetHeures',    w: 13 }, { key: 'unite',        w: 7  },
+  { key: 'ratio',           w: 10 }, { key: 'qteTotal',     w: 13 },
+  { key: 'qteRealisee',     w: 13 }, { key: 'avancement',   w: 8  },
+  { key: 'droit',           w: 13 }, { key: 'sap',          w: 13 },
+  { key: 'correction',      w: 13 }, { key: 'pumaCumule',   w: 14 },
+  { key: 'pumaEcart',       w: 14 }, { key: 'ecart',        w: 15 },
+  { key: 'ratioActuel',     w: 9  }, { key: 'radHeures',    w: 12 },
+  { key: 'fdcAuto',         w: 13 }, { key: 'ecartFdc',     w: 15 },
+  { key: 'ecartFdcCorrige', w: 13 }, { key: 'radCorrige',   w: 12 },
+  { key: 'ecartSem',        w: 15 }
+];
+
+async function exportHeuresToPDF() {
+  const weeks = getHeuresWeeks();
+  if (!weeks.length) { showToast('Aucune semaine à exporter', 'error'); return; }
+  const R = buildHeuresReportData();
+  if (!R.lignes.length) {
+    showToast('Aucune ligne eOTP suivie : rien à exporter', 'error');
+    return;
+  }
+  let jspdf;
+  try {
+    showToast('Génération du PDF…');
+    jspdf = await loadJsPdf();
+  } catch (e) {
+    // jsPDF vient d'un CDN et le service worker ne met en cache que les
+    // fichiers de l'application : il faut du réseau à CHAQUE session, pas
+    // seulement à la première.
+    showToast('Impossible de charger jsPDF — une connexion est nécessaire pour générer un PDF', 'error');
+    return;
+  }
+
+  const pdf = hardenPdfText(new jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' }));
+  const PAGE_W = 297, PAGE_H = 210, MARGIN = 10;
+  const CONTENT_W = PAGE_W - 2 * MARGIN;      // 277
+  const ORANGE = [237, 108, 2], DARK = [38, 38, 38];
+  const GREEN = [46, 125, 50], RED = [198, 40, 40], GREY = [120, 120, 120];
+  const CARD = [250, 249, 247], LINE = [214, 214, 214], HEADBG = [236, 236, 236];
+  let y = MARGIN, pageNum = 0;
+
+  // --- petites aides -------------------------------------------------
+  const H = (n, signe) => (signe && n > 0 ? '+' : '') + fmtHeures(n);
+  const P = (n) => (n == null ? 'n/a' : formatPct(Math.round(n * 10) / 10) + ' %');
+  const teinte = (n) => (n == null ? GREY : (n >= 0 ? GREEN : RED));
+  // Tronquage VISIBLE : sans les points de suspension, deux lignes voisines
+  // d'une même famille s'impriment à l'identique et on ne sait plus laquelle
+  // dérape.
+  const coupe = (txt, w) => {
+    const l = pdf.splitTextToSize(String(txt == null ? '' : txt), w);
+    return l.length > 1 ? pdf.splitTextToSize(l[0], w - 3)[0] + '...' : l[0];
+  };
+  const addFooter = () => {
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.5); pdf.setTextColor(130);
+    const d = new Date();
+    const p2 = (v) => String(v).padStart(2, '0');
+    pdf.text(`Suivi des heures — ${R.week.name || ''} — édité le ${p2(d.getDate())}/${p2(d.getMonth() + 1)}/${d.getFullYear()} à ${p2(d.getHours())}:${p2(d.getMinutes())}`,
+      MARGIN, PAGE_H - 6);
+    pdf.text(`Page ${pageNum}`, PAGE_W - MARGIN, PAGE_H - 6, { align: 'right' });
+    pdf.setTextColor(0);
+  };
+  // jsPDF ouvre déjà une page : la première n'en ajoute pas une de plus.
+  const newPage = () => { if (pageNum > 0) { addFooter(); pdf.addPage(); } pageNum++; y = MARGIN; };
+  const ensureSpace = (h) => { if (y + h > PAGE_H - 12) newPage(); };
+  let secNum = 0;
+  const banner = (titre) => {
+    secNum++;
+    ensureSpace(16);
+    pdf.setFillColor(...ORANGE);
+    pdf.rect(MARGIN, y, CONTENT_W, 7, 'F');
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(255);
+    pdf.text(`${secNum}.  ${titre}`, MARGIN + 3, y + 4.9);
+    pdf.setTextColor(0);
+    y += 10.5;
+  };
+  const note = (txt) => {
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7); pdf.setTextColor(125);
+    pdf.splitTextToSize(txt, CONTENT_W).forEach((l) => { pdf.text(l, MARGIN, y); y += 3.1; });
+    pdf.setTextColor(0); y += 1.6;
+  };
+  const jauge = (pct, x, yy, w, h, couleur) => {
+    pdf.setFillColor(226, 226, 226); pdf.rect(x, yy, w, h, 'F');
+    const p = Math.max(0, Math.min(100, pct || 0));
+    if (p > 0) { pdf.setFillColor(...(couleur || ORANGE)); pdf.rect(x, yy, w * p / 100, h, 'F'); }
+  };
+  // Hachure : le signal survit à une impression en noir et blanc, ce qu'une
+  // couleur seule ne fait pas.
+  const hachure = (x, yy, w, h) => {
+    pdf.setDrawColor(255); pdf.setLineWidth(0.35);
+    for (let d = 0; d < w + h; d += 1.8) {
+      const x1 = x + Math.max(0, d - h), y1 = yy + Math.min(h, d);
+      const x2 = x + Math.min(w, d),     y2 = yy + Math.max(0, d - w);
+      pdf.line(x1, y1, x2, y2);
+    }
+    pdf.setLineWidth(0.2);
+  };
+
+  // ================= PAGE DE GARDE =================
+  newPage();
+  const T = R.totaux;
+  pdf.setFillColor(...ORANGE); pdf.rect(0, 0, PAGE_W, 3, 'F');
+  y = 34;
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(27); pdf.setTextColor(...DARK);
+  pdf.text('SUIVI DES HEURES', PAGE_W / 2, y, { align: 'center' });
+  y += 11;
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(14); pdf.setTextColor(90);
+  pdf.text(coupe((state.companies[0] && state.companies[0].name) || 'Chantier', 200), PAGE_W / 2, y, { align: 'center' });
+  y += 8;
+  pdf.setFontSize(11);
+  pdf.text(R.week.name || 'Semaine en cours', PAGE_W / 2, y, { align: 'center' });
+  y += 14;
+  pdf.setDrawColor(...LINE); pdf.setLineWidth(0.4);
+  pdf.line(PAGE_W / 2 - 45, y, PAGE_W / 2 + 45, y);
+  y += 16;
+
+  // Le verdict, en très gros : c'est le seul chiffre que le conducteur
+  // cherche en ouvrant le document.
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(120);
+  pdf.text('ÉCART AU STADE', PAGE_W / 2, y, { align: 'center' });
+  y += 15;
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(38); pdf.setTextColor(...teinte(T.ecart));
+  pdf.text(H(T.ecart, true) + ' h', PAGE_W / 2, y, { align: 'center' });
+  y += 9;
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9.5); pdf.setTextColor(110);
+  pdf.text(T.ecart >= 0
+    ? 'Les heures pointées restent sous le droit à dépenser.'
+    : 'Les heures pointées dépassent le droit à dépenser.', PAGE_W / 2, y, { align: 'center' });
+  y += 16;
+
+  // Trois chiffres d'appui, sobres.
+  {
+    const items = [
+      ['Budget suivi', fmtHeures(T.budget) + ' h', R.lignes.length + (R.lignes.length > 1 ? ' lignes eOTP' : ' ligne eOTP')],
+      ['Écart de la semaine', R.ss1Total == null ? 'n/a' : H(R.ss1Total, true) + ' h',
+        R.prevWeek ? 'vs ' + (R.prevWeek.name || 'la semaine précédente') : 'première semaine : aucun comparatif'],
+      ['Écart fin de chantier', H(T.ecartFdc, true) + ' h' + (R.fdcManquants ? ' *' : ''),
+        'FDC projetée ' + fmtHeures(T.fdc) + ' h'],
+    ];
+    const cw = 78, gap = 8, x0 = (PAGE_W - (cw * 3 + gap * 2)) / 2;
+    items.forEach((it, i) => {
+      const x = x0 + i * (cw + gap);
+      pdf.setFillColor(...CARD); pdf.setDrawColor(...LINE); pdf.setLineWidth(0.2);
+      pdf.rect(x, y, cw, 24, 'FD');
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(6.5); pdf.setTextColor(120);
+      pdf.text(it[0].toUpperCase(), x + 4, y + 5.5);
+      pdf.setFontSize(14);
+      pdf.setTextColor(...(i === 1 && R.ss1Total != null ? teinte(R.ss1Total)
+        : (i === 2 ? teinte(T.ecartFdc) : DARK)));
+      pdf.text(it[1], x + 4, y + 14);
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(6.5); pdf.setTextColor(125);
+      pdf.text(coupe(it[2], cw - 8), x + 4, y + 20);
+    });
+    y += 32;
+  }
+  pdf.setTextColor(0);
+  {
+    const d = new Date();
+    const p2 = (v) => String(v).padStart(2, '0');
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(140);
+    pdf.text(`Édité le ${p2(d.getDate())}/${p2(d.getMonth() + 1)}/${d.getFullYear()}`
+      + (R.verrouillee ? ' — semaine close, valeurs figées' : ''), PAGE_W / 2, PAGE_H - 22, { align: 'center' });
+    pdf.setTextColor(0);
+  }
+
+  // ================= TABLEAU DE BORD =================
+  newPage();
+  banner('SYNTHÈSE — ' + (R.week.name || ''));
+  note(R.lignes.length + ' ligne(s) eOTP suivie(s), relevé SAP du ' + getHeuresSapDate() + '.'
+    + (R.fdcManquants ? ' * ' + R.fdcManquants + ' ligne(s) sans quantité totale ne sont pas projetables : elles sortent des totaux de fin de chantier.' : ''));
+  {
+    const cartes = [
+      ['BUDGET SUIVI', fmtHeures(T.budget) + ' h', DARK, 'avancement ' + P(T.avancement == null ? null : T.avancement * 100)],
+      ['DROIT À DÉPENSER', fmtHeures(T.droit) + ' h', DARK, 'budget × avancement'],
+      ['HEURES POINTÉES', fmtHeures(T.pumaEcart) + ' h', DARK, 'PUMA ' + fmtHeures(T.puma) + ' h moins correction ' + fmtHeures(T.corr) + ' h'],
+      ['ÉCART AU STADE', H(T.ecart, true) + ' h', teinte(T.ecart), 'droit moins pointé'],
+      ['ÉCART S/S-1', R.ss1Total == null ? 'n/a' : H(R.ss1Total, true) + ' h', teinte(R.ss1Total),
+        R.prevWeek ? 'vs ' + coupe(R.prevWeek.name || '', 40) : 'aucun comparatif'],
+    ];
+    const gap = 3, cw = (CONTENT_W - gap * 4) / 5;
+    cartes.forEach((c, i) => {
+      const x = MARGIN + i * (cw + gap);
+      pdf.setFillColor(...CARD); pdf.setDrawColor(...LINE); pdf.setLineWidth(0.2);
+      pdf.rect(x, y, cw, 24, 'FD');
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(6.5); pdf.setTextColor(120);
+      pdf.text(c[0], x + 3, y + 5);
+      pdf.setFontSize(14); pdf.setTextColor(...c[2]);
+      pdf.text(coupe(c[1], cw - 6), x + 3, y + 13.5);
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(6.3); pdf.setTextColor(125);
+      pdf.text(coupe(c[3], cw - 6), x + 3, y + 20);
+    });
+    pdf.setTextColor(0);
+    y += 29;
+  }
+
+  // Produit vs consommé : deux barres sur le même axe, la seule image qui
+  // explique l'écart au stade.
+  {
+    ensureSpace(30);
+    const bx = MARGIN + 40, bw = CONTENT_W - 40 - 30;
+    const pAcq = T.budget > 0 ? (T.droit / T.budget) * 100 : 0;
+    const pCon = T.budget > 0 ? (T.pumaEcart / T.budget) * 100 : 0;
+    const ligne = (lab, pct, val, couleur, yy) => {
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(70);
+      pdf.text(lab, MARGIN, yy + 3.4);
+      jauge(Math.min(100, pct), bx, yy, bw, 4.6, couleur);
+      if (pct > 100) {           // dépassement : un chevron, pas une barre qui déborde
+        pdf.setFillColor(...RED);
+        pdf.triangle(bx + bw + 1, yy, bx + bw + 4.5, yy + 2.3, bx + bw + 1, yy + 4.6, 'F');
+      }
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(...DARK);
+      pdf.text(P(pct) + '  ' + fmtHeures(val) + ' h', PAGE_W - MARGIN, yy + 3.4, { align: 'right' });
+    };
+    ligne('PRODUIT', pAcq, T.droit, [70, 130, 180], y);
+    // Repère pointillé : où en est le produit, reporté sur la barre du bas.
+    const xr = bx + bw * Math.min(1, Math.max(0, pAcq / 100));
+    pdf.setDrawColor(90); pdf.setLineWidth(0.3);
+    if (pdf.setLineDashPattern) pdf.setLineDashPattern([0.8, 0.8], 0);
+    pdf.line(xr, y, xr, y + 13.6);
+    if (pdf.setLineDashPattern) pdf.setLineDashPattern([], 0);
+    ligne('CONSOMMÉ', pCon, T.pumaEcart, pCon > pAcq ? RED : GREEN, y + 9);
+    y += 17;
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(6.5); pdf.setTextColor(125);
+    pdf.text('Les deux barres se lisent sur le même axe, en % du budget suivi. L\'écart entre elles EST l\'écart au stade.',
+      MARGIN, y);
+    pdf.setTextColor(0);
+    y += 7;
+  }
+
+  // ----- Avancement par bâtiment -----
+  banner(R.familleSource === 'batiments' ? 'AVANCEMENT PAR BÂTIMENT' : 'AVANCEMENT PAR RUBRIQUE');
+  note(R.familleSource === 'batiments'
+    ? 'Avancement physique du chantier (Avancement → Récapitulatif), pondéré par les heures budgétées des ouvrages. Il ne se compare pas aux heures pointées ci-dessus : ce sont deux mesures distinctes.'
+    : 'Aucune zone ne porte d\'ouvrage : l\'avancement physique par bâtiment n\'est pas calculable. Le classement ci-dessous reprend vos rubriques du tableau des heures, en valeur acquise (droit à dépenser ÷ budget).');
+  if (!R.familles.length) {
+    pdf.setFont('helvetica', 'italic'); pdf.setFontSize(8.5); pdf.setTextColor(140);
+    pdf.text('Aucun bâtiment porteur d\'ouvrage, et aucune rubrique définie dans le tableau des heures.', MARGIN, y);
+    pdf.setTextColor(0); pdf.setFont('helvetica', 'normal');
+    y += 8;
+  } else {
+    const moy = R.familleSource === 'batiments' ? R.avModel.pct
+      : (T.budget > 0 ? (T.droit / T.budget) * 100 : 0);
+    const rows = R.familles.slice().sort((a, b) => b.pct - a.pct);
+    const NOM_W = 52, PCT_W = 16, VAL_W = 54;   // la colonne de droite porte « x / y h · n lignes »
+    const bx = MARGIN + NOM_W, bw = CONTENT_W - NOM_W - PCT_W - VAL_W;
+    // Repère « avancement moyen » : chaque barre se juge par rapport à lui.
+    const xm = bx + bw * Math.max(0, Math.min(1, moy / 100));
+    ensureSpace(10 + rows.length * 7.4);
+    pdf.setFillColor(...HEADBG); pdf.rect(MARGIN, y, CONTENT_W, 5, 'F');
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(6.5); pdf.setTextColor(90);
+    pdf.text(R.familleSource === 'batiments' ? 'BÂTIMENT' : 'RUBRIQUE', MARGIN + 2, y + 3.5);
+    pdf.text('AVANCEMENT', bx + 2, y + 3.5);
+    pdf.text('%', bx + bw + PCT_W - 2, y + 3.5, { align: 'right' });
+    pdf.text('HEURES ACQUISES / BUDGET', PAGE_W - MARGIN - 2, y + 3.5, { align: 'right' });
+    pdf.setTextColor(0);
+    y += 7.2;
+    for (const b of rows) {
+      ensureSpace(8);
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8); pdf.setTextColor(...DARK);
+      pdf.text(coupe(b.nom, NOM_W - 3), MARGIN, y + 3.2);
+      const retard = moy - b.pct;
+      const couleur = b.pct >= 99.95 ? GREEN : (retard > 5 ? RED : ORANGE);
+      jauge(b.pct, bx, y, bw, 4.4, couleur);
+      // Retard marqué : hachure, pour que le signal survive au noir et blanc.
+      if (retard > 5) hachure(bx, y, bw * Math.max(0, Math.min(100, b.pct)) / 100, 4.4);
+      pdf.setDrawColor(60); pdf.setLineWidth(0.35);
+      pdf.line(xm, y - 0.7, xm, y + 5.1);
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8);
+      pdf.setTextColor(...(retard > 5 ? RED : DARK));
+      pdf.text(P(b.pct), bx + bw + PCT_W - 2, y + 3.2, { align: 'right' });
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7); pdf.setTextColor(125);
+      pdf.text(fmtHeures(b.done) + ' / ' + fmtHeures(b.budget) + ' h  ·  ' + b.detail,
+        PAGE_W - MARGIN - 2, y + 3.2, { align: 'right' });
+      pdf.setTextColor(0);
+      y += 7.4;
+    }
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(6.5); pdf.setTextColor(125);
+    pdf.text('Le trait vertical marque la moyenne (' + P(moy) + '). Une barre hachurée accuse plus de 5 points de retard sur cette moyenne.',
+      MARGIN, y + 2);
+    pdf.setTextColor(0);
+    y += 8;
+  }
+
+  // ----- Où l'on gagne, où l'on perd -----
+  newPage();
+  banner('OÙ L\'ON GAGNE, OÙ L\'ON PERD');
+  note('Écart au stade ligne par ligne : droit à dépenser moins heures pointées. La colonne de droite donne le mouvement de la semaine, pour distinguer un retard ancien d\'un dérapage récent.');
+  {
+    const gains = R.lignes.filter(l => l.comp.ecart > 0).reduce((a, l) => a + l.comp.ecart, 0);
+    const pertes = R.lignes.filter(l => l.comp.ecart < 0).reduce((a, l) => a + l.comp.ecart, 0);
+    const nG = R.lignes.filter(l => l.comp.ecart > 0).length;
+    const nP = R.lignes.filter(l => l.comp.ecart < 0).length;
+    // Barre bilan : la part de gains et la part de pertes, à l'échelle.
+    const amp = Math.max(gains, Math.abs(pertes)) || 1;
+    const bw = CONTENT_W - 66;
+    ensureSpace(22);
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(...GREEN);
+    pdf.text('GAINS', MARGIN, y + 3.4);
+    pdf.setFillColor(...GREEN); pdf.rect(MARGIN + 20, y, bw * (gains / amp), 4.4, 'F');
+    pdf.setTextColor(...DARK); pdf.setFontSize(7.5);
+    pdf.text('+' + fmtHeures(gains) + ' h  (' + nG + ')', PAGE_W - MARGIN, y + 3.4, { align: 'right' });
+    y += 7;
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(...RED);
+    pdf.text('PERTES', MARGIN, y + 3.4);
+    pdf.setFillColor(...RED); pdf.rect(MARGIN + 20, y, bw * (Math.abs(pertes) / amp), 4.4, 'F');
+    hachure(MARGIN + 20, y, bw * (Math.abs(pertes) / amp), 4.4);
+    pdf.setTextColor(...DARK); pdf.setFontSize(7.5);
+    pdf.text(fmtHeures(pertes) + ' h  (' + nP + ')', PAGE_W - MARGIN, y + 3.4, { align: 'right' });
+    y += 9;
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(6.5); pdf.setTextColor(125);
+    pdf.text('Solde : ' + H(T.ecart, true) + ' h sur ' + R.lignes.length + ' ligne(s).', MARGIN, y);
+    pdf.setTextColor(0);
+    y += 7;
+  }
+  // Classement : les pires d'abord, c'est là qu'on agit.
+  {
+    const rows = R.lignes.slice().sort((a, b) => a.comp.ecart - b.comp.ecart);
+    const NOM_W = 74, BAR_W = CONTENT_W - NOM_W - 40 - 30 - 26;
+    const amp = Math.max(1, ...rows.map(l => Math.abs(l.comp.ecart)));
+    const zero = MARGIN + NOM_W + BAR_W / 2;
+    pdf.setFillColor(...HEADBG); pdf.rect(MARGIN, y, CONTENT_W, 5, 'F');
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(6.5); pdf.setTextColor(90);
+    pdf.text('LIGNE eOTP', MARGIN + 2, y + 3.5);
+    pdf.text('PERTE', zero - 3, y + 3.5, { align: 'right' });
+    pdf.text('GAIN', zero + 3, y + 3.5);
+    pdf.text('ÉCART AU STADE', MARGIN + NOM_W + BAR_W + 38, y + 3.5, { align: 'right' });
+    pdf.text('S/S-1', MARGIN + NOM_W + BAR_W + 68, y + 3.5, { align: 'right' });
+    pdf.text('RATIO', PAGE_W - MARGIN - 2, y + 3.5, { align: 'right' });
+    pdf.setTextColor(0);
+    y += 6.6;
+    for (const l of rows) {
+      ensureSpace(6);
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.2); pdf.setTextColor(...DARK);
+      pdf.text(coupe(l.nom, NOM_W - 3), MARGIN, y + 3);
+      const w = (BAR_W / 2) * (Math.abs(l.comp.ecart) / amp);
+      if (l.comp.ecart >= 0) {
+        pdf.setFillColor(...GREEN); pdf.rect(zero, y + 0.4, w, 3.4, 'F');
+      } else {
+        pdf.setFillColor(...RED); pdf.rect(zero - w, y + 0.4, w, 3.4, 'F');
+        hachure(zero - w, y + 0.4, w, 3.4);
+      }
+      pdf.setDrawColor(150); pdf.setLineWidth(0.2);
+      pdf.line(zero, y, zero, y + 4.2);
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.2); pdf.setTextColor(...teinte(l.comp.ecart));
+      pdf.text(H(l.comp.ecart, true) + ' h', MARGIN + NOM_W + BAR_W + 38, y + 3, { align: 'right' });
+      pdf.setTextColor(...teinte(l.comp.ecartSem));
+      pdf.text(l.comp.ecartSem == null ? 'n/a' : H(l.comp.ecartSem, true), MARGIN + NOM_W + BAR_W + 68, y + 3, { align: 'right' });
+      pdf.setFont('helvetica', 'normal'); pdf.setTextColor(110);
+      pdf.text(l.comp.ratioActuel == null ? 'n/a'
+        : fmtHeures(l.comp.ratioActuel) + (l.comp.ratio != null ? ' / ' + fmtHeures(l.comp.ratio) : ''),
+        PAGE_W - MARGIN - 2, y + 3, { align: 'right' });
+      pdf.setTextColor(0);
+      y += 5.4;
+    }
+    y += 2;
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(6.5); pdf.setTextColor(125);
+    pdf.text('Colonne RATIO : ratio constaté / ratio théorique. Un ratio constaté supérieur au théorique signifie qu\'on dépense plus d\'heures par unité que prévu.',
+      MARGIN, y);
+    pdf.setTextColor(0);
+    y += 7;
+  }
+
+  // ================= TABLEAU DÉTAILLÉ =================
+  newPage();
+  banner('TABLEAU DÉTAILLÉ — ' + (R.week.name || ''));
+  {
+    const somme = HEURES_PDF_COLS.reduce((a, c) => a + c.w, 0);
+    if (Math.abs(somme - CONTENT_W) > 0.5) console.warn('Largeurs PDF heures : ' + somme + ' mm au lieu de ' + CONTENT_W);
+  }
+  {
+    const parKey = new Map(HEURES_COLUMNS.map(c => [c.key, c]));
+    const xs = []; let cx = MARGIN;
+    for (const c of HEURES_PDF_COLS) { xs.push(cx); cx += c.w; }
+    const ROW_H = 5.0;
+    // Étiquettes courtes : « Écart FDC corr. » ne tient pas dans 14 mm.
+    const COURT = {
+      taches: 'Tâche', budgetHeures: 'Budget', unite: 'Un.', ratio: 'R. th.',
+      qteTotal: 'Qté tot.', qteRealisee: 'Qté réal.', avancement: 'Avanc.', droit: 'Droit',
+      sap: 'SAP', correction: 'Correc.', pumaCumule: 'PUMA', pumaEcart: 'PUMA c.',
+      ecart: 'Éc. stade', ratioActuel: 'R. act.', radHeures: 'RAD (h)', fdcAuto: 'FDC',
+      ecartFdc: 'Éc. FDC', ecartFdcCorrige: 'Éc. FDC c.', radCorrige: 'RAD c.', ecartSem: 'Éc. S/S-1'
+    };
+    const entete = () => {
+      // Bandeaux de catégorie, puis intitulés : la même lecture qu'à l'écran.
+      pdf.setFillColor(224, 224, 224);
+      pdf.rect(MARGIN, y, CONTENT_W, 4.6, 'F');
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(5.8); pdf.setTextColor(80);
+      let k = 1;
+      for (const run of getHeuresCatRuns()) {
+        const x0 = xs[k];
+        let w = 0;
+        for (const col of run.cols) { const idx = HEURES_PDF_COLS.findIndex(c => c.key === col.key); if (idx >= 0) w += HEURES_PDF_COLS[idx].w; }
+        pdf.setDrawColor(190); pdf.setLineWidth(0.2);
+        pdf.line(x0, y, x0, y + 4.6);
+        pdf.text(coupe(run.label.toUpperCase(), w - 1.5), x0 + w / 2, y + 3.1, { align: 'center' });
+        k += run.cols.length;
+      }
+      y += 4.6;
+      pdf.setFillColor(...HEADBG);
+      pdf.rect(MARGIN, y, CONTENT_W, 5.4, 'F');
+      pdf.setFontSize(5.9); pdf.setTextColor(60);
+      HEURES_PDF_COLS.forEach((c, i) => {
+        const lab = COURT[c.key] || c.key;
+        if (c.al === 'left') pdf.text(lab, xs[i] + 1.5, y + 3.6);
+        else pdf.text(coupe(lab, c.w - 2), xs[i] + c.w - 1.5, y + 3.6, { align: 'right' });
+      });
+      pdf.setDrawColor(150); pdf.setLineWidth(0.3);
+      pdf.line(MARGIN, y + 5.4, PAGE_W - MARGIN, y + 5.4);
+      pdf.setTextColor(0);
+      y += 6.2;
+    };
+    entete();
+
+    const HEURES_PDF_H = new Set(['sap', 'correction', 'pumaCumule', 'ecartFdcCorrige']);
+    const cellule = (l, key) => {
+      const col = parKey.get(key);
+      if (!col) return '';
+      if (col.kind === 'calc') return heuresCalcText(key, l.comp);
+      if (key === 'unite') return l.row.unite || '-';
+      const v = Number(l.row[key]) || 0;
+      // À l'écran ce sont des champs de saisie ; sur papier, un chiffre nu au
+      // milieu de colonnes en heures se lit mal.
+      return HEURES_PDF_H.has(key) ? fmtHeures(v) + ' h' : fmtHeures(v);
+    };
+    const dessineLigne = (nom, get, gras, fond, teinteCle, encre) => {
+      ensureSpace(ROW_H + 2);
+      if (y === MARGIN) entete();
+      if (fond) { pdf.setFillColor(...fond); pdf.rect(MARGIN, y - 0.6, CONTENT_W, ROW_H, 'F'); }
+      pdf.setFont('helvetica', gras ? 'bold' : 'normal'); pdf.setFontSize(6.1);
+      HEURES_PDF_COLS.forEach((c, i) => {
+        const txt = c.key === 'taches' ? nom : get(c.key);
+        if (txt == null || txt === '') return;
+        const sig = teinteCle && teinteCle(c.key);
+        pdf.setTextColor(...(sig || encre || DARK));
+        if (c.al === 'left') pdf.text(coupe(txt, c.w - 2.5), xs[i] + 1.5, y + 2.9);
+        else pdf.text(coupe(txt, c.w - 2), xs[i] + c.w - 1.5, y + 2.9, { align: 'right' });
+      });
+      pdf.setTextColor(0);
+      y += ROW_H;
+    };
+
+    // Ordre et rubriques du tableau, à l'identique de l'écran.
+    const parId = new Map(R.lignes.map(l => [l.id, l]));
+    const vus = new Set();
+    let alt = 0;
+    const ligneNormale = (l) => {
+      const fond = (alt++ % 2) ? [248, 248, 248] : null;
+      const teinteCle = (k) => {
+        if (!HEURES_SIGNED_COLUMNS.has(k)) return null;
+        const v = k === 'ecart' ? l.comp.ecart : (k === 'ecartSem' ? l.comp.ecartSem : l.comp.ecartFdc);
+        return v == null ? null : (v >= 0 ? GREEN : RED);
+      };
+      dessineLigne(l.nom, (k) => cellule(l, k), false, fond, teinteCle);
+      vus.add(l.id);
+    };
+    for (const it of R.layout) {
+      if (it.t === 'g') {
+        const membres = getHeuresGroupMembers(R.layout, it.id).map(m => parId.get(m.id)).filter(Boolean);
+        if (!membres.length) continue;
+        const agg = { budget: 0, droit: 0, sap: 0, corr: 0, puma: 0, pumaEcart: 0, ecart: 0,
+                      radHeures: 0, fdc: 0, ecartFdc: 0, ecartFdcCorrige: 0, radCorrige: 0, ecartSem: 0 };
+        let ss1 = false;
+        for (const m of membres) {
+          agg.budget += m.comp.budget; agg.droit += m.comp.droit;
+          agg.sap += Number(m.row.sap) || 0; agg.corr += Number(m.row.correction) || 0;
+          agg.puma += Number(m.row.pumaCumule) || 0;
+          agg.pumaEcart += m.comp.pumaEcart; agg.ecart += m.comp.ecart;
+          agg.ecartFdcCorrige += m.comp.ecartFdcCorrige; agg.radCorrige += m.comp.radCorrige;
+          if (m.comp.fdcAuto != null) { agg.fdc += m.comp.fdcAuto; agg.radHeures += m.comp.radHeures; agg.ecartFdc += m.comp.ecartFdc; }
+          if (m.comp.ecartSem != null) { agg.ecartSem += m.comp.ecartSem; ss1 = true; }
+        }
+        const av = agg.budget > 0 ? Math.round((agg.droit / agg.budget) * 100) + ' %' : '-';
+        const vals = { budgetHeures: fmtHeures(agg.budget) + ' h', unite: '', ratio: '', qteTotal: '', qteRealisee: '',
+          avancement: av, droit: fmtHeures(agg.droit) + ' h', sap: fmtHeures(agg.sap) + ' h',
+          correction: fmtHeures(agg.corr) + ' h', pumaCumule: fmtHeures(agg.puma) + ' h',
+          pumaEcart: fmtHeures(agg.pumaEcart) + ' h', ecart: H(agg.ecart, true) + ' h', ratioActuel: '',
+          radHeures: fmtHeures(agg.radHeures) + ' h', fdcAuto: fmtHeures(agg.fdc) + ' h',
+          ecartFdc: H(agg.ecartFdc, true) + ' h', ecartFdcCorrige: fmtHeures(agg.ecartFdcCorrige) + ' h',
+          radCorrige: fmtHeures(agg.radCorrige) + ' h', ecartSem: ss1 ? H(agg.ecartSem, true) + ' h' : '' };
+        dessineLigne((it.name || 'Rubrique').toUpperCase(), (k) => vals[k], true, ORANGE, null, [255, 255, 255]);
+        for (const m of membres) ligneNormale(m);
+        continue;
+      }
+      const l = parId.get(it.id);
+      if (l && !vus.has(l.id)) ligneNormale(l);
+    }
+    for (const l of R.lignes) if (!vus.has(l.id)) ligneNormale(l);
+
+    // Pied de tableau
+    ensureSpace(8);
+    pdf.setDrawColor(90); pdf.setLineWidth(0.4);
+    pdf.line(MARGIN, y - 0.6, PAGE_W - MARGIN, y - 0.6);
+    const footVals = {
+      budgetHeures: fmtHeures(T.budget) + ' h', unite: '', ratio: '', qteTotal: '', qteRealisee: '',
+      avancement: T.avancement != null ? Math.round(T.avancement * 100) + ' %' : '-',
+      droit: fmtHeures(T.droit) + ' h', sap: fmtHeures(T.sap) + ' h', correction: fmtHeures(T.corr) + ' h',
+      pumaCumule: fmtHeures(T.puma) + ' h', pumaEcart: fmtHeures(T.pumaEcart) + ' h',
+      ecart: H(T.ecart, true) + ' h', ratioActuel: '',
+      radHeures: fmtHeures(T.radHeures) + ' h' + (R.fdcManquants ? ' *' : ''),
+      fdcAuto: fmtHeures(T.fdc) + ' h' + (R.fdcManquants ? ' *' : ''),
+      ecartFdc: H(T.ecartFdc, true) + ' h' + (R.fdcManquants ? ' *' : ''),
+      ecartFdcCorrige: fmtHeures(T.ecartFdcCorrige) + ' h', radCorrige: fmtHeures(T.radCorrige) + ' h',
+      ecartSem: R.ss1Total == null ? '' : H(R.ss1Total, true) + ' h'
+    };
+    dessineLigne('TOTAL', (k) => footVals[k], true, [235, 235, 235], (k) => {
+      if (!HEURES_SIGNED_COLUMNS.has(k)) return null;
+      const v = k === 'ecart' ? T.ecart : (k === 'ecartSem' ? R.ss1Total : T.ecartFdc);
+      return v == null ? null : (v >= 0 ? GREEN : RED);
+    });
+    y += 3;
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(6.3); pdf.setTextColor(125);
+    pdf.text('PUMA corrigé = PUMA cumulé - Correction.  Écart au stade = Droit à dépenser - PUMA corrigé.  '
+      + 'Écart FDC = Budget - FDC auto.  Écart S/S-1 = écart au stade de cette semaine - celui de la précédente.',
+      MARGIN, y);
+    pdf.setTextColor(0);
+  }
+
+  addFooter();
+  const nom = 'suivi-heures-' + (R.week.name || 'semaine').replace(/[^\w\-]+/g, '-').toLowerCase() + '.pdf';
+  pdf.save(nom);
+  showToast('PDF généré');
 }
 
 // ========================================================================
