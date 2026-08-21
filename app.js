@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.81';
+const APP_VERSION = '1.82';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -103,6 +103,9 @@ const state = {
   // les semaines : [{ t: 'g', id, name }, { t: 'e', id: <eotpId> }, …].
   // Une ligne appartient à la rubrique qui la précède dans cette liste.
   heuresLayout: [],
+  // Catégories de colonnes repliées dans le suivi des heures. Confort de
+  // lecture propre à l'appareil : voir SYNC_EXCLUDED_KEYS.
+  heuresColsCollapsed: [],
   heuresActiveWeekId: '',   // id de la semaine affichée
   // Données par semaine puis par eOTP :
   // { [weekId]: { [eotpId]: { selected, budgetHeures, unite, qteTotal, qteRealisee, sap, correction, pumaCumule } } }
@@ -258,6 +261,7 @@ function load() {
     if (typeof data.heuresSapDate === 'string') state.heuresSapDate = data.heuresSapDate;
     if (Array.isArray(data.heuresWeeks)) state.heuresWeeks = data.heuresWeeks;
     if (Array.isArray(data.heuresLayout)) state.heuresLayout = data.heuresLayout;
+    if (Array.isArray(data.heuresColsCollapsed)) state.heuresColsCollapsed = data.heuresColsCollapsed;
     if (typeof data.heuresActiveWeekId === 'string') state.heuresActiveWeekId = data.heuresActiveWeekId;
     if (data.consoRecapMode === 'product' || data.consoRecapMode === 'eotp') state.consoRecapMode = data.consoRecapMode;
     if (data.stockCBMode === 'product' || data.stockCBMode === 'eotp') state.stockCBMode = data.stockCBMode;
@@ -379,6 +383,7 @@ function buildPersistedData() {
     heuresSapDate: state.heuresSapDate,
     heuresWeeks: state.heuresWeeks,
     heuresLayout: state.heuresLayout,
+    heuresColsCollapsed: state.heuresColsCollapsed,
     heuresActiveWeekId: state.heuresActiveWeekId,
     consoRecapMode: state.consoRecapMode,
     stockCBMode: state.stockCBMode,
@@ -11225,6 +11230,53 @@ function getHeuresActiveWeek() {
   const found = weeks.find(w => w.id === state.heuresActiveWeekId);
   return found || weeks[weeks.length - 1];
 }
+// Une semaine est VERROUILLÉE dès qu'une semaine plus récente existe. Le
+// verrou n'est pas un drapeau à migrer : il se déduit de la position, donc il
+// est vrai sur toutes les installations dès la mise à jour et la synchro ne
+// peut pas le contredire. Son effet réel n'est pas de griser des champs — c'est
+// d'arrêter de RÉÉCRIRE les valeurs stockées depuis le budget eOTP et depuis le
+// modèle d'avancement vivant. Sans cela, corriger un budget aujourd'hui
+// déplacerait l'écart au stade de toutes les semaines passées, et donc l'écart
+// S/S-1 de la semaine suivante.
+// `w.unlocked` est l'issue de secours : posée à la main, elle rend la semaine
+// modifiable et ses valeurs à nouveau vivantes.
+function isHeuresWeekLocked(week) {
+  if (!week || week.unlocked) return false;
+  const weeks = getHeuresWeeks();
+  const i = weeks.findIndex(w => w.id === week.id);
+  return i >= 0 && i < weeks.length - 1;
+}
+function setHeuresWeekUnlocked(weekId, on) {
+  const w = getHeuresWeeks().find(x => x.id === weekId);
+  if (!w) return;
+  if (on) w.unlocked = true; else delete w.unlocked;
+  save();
+  renderHeures();
+  showToast(on
+    ? 'Semaine déverrouillée — ses valeurs redeviennent vivantes, l\'écart S/S-1 de la semaine suivante va bouger'
+    : 'Semaine reverrouillée');
+}
+// Semaine qui précède celle-ci dans le classeur (null pour la première).
+function getHeuresPrevWeek(week) {
+  const weeks = getHeuresWeeks();
+  const i = weeks.findIndex(w => w.id === (week || {}).id);
+  return i > 0 ? weeks[i - 1] : null;
+}
+// Écarts au stade de la semaine précédente, par eOTP. LECTURE PURE : on ne
+// passe pas par getHeuresRow/resolveHeuresRow, qui écriraient dans le bucket
+// de cette semaine et détruiraient l'instantané qu'on vient y lire.
+function getHeuresPrevEcarts() {
+  const prev = getHeuresPrevWeek(getHeuresActiveWeek());
+  if (!prev) return null;
+  const bucket = (state.heuresData || {})[prev.id];
+  if (!bucket) return null;
+  const out = new Map();
+  for (const [id, raw] of Object.entries(bucket)) {
+    if (!raw || !raw.selected) continue;
+    out.set(id, computeHeuresRow(raw).ecart);
+  }
+  return out;
+}
 function setHeuresActiveWeek(weekId) {
   state.heuresActiveWeekId = weekId;
   save();
@@ -11311,10 +11363,13 @@ function getHeuresRow(eotpId) {
   }
   // Le budget heures n'est plus saisi dans le tableau : il est repris de la
   // ligne de budget correspondante (Données → eOTP, unité « h »). On le
-  // recopie dans l'instantané de la semaine pour que les totaux, les exports
-  // et les semaines archivées restent cohérents avec ce qui est affiché.
-  const eotp = getEOTPs().find(e => e.id === eotpId);
-  if (eotp) row.budgetHeures = Number(eotp.budget) || 0;
+  // recopie dans l'instantané de la semaine — MAIS seulement tant que la
+  // semaine est ouverte : une semaine verrouillée garde le budget qu'elle
+  // avait au moment où on l'a quittée.
+  if (!isHeuresWeekLocked(week)) {
+    const eotp = getEOTPs().find(e => e.id === eotpId);
+    if (eotp) row.budgetHeures = Number(eotp.budget) || 0;
+  }
   return row;
 }
 
@@ -11356,6 +11411,14 @@ function computeHeuresRow(row) {
            radHeures, fdcAuto, ecartFdc, ecart, ecartFdcCorrige, radCorrige, estimeAuTheorique };
 }
 
+// L'écart de la semaine ne se déduit pas d'une ligne seule : il lui faut la
+// même ligne la semaine d'avant. On l'ajoute au résultat au moment du rendu.
+// `prev` est la Map rendue par getHeuresPrevEcarts() (null = première semaine).
+function withHeuresEcartSem(comp, eotpId, prev) {
+  comp.ecartSem = (prev && prev.has(eotpId)) ? comp.ecart - prev.get(eotpId) : null;
+  return comp;
+}
+
 // Formatage heures : entier si rond, sinon 1 décimale, séparateurs FR.
 function fmtHeures(n) {
   const v = Number(n) || 0;
@@ -11384,6 +11447,7 @@ function setHeuresSapDate(value) {
 }
 
 function setHeuresField(eotpId, field, value) {
+  if (isHeuresWeekLocked(getHeuresActiveWeek())) return;   // semaine close
   const row = getHeuresRow(eotpId);
   if (field === 'unite') {
     row.unite = (value || '').trim();
@@ -11405,12 +11469,54 @@ function renderHeures() {
   invalidateHeuresModel();
   renderHeuresWeekTabs();
   renderHeuresEOTPSelect();
+  renderHeuresLockBar();
   renderHeuresTable();
   const addGroup = document.getElementById('heuresaddgroup');
   if (addGroup && !addGroup.dataset.bound) {
     addGroup.dataset.bound = '1';
     addGroup.addEventListener('click', addHeuresGroup);
   }
+}
+
+// Bandeau d'une semaine close. Il est posé AVANT le conteneur du tableau,
+// pas dedans : le conteneur défile horizontalement, un bloc placé à
+// l'intérieur sortirait de l'écran au premier geste — or c'est la seule
+// surface qui explique pourquoi les chiffres ne bougent plus.
+function renderHeuresLockBar() {
+  const wrap = document.getElementById('heurestablewrap');
+  if (!wrap || !wrap.parentNode) return;
+  const old = document.getElementById('heureslockbar');
+  if (old) old.remove();
+  const week = getHeuresActiveWeek();
+  if (!week) return;
+  const weeks = getHeuresWeeks();
+  const i = weeks.findIndex(w => w.id === week.id);
+  const archivee = i >= 0 && i < weeks.length - 1;
+  if (!archivee) return;
+
+  const bar = dbEl('div', 'heures-lock-bar');
+  bar.id = 'heureslockbar';
+  const verrou = isHeuresWeekLocked(week);
+  if (verrou) {
+    bar.appendChild(dbEl('strong', '', '\uD83D\uDD12 Semaine close.'));
+    bar.appendChild(dbEl('span', '',
+      'Ses valeurs sont figées telles qu\'elles étaient à la création de « '
+      + (weeks[i + 1].name || 'la semaine suivante')
+      + ' ». C\'est ce qui rend l\'écart S/S-1 fiable.'));
+  } else {
+    bar.appendChild(dbEl('strong', '', '\u26A0 Semaine rouverte.'));
+    bar.appendChild(dbEl('span', '',
+      'Ses valeurs redeviennent vivantes : l\'écart S/S-1 de « '
+      + (weeks[i + 1].name || 'la semaine suivante') + ' » va bouger avec elles.'));
+  }
+  const btn = dbEl('button', 'heures-lock-btn', verrou ? 'Rouvrir' : 'Reverrouiller');
+  btn.type = 'button';
+  btn.title = verrou
+    ? 'Rouvrir cette semaine pour corriger une saisie. Les écarts de la semaine suivante s\'en trouveront modifiés.'
+    : 'Refermer cette semaine et refiger ses valeurs.';
+  btn.addEventListener('click', () => setHeuresWeekUnlocked(week.id, verrou));
+  bar.appendChild(btn);
+  wrap.parentNode.insertBefore(bar, wrap);
 }
 
 // Onglets de semaines, design « classeur ». L'onglet actif porte un champ
@@ -11425,8 +11531,10 @@ function renderHeuresWeekTabs() {
   for (const w of weeks) {
     const isActive = active && w.id === active.id;
     const tab = document.createElement('div');
-    tab.className = 'heures-week-tab' + (isActive ? ' is-active' : '');
+    const close = isHeuresWeekLocked(w);
+    tab.className = 'heures-week-tab' + (isActive ? ' is-active' : '') + (close ? ' is-locked' : '');
     tab.dataset.weekId = w.id;
+    if (close) tab.title = 'Semaine close : ses valeurs sont figées';
 
     if (isActive) {
       // Onglet actif : nom éditable + petite croix de suppression.
@@ -11459,6 +11567,7 @@ function renderHeuresWeekTabs() {
       btn.textContent = w.name || '(sans nom)';
       btn.addEventListener('click', () => setHeuresActiveWeek(w.id));
       tab.appendChild(btn);
+      if (close) tab.appendChild(dbEl('span', 'heures-week-lock', '\uD83D\uDD12'));
     }
     el.appendChild(tab);
   }
@@ -11498,7 +11607,10 @@ function resolveHeuresRow(eotp, model) {
   // afficherait les dernières valeurs recopiées sans qu'on sache pourquoi
   // elles ne bougent plus.
   const orphan = !link && !!eotp.setupId;
-  if (link) {
+  // Reprise des quantités depuis l'ouvrage : elle s'arrête au verrouillage,
+  // sinon saisir de l'avancement aujourd'hui réécrirait les quantités des
+  // semaines déjà closes.
+  if (link && !isHeuresWeekLocked(getHeuresActiveWeek())) {
     row.unite = link.unit || '';
     row.qteTotal = Math.round(link.qtyTotal * 100) / 100;
     row.qteRealisee = Math.round(link.qtyDone * 100) / 100;
@@ -11624,28 +11736,128 @@ function heuresEOTPPanelEsc(e) { if (e.key === 'Escape') closeHeuresEOTPPanel();
 // acquis, puis le constat AU STADE, puis la projection EN FIN DE CHANTIER.
 const HEURES_COLUMNS = [
   { key: 'taches',          label: 'Tâches',            kind: 'label' },
-  { key: 'budgetHeures',    label: 'Budget heure',      kind: 'calc', title: 'Budget de la ligne eOTP saisi dans Données → eOTP (unité « h »)' },
-  { key: 'unite',           label: 'Unités',            kind: 'text' },
-  { key: 'ratio',           label: 'Ratio théo.',       kind: 'calc', title: 'Ratio théorique : Budget heure ÷ Qté totale' },
-  { key: 'qteTotal',        label: 'Qté totale',        kind: 'num',  title: 'Quantité totale de l\'ouvrage' },
-  { key: 'qteRealisee',     label: 'Qté réalisée',      kind: 'num',  title: 'Quantité réalisée au stade — saisie manuelle' },
-  { key: 'qteRestante',     label: 'Qté restante',      kind: 'calc', title: 'Quantité restant à réaliser : Qté totale − Qté réalisée. Exprimée dans l\'unité de la ligne, pas en heures — voir « RAD (h) ».' },
-  { key: 'avancement',      label: 'Avanc.',            kind: 'calc', title: 'Avancement : Qté réalisée ÷ Qté totale' },
-  { key: 'droit',           label: 'Droit à dép.',      kind: 'calc', title: 'Droit à dépenser : Budget heure × avancement (valeur acquise)' },
-  { key: 'sap',             label: 'SAP',               kind: 'num' },
-  { key: 'correction',      label: 'Correction',        kind: 'num',  title: 'Correction PUMA − SAP : de combien le PUMA dépasse le SAP. Elle est RETRANCHÉE du PUMA cumulé. Peut être négative.' },
-  { key: 'pumaCumule',      label: 'PUMA cum.',         kind: 'num',  title: 'PUMA cumulé' },
-  { key: 'pumaEcart',       label: 'PUMA corrigé',      kind: 'calc', title: 'PUMA cumulé − Correction : les heures pointées, recalées sur la référence SAP' },
-  { key: 'ecart',           label: 'Écart au stade',    kind: 'calc', title: 'Droit à dépenser − PUMA corrigé. Positif = dans le budget à ce jour.' },
-  { key: 'ratioActuel',     label: 'Ratio actuel',      kind: 'calc', title: 'PUMA corrigé ÷ Qté réalisée — le ratio réellement constaté' },
-  { key: 'radHeures',       label: 'RAD (h)',           kind: 'calc', title: 'Reste à dépenser : Qté restante × ratio actuel. Au ratio théorique tant qu\'aucune quantité n\'est réalisée.' },
-  { key: 'fdcAuto',         label: 'FDC auto',          kind: 'calc', title: 'Fin de chantier projetée : PUMA corrigé + RAD (h)' },
-  { key: 'ecartFdc',        label: 'Écart FDC',         kind: 'calc', title: 'Budget heure − FDC auto : le dépassement projeté en fin de chantier. Positif = on rentre dans le budget.' },
-  { key: 'ecartFdcCorrige', label: 'Écart FDC corr.',   kind: 'num',  title: 'Votre appréciation de l\'écart en fin de chantier, quand le calcul automatique ne reflète pas ce que vous savez du chantier. Saisie manuelle.' },
-  { key: 'radCorrige',      label: 'RAD corrigé',       kind: 'calc', title: 'Budget heure − PUMA corrigé − Écart FDC corrigé : les heures qu\'il reste à dépenser sous votre projection' }
+  { key: 'budgetHeures',    label: 'Budget heure',      kind: 'calc', cat: 'budget',     title: 'Budget de la ligne eOTP saisi dans Données → eOTP (unité « h »)' },
+  { key: 'unite',           label: 'Unités',            kind: 'text', cat: 'budget' },
+  { key: 'ratio',           label: 'Ratio théo.',       kind: 'calc', cat: 'budget',     title: 'Ratio théorique : Budget heure ÷ Qté totale' },
+  { key: 'qteTotal',        label: 'Qté totale',        kind: 'num',  cat: 'budget',     title: 'Quantité totale de l\'ouvrage' },
+  { key: 'qteRealisee',     label: 'Qté réalisée',      kind: 'num',  cat: 'avancement', title: 'Quantité réalisée au stade — saisie manuelle' },
+  { key: 'avancement',      label: 'Avanc.',            kind: 'calc', cat: 'avancement', title: 'Avancement : Qté réalisée ÷ Qté totale' },
+  { key: 'droit',           label: 'Droit à dép.',      kind: 'calc', cat: 'avancement', title: 'Droit à dépenser : Budget heure × avancement (valeur acquise)' },
+  { key: 'sap',             label: 'SAP',               kind: 'num',  cat: 'sap' },
+  { key: 'correction',      label: 'Correction',        kind: 'num',  cat: 'sap',        title: 'Correction PUMA − SAP : de combien le PUMA dépasse le SAP. Elle est RETRANCHÉE du PUMA cumulé. Peut être négative.' },
+  { key: 'pumaCumule',      label: 'PUMA cum.',         kind: 'num',  cat: 'puma',       title: 'PUMA cumulé' },
+  { key: 'pumaEcart',       label: 'PUMA corrigé',      kind: 'calc', cat: 'puma',       title: 'PUMA cumulé − Correction : les heures pointées, recalées sur la référence SAP' },
+  { key: 'ecart',           label: 'Écart au stade',    kind: 'calc', cat: 'stade',      title: 'Droit à dépenser − PUMA corrigé. Positif = dans le budget à ce jour.' },
+  { key: 'ratioActuel',     label: 'Ratio actuel',      kind: 'calc', cat: 'stade',      title: 'PUMA corrigé ÷ Qté réalisée — le ratio réellement constaté' },
+  { key: 'radHeures',       label: 'RAD (h)',           kind: 'calc', cat: 'fdc',        title: 'Reste à dépenser : (Qté totale − Qté réalisée) × ratio actuel. Au ratio théorique tant qu\'aucune quantité n\'est réalisée.' },
+  { key: 'fdcAuto',         label: 'FDC auto',          kind: 'calc', cat: 'fdc',        title: 'Fin de chantier projetée : PUMA corrigé + RAD (h)' },
+  { key: 'ecartFdc',        label: 'Écart FDC',         kind: 'calc', cat: 'fdc',        title: 'Budget heure − FDC auto : le dépassement projeté en fin de chantier. Positif = on rentre dans le budget.' },
+  { key: 'ecartFdcCorrige', label: 'Écart FDC corr.',   kind: 'num',  cat: 'manuel',     title: 'Votre appréciation de l\'écart en fin de chantier, quand le calcul automatique ne reflète pas ce que vous savez du chantier. Saisie manuelle.' },
+  { key: 'radCorrige',      label: 'RAD corrigé',       kind: 'calc', cat: 'manuel',     title: 'Budget heure − PUMA corrigé − Écart FDC corrigé : les heures qu\'il reste à dépenser sous votre projection' },
+  { key: 'ecartSem',        label: 'Écart S/S-1',       kind: 'calc', cat: 'evolution',  title: 'Écart au stade de cette semaine − celui de la semaine précédente. Positif = on a gagné cette semaine.' }
 ];
 // Colonnes d'écart : vert quand c'est favorable, rouge quand ça dépasse.
-const HEURES_SIGNED_COLUMNS = new Set(['ecart', 'ecartFdc']);
+const HEURES_SIGNED_COLUMNS = new Set(['ecart', 'ecartFdc', 'ecartSem']);
+// Colonnes réellement saisies à la main : elles portent un contraste crème
+// pour se repérer d'un coup d'œil dans un tableau de vingt colonnes.
+const HEURES_SAISIE_COLUMNS = new Set(['qteRealisee', 'pumaCumule']);
+
+// --- Catégories d'en-tête (1re rangée du THEAD), repliables ---------------
+// Les bandeaux se déduisent des SUITES CONTIGUËS de même `cat` : l'ordre des
+// bandeaux ne peut donc pas diverger de celui des colonnes, et ajouter ou
+// retirer une colonne fait apparaître ou disparaître sa catégorie toute seule.
+const HEURES_CAT_META = {
+  budget:     { label: 'Budget',     abbr: 'Budget' },
+  avancement: { label: 'Avancement', abbr: 'Avanc.' },
+  sap:        { label: 'SAP',        abbr: 'SAP' },
+  puma:       { label: 'PUMA',       abbr: 'PUMA' },
+  stade:      { label: 'Au stade',   abbr: 'Stade' },
+  fdc:        { label: 'FDC auto',   abbr: 'FDC' },
+  manuel:     { label: 'Manuel',     abbr: 'Manuel' },
+  evolution:  { label: 'Évolution',  abbr: 'S/S-1' }
+};
+function getHeuresCatRuns() {
+  const runs = [];
+  for (const col of HEURES_COLUMNS) {
+    if (!col.cat) continue;                       // la colonne Tâches n'en a pas
+    const last = runs[runs.length - 1];
+    if (last && last.key === col.cat) { last.cols.push(col); continue; }
+    const meta = HEURES_CAT_META[col.cat] || { label: col.cat, abbr: col.cat };
+    runs.push({ key: col.cat, label: meta.label, abbr: meta.abbr, cols: [col] });
+  }
+  return runs;
+}
+// Première colonne de chaque catégorie : elle porte le trait de séparation.
+function getHeuresCatStarts() {
+  return new Set(getHeuresCatRuns().map(r => r.cols[0].key));
+}
+function getHeuresCollapsedCats() {
+  if (!Array.isArray(state.heuresColsCollapsed)) state.heuresColsCollapsed = [];
+  return new Set(state.heuresColsCollapsed);
+}
+function toggleHeuresCat(key) {
+  const set = getHeuresCollapsedCats();
+  if (set.has(key)) set.delete(key); else set.add(key);
+  const known = new Set(getHeuresCatRuns().map(r => r.key));
+  state.heuresColsCollapsed = [...set].filter(k => known.has(k));   // purge des clés obsolètes
+  save();
+  renderHeuresTable();   // pas renderHeures() : les onglets et le sélecteur ne changent pas
+}
+// Cellules réellement émises, hors colonne Tâches, dans l'ordre d'affichage :
+//   { t:'col', col, start } pour une colonne, { t:'fold', run } pour un pli.
+function getHeuresVisibleCells() {
+  const collapsed = getHeuresCollapsedCats();
+  const out = [];
+  for (const run of getHeuresCatRuns()) {
+    if (collapsed.has(run.key)) { out.push({ t: 'fold', run }); continue; }
+    run.cols.forEach((col, i) => out.push({ t: 'col', col, start: i === 0 }));
+  }
+  return out;
+}
+
+// Largeurs : un pourcentage pour l'affichage, un plancher en pixels pour la
+// min-width. Sans <colgroup>, `table-layout: fixed` prendrait ses largeurs sur
+// la PREMIÈRE rangée — celle des catégories, dont les cellules ont un colSpan —
+// et les répartirait à parts égales.
+const HEURES_NARROW_COLS = new Set(['unite', 'ratio', 'avancement', 'ratioActuel']);
+const HEURES_W   = { label: 13.0, wide: 4.70, narrow: 3.50, fold: 2.20 };  // %
+const HEURES_MIN = { label: 186,  wide: 68,   narrow: 52,   fold: 32 };    // px
+function heuresCellMetrics(cell) {
+  if (cell.t === 'fold') return { pct: HEURES_W.fold, min: HEURES_MIN.fold };
+  return HEURES_NARROW_COLS.has(cell.col.key)
+    ? { pct: HEURES_W.narrow, min: HEURES_MIN.narrow }
+    : { pct: HEURES_W.wide,   min: HEURES_MIN.wide };
+}
+function buildHeuresColgroup(cells) {
+  const cg = document.createElement('colgroup');
+  const first = document.createElement('col');
+  first.style.width = HEURES_W.label + '%';
+  cg.appendChild(first);
+  const m = cells.map(heuresCellMetrics);
+  const rest = 100 - HEURES_W.label;
+  const tot = m.reduce((a, x) => a + x.pct, 0) || 1;
+  cells.forEach((cell, k) => {
+    const c = document.createElement('col');
+    c.className = cell.t === 'fold' ? 'heures-colw-fold' : 'heures-colw-' + cell.col.key;
+    // Renormalisation : les colonnes visibles remplissent toujours 100 %,
+    // repliées ou non — sinon replier laisserait un vide réparti au hasard.
+    c.style.width = (m[k].pct * rest / tot).toFixed(3) + '%';
+    cg.appendChild(c);
+  });
+  return cg;
+}
+function heuresMinWidth(cells) {
+  return HEURES_MIN.label + cells.reduce((a, c) => a + heuresCellMetrics(c).min, 0);
+}
+// Bande d'une catégorie repliée : un accordéon fermé, cliquable sur toute sa
+// hauteur pour redéplier.
+function buildHeuresFoldCell(run, tag) {
+  const el = document.createElement(tag || 'td');
+  el.className = 'heures-fold heures-fold-' + run.key;
+  el.dataset.cat = run.key;
+  el.title = 'Déplier « ' + run.label + ' » (' + run.cols.map(c => c.label).join(', ') + ')';
+  return el;
+}
 
 // Texte affiché pour une cellule calculée donnée.
 function heuresCalcText(key, comp) {
@@ -11654,7 +11866,6 @@ function heuresCalcText(key, comp) {
     case 'ratio':        return comp.ratio != null ? fmtHeures(comp.ratio) : '—';
     case 'avancement':   return comp.avancement != null ? Math.round(comp.avancement * 100) + ' %' : '—';
     case 'droit':        return fmtHeures(comp.droit) + ' h';
-    case 'qteRestante':  return comp.qteRestante != null ? fmtHeures(comp.qteRestante) : '—';
     case 'pumaEcart':    return fmtHeures(comp.pumaEcart) + ' h';
     case 'ratioActuel':  return comp.ratioActuel != null ? fmtHeures(comp.ratioActuel) : '—';
     case 'radHeures':    return comp.radHeures != null ? fmtHeures(comp.radHeures) + ' h' : '—';
@@ -11662,6 +11873,7 @@ function heuresCalcText(key, comp) {
     case 'ecartFdc':     return comp.ecartFdc != null ? fmtHeures(comp.ecartFdc) + ' h' : '—';
     case 'radCorrige':   return fmtHeures(comp.radCorrige) + ' h';
     case 'ecart':        return fmtHeures(comp.ecart) + ' h';
+    case 'ecartSem':     return comp.ecartSem != null ? fmtHeures(comp.ecartSem) + ' h' : '—';
     default:             return '—';
   }
 }
@@ -11890,7 +12102,7 @@ function moveHeuresItemBy(id, delta) {
 // (unité, quantités, ratios) ne le peuvent que si toutes les lignes partagent
 // la même unité — sinon on additionnerait des mètres carrés et des mètres
 // linéaires, et l'on affiche « — » plutôt qu'un chiffre faux.
-function buildHeuresGroupRow(group, members, model) {
+function buildHeuresGroupRow(group, members, model, prevEcarts) {
   const tr = document.createElement('tr');
   tr.className = 'heures-group';
   tr.setAttribute('data-group-row', group.id);
@@ -11898,9 +12110,12 @@ function buildHeuresGroupRow(group, members, model) {
 
   const agg = { budget: 0, droit: 0, sap: 0, corr: 0, puma: 0, pumaEcart: 0, ecart: 0,
                 radHeures: 0, fdc: 0, ecartFdc: 0, ecartFdcCorrige: 0, radCorrige: 0,
-                qteTotal: 0, qteReal: 0, qteRestante: 0 };
+                qteTotal: 0, qteReal: 0 };
   const units = new Set();
   let fdcManquants = 0;
+  // Écart de la semaine : somme des lignes qui existaient déjà la semaine
+  // d'avant. `ecartSemConnu` reste faux si aucune ne se compare.
+  let ecartSem = 0, ecartSemConnu = false;
   for (const e of members) {
     const { row } = resolveHeuresRow(e, model);
     const comp = computeHeuresRow(row);
@@ -11917,7 +12132,7 @@ function buildHeuresGroupRow(group, members, model) {
     else { agg.fdc += comp.fdcAuto; agg.radHeures += comp.radHeures; agg.ecartFdc += comp.ecartFdc; }
     agg.qteTotal += Number(row.qteTotal) || 0;
     agg.qteReal  += Number(row.qteRealisee) || 0;
-    if (comp.qteRestante != null) agg.qteRestante += comp.qteRestante;
+    if (prevEcarts && prevEcarts.has(e.id)) { ecartSem += comp.ecart - prevEcarts.get(e.id); ecartSemConnu = true; }
     if (row.unite) units.add(row.unite);
   }
   // Unité, quantités et ratios ne se totalisent que si toutes les lignes
@@ -11934,7 +12149,6 @@ function buildHeuresGroupRow(group, members, model) {
     ratio:           ratio != null ? fmtHeures(ratio) : '—',
     qteTotal:        sameUnit ? fmtHeures(agg.qteTotal) : '—',
     qteRealisee:     sameUnit ? fmtHeures(agg.qteReal) : '—',
-    qteRestante:     sameUnit ? fmtHeures(agg.qteRestante) : '—',
     avancement:      avancement != null ? Math.round(avancement * 100) + ' %' : '—',
     droit:           fmtHeures(agg.droit) + ' h',
     sap:             fmtHeures(agg.sap) + ' h',
@@ -11947,7 +12161,8 @@ function buildHeuresGroupRow(group, members, model) {
     fdcAuto:         fmtHeures(agg.fdc) + ' h' + partiel,
     ecartFdc:        fmtHeures(agg.ecartFdc) + ' h' + partiel,
     ecartFdcCorrige: fmtHeures(agg.ecartFdcCorrige) + ' h',
-    radCorrige:      fmtHeures(agg.radCorrige) + ' h'
+    radCorrige:      fmtHeures(agg.radCorrige) + ' h',
+    ecartSem:        ecartSemConnu ? fmtHeures(ecartSem) + ' h' : '—'
   };
 
   const th = document.createElement('th');
@@ -11983,19 +12198,23 @@ function buildHeuresGroupRow(group, members, model) {
   if (!members.length) {
     const hint = document.createElement('td');
     hint.className = 'heures-group-hint';
-    hint.colSpan = HEURES_COLUMNS.length - 1;
+    hint.colSpan = getHeuresVisibleCells().length;
     hint.textContent = 'Faites glisser une ligne juste en dessous pour la ranger ici';
     tr.appendChild(hint);
     return tr;
   }
 
-  for (const col of HEURES_COLUMNS) {
-    if (col.kind === 'label') continue;
+  for (const cell of getHeuresVisibleCells()) {
+    if (cell.t === 'fold') { tr.appendChild(buildHeuresFoldCell(cell.run)); continue; }
+    const col = cell.col;
     const td = document.createElement('td');
-    td.className = 'heures-col-' + col.key;
-    td.textContent = values[col.key];
+    td.className = 'heures-col-' + col.key + (cell.start ? ' is-cat-start' : '');
+    // `?? '—'` plutôt que la valeur brute : une colonne ajoutée à
+    // HEURES_COLUMNS sans être ajoutée ici se voit comme un tiret, pas comme
+    // le mot « undefined » au milieu d'un bandeau de totaux.
+    td.textContent = values[col.key] ?? '—';
     if (HEURES_SIGNED_COLUMNS.has(col.key)) {
-      const v = col.key === 'ecart' ? agg.ecart : agg.ecartFdc;
+      const v = col.key === 'ecart' ? agg.ecart : (col.key === 'ecartSem' ? ecartSem : agg.ecartFdc);
       td.classList.toggle('is-positive', v >= 0);
       td.classList.toggle('is-negative', v < 0);
     }
@@ -12009,11 +12228,91 @@ function buildHeuresGroupRow(group, members, model) {
   return tr;
 }
 
+// THEAD à deux rangées : bandeaux de catégories repliables, puis colonnes.
+function buildHeuresHead(cells, qteSaisissable, verrouillee) {
+  const thead = document.createElement('thead');
+  const trCat = dbEl('tr', 'heures-cats');
+  const trCol = dbEl('tr', 'heures-cols');
+  const collapsed = getHeuresCollapsedCats();
+
+  // Colonne Tâches : un seul th, à cheval sur les deux rangées.
+  const thT = document.createElement('th');
+  thT.scope = 'col';
+  thT.rowSpan = 2;
+  thT.className = 'heures-col-taches';
+  thT.textContent = HEURES_COLUMNS[0].label;
+  trCat.appendChild(thT);
+
+  for (const run of getHeuresCatRuns()) {
+    const folded = collapsed.has(run.key);
+    const thc = document.createElement('th');
+    thc.scope = 'colgroup';
+    thc.className = 'heures-cat heures-cat-' + run.key + (folded ? ' is-folded' : '');
+    thc.colSpan = folded ? 1 : run.cols.length;
+    const btn = dbEl('button', 'heures-cat-toggle');
+    btn.type = 'button';
+    btn.dataset.cat = run.key;
+    btn.setAttribute('aria-expanded', folded ? 'false' : 'true');
+    const liste = run.cols.map(c => c.label).join(', ');
+    btn.title = (folded ? 'Déplier « ' : 'Replier « ') + run.label + ' » (' + liste + ')'
+      + (run.key === 'sap' ? ' — SAP au ' + getHeuresSapDate() : '');
+    btn.setAttribute('aria-label', btn.title);
+    btn.appendChild(dbEl('span', 'heures-cat-label', folded ? run.abbr : run.label));
+    btn.appendChild(dbEl('span', 'heures-cat-chevron', folded ? '›' : '⌄'));
+    btn.addEventListener('click', (e) => { e.stopPropagation(); toggleHeuresCat(run.key); });
+    thc.appendChild(btn);
+    trCat.appendChild(thc);
+
+    if (folded) {
+      const th = buildHeuresFoldCell(run, 'th');
+      th.scope = 'col';
+      th.appendChild(dbEl('span', 'heures-fold-abbr', run.abbr));
+      trCol.appendChild(th);
+      continue;
+    }
+    run.cols.forEach((col, i) => {
+      const th = document.createElement('th');
+      th.scope = 'col';
+      th.className = 'heures-col-' + col.key + (col.kind === 'calc' ? ' is-calc' : '')
+        + (i === 0 ? ' is-cat-start' : '');
+      if (col.title) th.title = col.title;
+      // Contraste « à saisir » : jamais sur une semaine close, où plus rien
+      // ne se saisit, et jamais sur Qté réalisée si tout vient des ouvrages.
+      if (HEURES_SAISIE_COLUMNS.has(col.key) && !verrouillee
+          && (col.key !== 'qteRealisee' || qteSaisissable)) th.classList.add('is-saisie-head');
+      if (col.key === 'sap') {
+        // En-tête « SAP (date) » dont le texte entre parenthèses est éditable.
+        th.appendChild(document.createTextNode(col.label + ' ('));
+        const dateInput = document.createElement('input');
+        dateInput.type = 'text';
+        dateInput.className = 'heures-sap-date';
+        dateInput.value = getHeuresSapDate();
+        dateInput.maxLength = 12;
+        dateInput.disabled = !!verrouillee;
+        dateInput.setAttribute('aria-label', 'Date de référence SAP');
+        dateInput.addEventListener('input', () => setHeuresSapDate(dateInput.value));
+        th.appendChild(dateInput);
+        th.appendChild(document.createTextNode(')'));
+      } else {
+        th.textContent = col.label;
+      }
+      trCol.appendChild(th);
+    });
+  }
+  thead.appendChild(trCat);
+  thead.appendChild(trCol);
+  return thead;
+}
+
 function renderHeuresTable() {
   const wrap = document.getElementById('heurestablewrap');
   if (!wrap) return;
+  const sx = wrap.scrollLeft;            // replier ne doit pas nous ramener à gauche
   wrap.innerHTML = '';
 
+  const semaine = getHeuresActiveWeek();
+  const verrouillee = isHeuresWeekLocked(semaine);
+  const prevEcarts = getHeuresPrevEcarts();
   const candidates = getHeuresCandidates();
   const selected = candidates.filter(e => getHeuresRow(e.id).selected);
 
@@ -12031,33 +12330,18 @@ function renderHeuresTable() {
   const table = document.createElement('table');
   table.className = 'heures-table';
 
-  // THEAD
-  const thead = document.createElement('thead');
-  const hr = document.createElement('tr');
-  for (const col of HEURES_COLUMNS) {
-    const th = document.createElement('th');
-    th.scope = 'col';
-    th.className = 'heures-col-' + col.key + (col.kind === 'calc' ? ' is-calc' : '');
-    if (col.title) th.title = col.title;
-    if (col.key === 'sap') {
-      // En-tête « SAP (date) » dont le texte entre parenthèses est éditable.
-      th.appendChild(document.createTextNode(col.label + ' ('));
-      const dateInput = document.createElement('input');
-      dateInput.type = 'text';
-      dateInput.className = 'heures-sap-date';
-      dateInput.value = getHeuresSapDate();
-      dateInput.maxLength = 12;
-      dateInput.setAttribute('aria-label', 'Date de référence SAP');
-      dateInput.addEventListener('input', () => setHeuresSapDate(dateInput.value));
-      th.appendChild(dateInput);
-      th.appendChild(document.createTextNode(')'));
-    } else {
-      th.textContent = col.label;
-    }
-    hr.appendChild(th);
-  }
-  thead.appendChild(hr);
-  table.appendChild(thead);
+  // THEAD : bandeaux de catégories puis intitulés de colonnes. Le colgroup
+  // porte les largeurs — avec table-layout:fixed, sans lui, elles seraient
+  // prises sur la première rangée (celle des catégories, à colSpan) et
+  // réparties à parts égales.
+  const cells = getHeuresVisibleCells();
+  // Teinte « à saisir » sur l'en-tête Qté réalisée : seulement si au moins une
+  // ligne affichée est encore saisissable. Les lignes rattachées à un ouvrage
+  // sont en lecture seule — y annoncer « à saisir » serait faux.
+  const qteSaisissable = selected.some(e => !resolveHeuresRow(e, model).link);
+  table.appendChild(buildHeuresColgroup(cells));
+  table.style.minWidth = heuresMinWidth(cells) + 'px';
+  table.appendChild(buildHeuresHead(cells, qteSaisissable, verrouillee));
 
   // TBODY — l'ordre et les rubriques viennent de state.heuresLayout. Les
   // lignes non cochées pour la semaine active sont masquées, mais gardent
@@ -12081,21 +12365,38 @@ function renderHeuresTable() {
       // Membres visibles de la rubrique, pour la semaine active.
       const members = getHeuresGroupMembers(layout, it.id)
         .filter(m => selIds.has(m.id)).map(m => byId.get(m.id));
-      tbody.appendChild(buildHeuresGroupRow(it, members, model));
+      tbody.appendChild(buildHeuresGroupRow(it, members, model, prevEcarts));
       continue;
     }
     if (!selIds.has(it.id)) continue;
-    tbody.appendChild(buildHeuresRow(byId.get(it.id), model, it.g, lastOfGroup.has(it.id)));
+    tbody.appendChild(buildHeuresRow(byId.get(it.id), model, it.g, lastOfGroup.has(it.id),
+                                     { verrouillee, prevEcarts, cells }));
   }
   table.appendChild(tbody);
 
   // TFOOT (totaux)
-  table.appendChild(buildHeuresFoot(selected));
+  table.appendChild(buildHeuresFoot(selected, prevEcarts));
 
   wrap.appendChild(table);
+  wrap.scrollLeft = sx;
+  // La 2e rangée du THEAD colle SOUS la 1re : son `top` vaut la hauteur réelle
+  // de la rangée de catégories, qui dépend de la police et du zoom.
+  requestAnimationFrame(() => {
+    const r0 = table.tHead && table.tHead.rows[0];
+    if (r0) table.style.setProperty('--heures-cat-h', Math.round(r0.getBoundingClientRect().height) + 'px');
+  });
+  // Une bande repliée se déplie d'un clic n'importe où dans sa colonne.
+  table.addEventListener('click', (e) => {
+    const f = e.target.closest('.heures-fold');
+    if (f && f.dataset.cat) toggleHeuresCat(f.dataset.cat);
+  });
 }
 
-function buildHeuresRow(eotp, model, groupId, lastOfGroup) {
+function buildHeuresRow(eotp, model, groupId, lastOfGroup, opts) {
+  const o = opts || {};
+  const verrouillee = o.verrouillee != null ? o.verrouillee : isHeuresWeekLocked(getHeuresActiveWeek());
+  const prevEcarts = o.prevEcarts !== undefined ? o.prevEcarts : getHeuresPrevEcarts();
+  const cells = o.cells || getHeuresVisibleCells();
   const { row, link, orphan, setup } = resolveHeuresRow(eotp, model || getHeuresAvancementModel());
   const tr = document.createElement('tr');
   tr.setAttribute('data-heures-id', eotp.id);
@@ -12107,8 +12408,8 @@ function buildHeuresRow(eotp, model, groupId, lastOfGroup) {
   }
 
   heuresAttachDrag(tr, eotp.id);
-  for (const col of HEURES_COLUMNS) {
-    if (col.kind === 'label') {
+  {
+      const col = HEURES_COLUMNS[0];
       const th = document.createElement('th');
       th.scope = 'row';
       th.className = 'heures-cell-label';
@@ -12129,10 +12430,12 @@ function buildHeuresRow(eotp, model, groupId, lastOfGroup) {
         th.appendChild(tag);
       }
       tr.appendChild(th);
-      continue;
-    }
+  }
+  for (const cell of cells) {
+    if (cell.t === 'fold') { tr.appendChild(buildHeuresFoldCell(cell.run)); continue; }
+    const col = cell.col;
     const td = document.createElement('td');
-    td.className = 'heures-col-' + col.key;
+    td.className = 'heures-col-' + col.key + (cell.start ? ' is-cat-start' : '');
     // Champ alimenté par l'ouvrage rattaché : lecture seule, comme une
     // colonne calculée — la donnée vient de la saisie d'avancement.
     if (link && HEURES_AUTO_FIELDS.has(col.key)) {
@@ -12150,6 +12453,7 @@ function buildHeuresRow(eotp, model, groupId, lastOfGroup) {
       input.type = 'text';
       input.className = 'heures-input';
       input.setAttribute('data-field', col.key);
+      input.disabled = verrouillee;
       if (col.kind === 'num') {
         input.inputMode = 'decimal';
         input.value = fmtHeuresInput(row[col.key]);
@@ -12161,17 +12465,23 @@ function buildHeuresRow(eotp, model, groupId, lastOfGroup) {
       }
       input.addEventListener('input', () => setHeuresField(eotp.id, col.key, input.value));
       td.appendChild(input);
+      // Contraste « à saisir » : posé sur la cellule uniquement là où un champ
+      // est réellement modifiable — jamais sur une valeur reprise d'un ouvrage
+      // ni sur une semaine close, où il mentirait.
+      if (HEURES_SAISIE_COLUMNS.has(col.key) && !verrouillee) td.classList.add('is-saisie');
     }
     tr.appendChild(td);
   }
   // Pose les valeurs calculées initiales
-  applyHeuresComputedToRow(tr, row);
+  applyHeuresComputedToRow(tr, row, prevEcarts, eotp.id);
   return tr;
 }
 
 // Met à jour les cellules calculées d'une ligne (et colore les écarts).
-function applyHeuresComputedToRow(tr, row) {
-  const comp = computeHeuresRow(row);
+function applyHeuresComputedToRow(tr, row, prevEcarts, eotpId) {
+  const comp = withHeuresEcartSem(computeHeuresRow(row),
+    eotpId || tr.getAttribute('data-heures-id'),
+    prevEcarts !== undefined ? prevEcarts : getHeuresPrevEcarts());
   for (const col of HEURES_COLUMNS) {
     if (col.kind !== 'calc') continue;
     const td = tr.querySelector('.heures-calc-' + col.key);
@@ -12198,23 +12508,24 @@ function applyHeuresComputedToRow(tr, row) {
 // Re-rendu ciblé après saisie : recalcule la ligne concernée + le pied,
 // sans toucher aux inputs (préserve le focus).
 function refreshHeuresComputed(eotpId) {
+  const prevEcarts = getHeuresPrevEcarts();
   const tr = document.querySelector('tr[data-heures-id="' + cssEscape(eotpId) + '"]');
-  if (tr) applyHeuresComputedToRow(tr, getHeuresRow(eotpId));
+  if (tr) applyHeuresComputedToRow(tr, getHeuresRow(eotpId), prevEcarts, eotpId);
   const model = getHeuresAvancementModel();
   const selected = getHeuresCandidates().filter(e => getHeuresRow(e.id).selected);
   for (const e of selected) resolveHeuresRow(e, model);
   const tfoot = document.querySelector('.heures-table tfoot');
   if (tfoot) {
-    const fresh = buildHeuresFoot(selected);
+    const fresh = buildHeuresFoot(selected, prevEcarts);
     tfoot.replaceWith(fresh);
   }
-  refreshHeuresGroupRows(model, selected);
+  refreshHeuresGroupRows(model, selected, prevEcarts);
 }
 
 // Les rubriques totalisent leurs lignes : une saisie dans une ligne change
 // leur bandeau. On les reconstruit sur place, sans re-rendre le tableau —
 // le champ en cours de saisie garde le focus.
-function refreshHeuresGroupRows(model, selected) {
+function refreshHeuresGroupRows(model, selected, prevEcarts) {
   const rows = document.querySelectorAll('.heures-table tr.heures-group');
   if (!rows.length) return;
   const active = document.activeElement;
@@ -12230,7 +12541,7 @@ function refreshHeuresGroupRows(model, selected) {
     const editing = active && tr.contains(active);
     const members = getHeuresGroupMembers(layout, gid)
       .filter(m => selIds.has(m.id)).map(m => byId.get(m.id));
-    const fresh = buildHeuresGroupRow(group, members, model);
+    const fresh = buildHeuresGroupRow(group, members, model, prevEcarts);
     if (!editing) { tr.replaceWith(fresh); continue; }
     for (const col of HEURES_COLUMNS) {
       if (col.kind === 'label') continue;
@@ -12249,7 +12560,7 @@ function cssEscape(s) {
   return String(s).replace(/["\\]/g, '\\$&');
 }
 
-function buildHeuresFoot(selected) {
+function buildHeuresFoot(selected, prevEcarts) {
   const tfoot = document.createElement('tfoot');
   const tr = document.createElement('tr');
 
@@ -12276,6 +12587,12 @@ function buildHeuresFoot(selected) {
   // Avancement global pondéré par les budgets : Σ droit / Σ budget
   const globalAvancement = sum.budget > 0 ? sum.droit / sum.budget : null;
   const partiel = fdcManquants > 0 ? ' *' : '';
+  let ecartSemTotal = null;
+  if (prevEcarts && prevEcarts.size) {
+    let prevTotal = 0;
+    for (const v of prevEcarts.values()) prevTotal += v;
+    ecartSemTotal = sum.ecart - prevTotal;
+  }
 
   const footValues = {
     taches:          'Total',
@@ -12284,7 +12601,6 @@ function buildHeuresFoot(selected) {
     ratio:           '—',
     qteTotal:        '—',
     qteRealisee:     '—',
-    qteRestante:     '—',
     avancement:      globalAvancement != null ? Math.round(globalAvancement * 100) + ' %' : '—',
     droit:           fmtHeures(sum.droit) + ' h',
     sap:             fmtHeures(sum.sap) + ' h',
@@ -12297,7 +12613,12 @@ function buildHeuresFoot(selected) {
     fdcAuto:         fmtHeures(sum.fdc) + ' h' + partiel,
     ecartFdc:        fmtHeures(sum.ecartFdc) + ' h' + partiel,
     ecartFdcCorrige: fmtHeures(sum.ecartFdcCorrige) + ' h',
-    radCorrige:      fmtHeures(sum.radCorrige) + ' h'
+    radCorrige:      fmtHeures(sum.radCorrige) + ' h',
+    // Total de l'écart de la semaine : la DIFFÉRENCE DES TOTAUX, pas la somme
+    // des différences de lignes. Sinon une ligne ajoutée au suivi cette
+    // semaine sortirait du compte et le total afficherait un mouvement nul
+    // pendant que le solde glisse.
+    ecartSem:        ecartSemTotal != null ? fmtHeures(ecartSemTotal) + ' h' : '—'
   };
   const partielTitre = fdcManquants > 0
     ? 'Total sur ' + (selected.length - fdcManquants) + ' lignes sur ' + selected.length
@@ -12305,14 +12626,23 @@ function buildHeuresFoot(selected) {
       + ' sans quantité totale, donc non projetable.'
     : '';
 
-  for (const col of HEURES_COLUMNS) {
-    const cell = document.createElement(col.kind === 'label' ? 'th' : 'td');
-    if (col.kind === 'label') cell.scope = 'row';
-    cell.className = 'heures-col-' + col.key;
-    cell.textContent = footValues[col.key];
+  // Cellule « Total », toujours émise en premier.
+  const thTot = document.createElement('th');
+  thTot.scope = 'row';
+  thTot.className = 'heures-col-taches';
+  thTot.textContent = footValues.taches;
+  tr.appendChild(thTot);
+  for (const cell2 of getHeuresVisibleCells()) {
+    if (cell2.t === 'fold') { tr.appendChild(buildHeuresFoldCell(cell2.run)); continue; }
+    const col = cell2.col;
+    const cell = document.createElement('td');
+    cell.className = 'heures-col-' + col.key + (cell2.start ? ' is-cat-start' : '');
+    cell.textContent = footValues[col.key] ?? '—';
     if (HEURES_SIGNED_COLUMNS.has(col.key)) {
-      cell.classList.toggle('is-positive', sum[col.key === 'ecart' ? 'ecart' : 'ecartFdc'] >= 0);
-      cell.classList.toggle('is-negative', sum[col.key === 'ecart' ? 'ecart' : 'ecartFdc'] < 0);
+      const v = col.key === 'ecart' ? sum.ecart
+              : (col.key === 'ecartSem' ? ecartSemTotal : sum.ecartFdc);
+      cell.classList.toggle('is-positive', v != null && v >= 0);
+      cell.classList.toggle('is-negative', v != null && v < 0);
     }
     if (partielTitre && (col.key === 'radHeures' || col.key === 'fdcAuto' || col.key === 'ecartFdc')) {
       cell.title = partielTitre;
@@ -19462,6 +19792,7 @@ const SYNC_EXCLUDED_KEYS = new Set([
   'consoRecapMode',                  // mode récap conso perso
   'stockCBMode',                     // mode récap CB stock perso
   'stockPeriod', 'stockSort', 'stockQuery', 'stockMoveFilter', // affichage du Stock (UI)
+  'heuresColsCollapsed',             // colonnes repliées du suivi des heures
   'protoActivePlanId',               // plan en cours d'édition
   'protoFilterLotId', 'protoFilterTitle', 'protoFilterStatuses', // filtres Proto
   'echeckinCollapsed',               // sections eCheckIn pliées/dépliées

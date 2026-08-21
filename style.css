@@ -7165,15 +7165,19 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   border-radius: var(--radius);
   background: var(--surface);
 }
-/* Largeurs figées. Les 20 colonnes tiennent sans défilement à partir de
-   ~1 460 px ; en deçà (petit écran, tablette, téléphone), le conteneur défile
-   et la colonne des tâches reste accrochée à gauche. */
+/* Largeurs portées par le <colgroup> construit en JS : avec
+   `table-layout: fixed`, sans lui, elles seraient prises sur la PREMIÈRE
+   rangée — celle des catégories, dont les cellules ont un colSpan — et
+   réparties à parts égales. La min-width est elle aussi posée en inline
+   (heuresMinWidth) ; la valeur ci-dessous n'est que le repli avant le
+   premier rendu. Replier une catégorie rétrécit réellement le tableau. */
 .heures-table {
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
   width: 100%;
-  min-width: 1460px;
+  min-width: 1418px;
+  --heures-cat-h: 24px;
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
 }
@@ -7184,8 +7188,22 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis;
 }
-.heures-table thead th {
-  position: sticky; top: 0; z-index: 2;
+/* Rangée 1 : bandeaux de catégories, repliables d'un clic. */
+.heures-table thead tr.heures-cats th {
+  position: sticky; top: 0; z-index: 5;
+  height: var(--heures-cat-h);
+  padding: 2px 4px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 10.5px; font-weight: 800; letter-spacing: 0.02em;
+  text-transform: uppercase; text-align: center;
+  white-space: nowrap; overflow: hidden;
+  border-bottom: 1px solid var(--border);
+  border-left: 1px solid var(--border-strong);
+}
+/* Rangée 2 : intitulés de colonnes, collés sous la rangée des catégories. */
+.heures-table thead tr.heures-cols th {
+  position: sticky; top: var(--heures-cat-h); z-index: 4;
   background: var(--surface-2);
   font-weight: 700;
   color: var(--text-2);
@@ -7219,19 +7237,21 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   text-align: left;
   font-weight: 700;
   color: var(--text);
-  width: 13.5%;
   white-space: normal;
   border-right: 1px solid var(--border);
 }
-/* Les dix-neuf colonnes de chiffres se partagent le reste à parts égales ;
-   les quatre plus courtes rendent quelques pixels aux autres. */
-.heures-table th:not(.heures-col-taches),
-.heures-table td:not(.heures-cell-label):not(.heures-col-taches) { width: 4.75%; }
-.heures-table .heures-col-unite,
-.heures-table .heures-col-ratio,
-.heures-table .heures-col-ratioActuel,
-.heures-table .heures-col-avancement { width: 3.7%; }
-.heures-table thead .heures-col-taches { z-index: 3; background: var(--surface-2); }
+/* Coin figé : à cheval sur les deux rangées ET collé à gauche. */
+.heures-table thead th.heures-col-taches {
+  position: sticky; left: 0; top: 0; z-index: 6;
+  background: var(--surface-2);
+  border-left: none;
+  vertical-align: bottom;
+}
+/* Trait de séparation des catégories, posé sur la MÊME colonne dans toutes
+   les rangées — aucun décalage possible en table-layout: fixed. */
+.heures-table th.is-cat-start,
+.heures-table td.is-cat-start { border-left: 1px solid var(--border-strong); }
+.heures-table tbody tr.heures-group td.is-cat-start { border-left-color: var(--accent-dark); }
 .heures-table tbody tr:nth-child(even) .heures-cell-label { background: var(--surface-2); }
 .heures-table tbody tr:nth-child(even) td { background: var(--surface-2); }
 
@@ -7275,6 +7295,90 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   background: var(--bg);
   box-shadow: 0 0 0 2px var(--accent-glow);
 }
+
+/* ----- Repli d'une catégorie de colonnes ----- */
+.heures-cat-toggle {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  max-width: 100%;
+  border: none; background: transparent;
+  font: inherit; color: inherit;
+  padding: 2px 4px; border-radius: var(--radius-sm);
+  cursor: pointer; white-space: nowrap; overflow: hidden;
+}
+.heures-cat-toggle:hover { background: var(--accent-soft); color: var(--accent); }
+.heures-cat-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.heures-cat-chevron { font-size: 9px; opacity: 0.7; }
+.heures-table thead th.heures-cat.is-folded { padding: 2px 0; }
+.heures-table thead th.heures-cat.is-folded .heures-cat-toggle { padding: 2px 1px; font-size: 9px; }
+/* Bande repliée : un accordéon fermé, cliquable sur toute sa hauteur. */
+.heures-table th.heures-fold,
+.heures-table td.heures-fold {
+  padding: 4px 2px; text-align: center; cursor: pointer;
+  border-left: 1px solid var(--border-strong);
+}
+.heures-fold-abbr {
+  writing-mode: vertical-rl; text-orientation: mixed;
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+/* Hachure discrète — assez spécifique pour battre la règle des lignes paires. */
+.heures-table tbody tr:not(.heures-group) td.heures-fold,
+.heures-table tbody tr:nth-child(even):not(.heures-group) td.heures-fold {
+  background: repeating-linear-gradient(135deg,
+    var(--surface-2) 0 4px, var(--surface-3) 4px 8px);
+}
+.heures-table tfoot td.heures-fold { background: var(--surface-3); }
+
+/* ----- Colonnes à saisir à la main -----
+   La seule teinte crème du tableau : gris = calculé, bleu = repris d'un
+   ouvrage, orange = rubrique, vert/rouge = signe d'un écart. Posée sur la
+   cellule, et seulement là où un champ est réellement modifiable. */
+.heures-table tbody tr:not(.heures-group) td.is-saisie { background: #fff7e6; }
+.heures-table tbody tr:nth-child(even):not(.heures-group) td.is-saisie { background: #fdf1da; }
+.heures-table td.is-saisie .heures-input {
+  border-bottom: 1px dashed #e2c48d;
+  border-radius: 0;
+}
+.heures-table td.is-saisie .heures-input:focus {
+  background: #fff;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+}
+.heures-table thead th.is-saisie-head { background: #fbe9cd; color: var(--text); }
+.heures-table thead th.is-saisie-head::before { content: '\270E\A0'; font-weight: 400; opacity: 0.75; }
+
+/* ----- Semaine verrouillée ----- */
+.heures-table .heures-input:disabled {
+  color: var(--text-2);
+  cursor: default;
+  border-bottom-color: transparent;
+}
+.heures-lock-bar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+  margin: 0 0 10px;
+  padding: 9px 14px;
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.heures-lock-bar strong { color: var(--warning); }
+.heures-lock-btn {
+  margin-left: auto;
+  border: 1px solid var(--warning-border);
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px; font-weight: 700;
+  color: var(--warning);
+  cursor: pointer;
+}
+.heures-lock-btn:hover { border-color: var(--warning); background: var(--warning-soft); }
+/* Onglet d'une semaine close : jamais le raccourci `border-color`, qui
+   réécrirait le border-bottom qui « connecte » l'onglet actif au plan. */
+.heures-week-tab.is-locked:not(.is-active) { background: var(--surface-3); }
+.heures-week-tab.is-locked .heures-week-lock { font-size: 9px; opacity: 0.75; }
 
 /* Projection faite au ratio théorique (rien de réalisé sur la ligne) et
    totaux qui ne portent pas sur toutes les lignes : signalés, jamais tus. */
