@@ -200,16 +200,19 @@
       <!-- Sous-page : Tâches -->
       <div class="sub-page" id="sub-taches" data-group="donnees">
         <div class="list-section">
-          <p class="section-help">Choisissez une configuration ou créez-en une. Renseignez le fragment de ratio (h/m²) de chaque tâche. Tapez et maintenez la poignée ☰ pour réorganiser.</p>
-          <div class="setup-bar" id="setupbar"></div>
-          <div class="ratio-total" id="ratiototal" hidden></div>
-          <ul class="task-list" id="tasklist"></ul>
-          <div class="empty-state" id="taskempty">
-            <p>Aucune tâche définie.</p>
-            <p class="hint">Appuyez sur le bouton « + » en bas à droite pour en créer.</p>
+          <p class="section-help">Un <strong>ouvrage</strong> est un mode opératoire réutilisable : une unité et la liste des tâches qui le composent. Chaque tâche pèse une part du ratio de production, en heures par unité. On affecte ensuite l'ouvrage à des zones dans <strong>Zones</strong>, et on peut lui rattacher une ligne de budget dans <strong>eOTP</strong>.</p>
+          <div class="ouvrage-bar" id="setupbar"></div>
+          <div class="ouvrage-panel">
+            <div class="ouvrage-head" id="ouvragehead"></div>
+            <ul class="task-list" id="tasklist"></ul>
+            <div class="empty-state" id="taskempty">
+              <p>Aucune tâche dans cet ouvrage.</p>
+              <p class="hint">Ajoutez la première tâche du mode opératoire — traçage, ossature, pose…</p>
+            </div>
+            <button class="task-add" id="taskadd" type="button">+ Ajouter une tâche</button>
+            <div class="ratio-total" id="ratiototal" hidden></div>
           </div>
         </div>
-        <button class="fab" id="taskfab" aria-label="Ajouter une tâche">+</button>
       </div>
 
       <!-- Sous-page : Administratif (période du chantier, taux horaire,
@@ -264,9 +267,8 @@
       <!-- Sous-page : eOTP (lignes de budget pour Consommable) -->
       <div class="sub-page" id="sub-eotp" data-group="donnees">
         <div class="list-section">
-          <p class="section-help">Lignes de budget proposées dans le menu déroulant eOTP de Consommable → Saisie. Le budget indique la dotation totale de chaque ligne. Le bouton <strong>€ / h</strong> fixe son unité : les lignes en <strong>h</strong> sont celles que suit l'onglet <strong>Heures</strong>, dont elles alimentent la colonne « Budget heure ».</p>
-          <ul class="eotp-list" id="eotplist"></ul>
-          <button class="btn-primary eotp-add-btn" id="eotpadd" type="button">+ Ajouter une ligne de budget</button>
+          <p class="section-help">Le budget du chantier, ligne par ligne. Le bouton <strong>€ / h</strong> fait passer une ligne d'une famille à l'autre.</p>
+          <div class="eotp-panel" id="eotplist"></div>
         </div>
       </div>
 

@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.83';
+const APP_VERSION = '1.84';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -196,8 +196,6 @@ const state = {
   chartRange: 30          // 7 | 30 | 'all'
 };
 
-// État transitoire (non persisté)
-let setupRenaming = false;
 
 // ---------- Persistence ----------
 function load() {
@@ -2356,90 +2354,93 @@ function setOuvrageQuantity(zoneId, setupId, quantity) {
   save();
 }
 
-// ---------- Setups : barre de gestion des configurations ----------
+// ---------- Données → Tâches : les ouvrages et leurs tâches ----------
+// Un « ouvrage » est un mode opératoire réutilisable : une unité (m², ml, U…)
+// et la liste des tâches qui le composent, chacune pesant une part du ratio
+// total en h/unité. On l'affecte ensuite à des zones (Données → Zones) et on
+// peut y rattacher une ligne de budget (Données → eOTP).
+// L'ancienne barre était un menu déroulant : on ne voyait ni les autres
+// ouvrages, ni ce qu'ils contenaient. Ce sont maintenant des vignettes.
 function renderSetupBar() {
   const bar = document.getElementById('setupbar');
   if (!bar) return;
   bar.innerHTML = '';
+  for (const st of state.taskSetups) {
+    const actif = st.id === state.currentSetupId;
+    const chip = dbEl('button', 'ouvrage-chip' + (actif ? ' is-active' : ''));
+    chip.type = 'button';
+    chip.dataset.setupId = st.id;
+    chip.setAttribute('aria-pressed', actif ? 'true' : 'false');
+    chip.appendChild(dbEl('span', 'ouvrage-chip-name', st.name || '(ouvrage sans nom)'));
+    const n = (st.tasks || []).length;
+    const ratio = (st.tasks || []).filter(t => !t.excluded).reduce((a, t) => a + (t.ratio || 0), 0);
+    chip.appendChild(dbEl('span', 'ouvrage-chip-meta',
+      n ? n + (n > 1 ? ' tâches · ' : ' tâche · ') + formatRatio(ratio) + ' h/' + (st.unit || 'm²')
+        : 'aucune tâche'));
+    chip.addEventListener('click', () => switchSetup(st.id));
+    bar.appendChild(chip);
+  }
+  const add = dbEl('button', 'ouvrage-chip ouvrage-chip-add');
+  add.type = 'button';
+  add.appendChild(dbEl('span', 'ouvrage-chip-name', '+ Nouvel ouvrage'));
+  add.appendChild(dbEl('span', 'ouvrage-chip-meta', 'bardage, habillage, marquise…'));
+  add.addEventListener('click', addSetup);
+  bar.appendChild(add);
+}
+
+// En-tête de l'ouvrage courant : nom modifiable sur place (plus de mode
+// « renommage » à activer), unité, et suppression.
+function renderOuvrageHead() {
+  const head = document.getElementById('ouvragehead');
+  if (!head) return;
+  head.innerHTML = '';
   const setup = getCurrentSetup();
   if (!setup) return;
 
-  if (setupRenaming) {
-    const input = document.createElement('input');
-    input.className = 'setup-rename-input';
-    input.maxLength = 40;
-    input.value = setup.name;
-    input.placeholder = 'Nom de la configuration';
-    bar.appendChild(input);
-    requestAnimationFrame(() => { input.focus(); input.select(); });
-    const commit = () => {
-      if (!setupRenaming) return;
-      setupRenaming = false;
-      const name = input.value.trim();
-      if (name) { setup.name = name; save(); }
-      renderSetupBar();
-      renderAvancement();
-    };
-    input.addEventListener('blur', commit);
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') input.blur(); });
-    return;
-  }
+  const nom = document.createElement('input');
+  nom.className = 'ouvrage-name';
+  nom.type = 'text'; nom.maxLength = 40;
+  nom.value = setup.name || '';
+  nom.placeholder = 'Nom de l\'ouvrage';
+  nom.setAttribute('aria-label', 'Nom de l\'ouvrage');
+  nom.addEventListener('input', () => {
+    setup.name = nom.value;
+    save();
+    // La vignette et les menus qui citent cet ouvrage suivent la frappe,
+    // mais on ne re-rend pas le champ lui-même : le focus resterait perdu.
+    const chip = document.querySelector('.ouvrage-chip[data-setup-id="' + cssEscape(setup.id) + '"] .ouvrage-chip-name');
+    if (chip) chip.textContent = setup.name || '(ouvrage sans nom)';
+  });
+  nom.addEventListener('change', () => { renderSetupBar(); renderEOTPsConfig(); renderAvancement(); });
+  head.appendChild(nom);
 
-  const select = document.createElement('select');
-  select.className = 'setup-select';
-  select.setAttribute('aria-label', 'Configuration de tâches');
-  for (const s of state.taskSetups) {
-    const opt = document.createElement('option');
-    opt.value = s.id;
-    opt.textContent = s.name || '(sans nom)';
-    if (s.id === state.currentSetupId) opt.selected = true;
-    select.appendChild(opt);
-  }
-  select.addEventListener('change', () => switchSetup(select.value));
-  bar.appendChild(select);
-
-  // Sélecteur d'unité de l'ouvrage (Phase A : l'unité passe au niveau de
-  // l'ouvrage ; les ratios sont en h/<unité>, et les zones affichent cette
-  // unité en lecture seule)
-  const unitSelect = document.createElement('select');
-  unitSelect.className = 'setup-unit-select';
-  unitSelect.setAttribute('aria-label', 'Unité de l\'ouvrage');
+  const uWrap = dbEl('label', 'ouvrage-unit');
+  uWrap.appendChild(dbEl('span', 'ouvrage-unit-label', 'Unité'));
+  const uSel = document.createElement('select');
+  uSel.className = 'ouvrage-unit-select';
+  uSel.setAttribute('aria-label', 'Unité de l\'ouvrage');
   for (const u of ZONE_UNITS) {
     const opt = document.createElement('option');
-    opt.value = u;
-    opt.textContent = u;
+    opt.value = u; opt.textContent = u;
     if (u === setup.unit) opt.selected = true;
-    unitSelect.appendChild(opt);
+    uSel.appendChild(opt);
   }
-  unitSelect.addEventListener('change', () => {
-    setup.unit = unitSelect.value;
+  uSel.addEventListener('change', () => {
+    setup.unit = uSel.value;
     save();
-    renderTasks();
-    renderZones();
-    renderAvancement();
+    renderSetupBar(); renderTasks(); renderZones(); renderAvancement();
   });
-  bar.appendChild(unitSelect);
+  uWrap.appendChild(uSel);
+  head.appendChild(uWrap);
 
-  const mkBtn = (label, svg, danger) => {
-    const b = document.createElement('button');
-    b.className = 'setup-icon-btn' + (danger ? ' danger' : '');
-    b.setAttribute('aria-label', label);
-    b.innerHTML = svg;
-    bar.appendChild(b);
-    return b;
-  };
-  mkBtn('Renommer la configuration',
-    '<svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83Z"/></svg>'
-  ).addEventListener('click', () => { setupRenaming = true; renderSetupBar(); });
-  mkBtn('Nouvelle configuration',
-    '<svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>'
-  ).addEventListener('click', addSetup);
-  const delBtn = mkBtn('Supprimer la configuration',
-    '<svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z"/></svg>',
-    true
-  );
-  if (state.taskSetups.length <= 1) delBtn.disabled = true;
-  delBtn.addEventListener('click', deleteSetup);
+  const del = dbEl('button', 'ouvrage-del');
+  del.type = 'button';
+  del.textContent = 'Supprimer';
+  del.title = 'Supprimer cet ouvrage et ses tâches';
+  del.disabled = state.taskSetups.length <= 1;
+  if (del.disabled) del.title = 'Le dernier ouvrage ne peut pas être supprimé';
+  del.addEventListener('click', deleteSetup);
+  head.appendChild(del);
 }
 
 function switchSetup(setupId) {
@@ -2447,24 +2448,35 @@ function switchSetup(setupId) {
   state.currentSetupId = setupId;
   save();
   renderSetupBar();
+  renderOuvrageHead();
   renderTasks();
 }
 
 function addSetup() {
-  const setup = { id: uid(), name: `Configuration ${state.taskSetups.length + 1}`, unit: 'm²', tasks: [] };
+  const setup = { id: uid(), name: `Ouvrage ${state.taskSetups.length + 1}`, unit: 'm²', tasks: [] };
   state.taskSetups.push(setup);
   state.currentSetupId = setup.id;
-  setupRenaming = true;
   save();
   renderSetupBar();
+  renderOuvrageHead();
   renderTasks();
+  // Le menu « Ouvrage rattaché » de Données → eOTP doit connaître le nouvel
+  // ouvrage tout de suite : sans ce rendu, il gardait la liste d'avant.
+  renderEOTPsConfig();
+  requestAnimationFrame(() => {
+    const inp = document.querySelector('.ouvrage-name');
+    if (inp) { inp.focus(); inp.select(); }
+  });
 }
 
 function deleteSetup() {
   if (state.taskSetups.length <= 1) return;
   const setup = getCurrentSetup();
   if (!setup) return;
-  if (!confirm(`Supprimer la configuration « ${setup.name} » et ses tâches ?\nLes zones qui l'utilisaient n'auront plus de tâches affectées.`)) return;
+  const lignes = getEOTPs().filter(e => e.setupId === setup.id).length;
+  if (!confirm(`Supprimer l'ouvrage « ${setup.name} » et ses tâches ?\n`
+    + `Les zones qui l'utilisaient n'auront plus de tâches affectées`
+    + (lignes ? `, et ${lignes} ligne(s) de budget repasseront en saisie manuelle` : '') + '.')) return;
   const taskIds = new Set(setup.tasks.map(t => t.id));
   // Retire cet ouvrage de toutes les zones qui l'utilisaient
   for (const zid of Object.keys(state.zoneOuvrages)) {
@@ -2483,13 +2495,16 @@ function deleteSetup() {
   if (state.avancementZoneId && !zoneIsTaskBearing(state.avancementZoneId)) state.avancementZoneId = null;
   save();
   renderSetupBar();
+  renderOuvrageHead();
   renderTasks();
   renderZones();
   renderAvancement();
+  renderEOTPsConfig();   // le rattachement des lignes de budget a pu tomber
 }
 
-// ---------- Tasks (tâches d'une configuration) ----------
+// ---------- Tâches d'un ouvrage ----------
 function renderTasks() {
+  renderOuvrageHead();
   const list = document.getElementById('tasklist');
   const empty = document.getElementById('taskempty');
   if (!list || !empty) return;
@@ -2504,72 +2519,116 @@ function renderTasks() {
   }
   empty.classList.remove('show');
 
+  // Part de chaque tâche dans le ratio total : c'est ce qui dit d'un coup
+  // d'œil laquelle pèse, ce qu'une colonne de nombres ne montrait pas.
+  const total = tasks.filter(t => !t.excluded).reduce((a, t) => a + (t.ratio || 0), 0);
+  const unite = 'h/' + (setup.unit || 'm²');
+
   for (const task of tasks) {
     const excluded = !!task.excluded;
-    const li = document.createElement('li');
-    li.className = 'task-item' + (excluded ? ' excluded' : '');
+    const li = dbEl('li', 'task-item' + (excluded ? ' excluded' : ''));
     li.dataset.id = task.id;
-    li.innerHTML = `
-      <button class="drag-handle" aria-label="Maintenir et glisser pour réorganiser">
-        <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4V6Zm0 5h16v2H4v-2Zm0 5h16v2H4v-2Z"/></svg>
-      </button>
-      <input class="task-name-input" type="text" maxlength="80" placeholder="Nom de la tâche" />
-      <span class="task-ratio-slot"></span>
-      <button class="task-exclude-btn${excluded ? ' active' : ''}" data-action="exclude" aria-label="Exclure du ratio de production">
-        <svg viewBox="0 0 24 24"><path d="M15 1H9v2h6V1Zm4.03 6.39 1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42A8.96 8.96 0 0 0 12 4a9 9 0 1 0 9 9c0-2.12-.74-4.07-1.97-5.61ZM12 20a7 7 0 1 1 0-14 7 7 0 0 1 0 14Zm-1-6h2V8h-2v6Z"/><path d="M3.5 2.1 21.9 20.5l-1.4 1.4L2.1 3.5 3.5 2.1Z"/></svg>
-      </button>
-      <button class="icon-btn danger" data-action="delete" aria-label="Supprimer">
-        <svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z"/></svg>
-      </button>
-    `;
-    const input = li.querySelector('.task-name-input');
-    input.value = task.name;
-    input.addEventListener('input', () => renameTask(task.id, input.value));
 
-    const slot = li.querySelector('.task-ratio-slot');
-    const wrap = document.createElement('span');
-    wrap.className = 'task-ratio';
+    const handle = dbEl('button', 'drag-handle');
+    handle.type = 'button';
+    handle.setAttribute('aria-label', 'Maintenir et glisser pour réorganiser');
+    handle.title = 'Maintenir et glisser pour réorganiser';
+    handle.innerHTML = '<svg viewBox="0 0 24 24"><path d="M4 6h16v2H4V6Zm0 5h16v2H4v-2Zm0 5h16v2H4v-2Z"/></svg>';
+    li.appendChild(handle);
+
+    const nom = document.createElement('input');
+    nom.className = 'task-name-input';
+    nom.type = 'text'; nom.maxLength = 80;
+    nom.placeholder = 'Nom de la tâche';
+    nom.value = task.name || '';
+    nom.setAttribute('aria-label', 'Nom de la tâche');
+    nom.addEventListener('input', () => renameTask(task.id, nom.value));
+    li.appendChild(nom);
+
+    const ratioWrap = dbEl('div', 'task-ratio');
     const ri = document.createElement('input');
     ri.className = 'task-ratio-input';
-    ri.type = 'text';
-    ri.inputMode = 'decimal';
+    ri.type = 'text'; ri.inputMode = 'decimal';
     ri.placeholder = '0';
     ri.value = task.ratio ? formatRatio(task.ratio) : '';
+    ri.setAttribute('aria-label', 'Ratio de la tâche, en ' + unite);
     ri.addEventListener('input', () => {
       task.ratio = parseRatio(ri.value);
       save();
       updateRatioSum();
+      refreshTaskShares();
     });
-    wrap.appendChild(ri);
-    if (excluded) {
-      const badge = document.createElement('span');
-      badge.className = 'task-hors-ratio';
-      badge.textContent = 'hors ratio';
-      wrap.appendChild(badge);
-    } else {
-      const unit = document.createElement('span');
-      unit.className = 'task-ratio-unit';
-      unit.textContent = `h/${setup.unit || 'm²'}`;
-      wrap.appendChild(unit);
-    }
-    slot.replaceWith(wrap);
+    ratioWrap.appendChild(ri);
+    ratioWrap.appendChild(dbEl('span', 'task-ratio-unit', excluded ? 'hors ratio' : unite));
+    li.appendChild(ratioWrap);
 
-    li.querySelector('[data-action="exclude"]').addEventListener('click', () => toggleTaskExcluded(task.id));
-    li.querySelector('[data-action="delete"]').addEventListener('click', () => deleteTask(task.id));
-    attachTaskDrag(li.querySelector('.drag-handle'), li);
+    // Barre de part + pourcentage, mis à jour sans reconstruire la ligne.
+    const share = dbEl('div', 'task-share');
+    const bar = dbEl('div', 'task-share-bar');
+    bar.appendChild(dbEl('span', 'task-share-fill'));
+    share.appendChild(bar);
+    share.appendChild(dbEl('span', 'task-share-pct'));
+    li.appendChild(share);
+
+    const excl = dbEl('button', 'task-exclude-btn' + (excluded ? ' active' : ''));
+    excl.type = 'button';
+    excl.title = excluded
+      ? 'Tâche hors ratio : elle ne compte pas dans le ratio de production (toucher pour la réintégrer)'
+      : 'Sortir cette tâche du ratio de production (elle reste listée, mais ne pèse plus)';
+    excl.setAttribute('aria-label', excl.title);
+    excl.setAttribute('aria-pressed', excluded ? 'true' : 'false');
+    excl.innerHTML = '<svg viewBox="0 0 24 24"><path d="M15 1H9v2h6V1Zm4.03 6.39 1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42A8.96 8.96 0 0 0 12 4a9 9 0 1 0 9 9c0-2.12-.74-4.07-1.97-5.61ZM12 20a7 7 0 1 1 0-14 7 7 0 0 1 0 14Zm-1-6h2V8h-2v6Z"/><path d="M3.5 2.1 21.9 20.5l-1.4 1.4L2.1 3.5 3.5 2.1Z"/></svg>';
+    excl.addEventListener('click', () => toggleTaskExcluded(task.id));
+    li.appendChild(excl);
+
+    const del = dbEl('button', 'icon-btn danger');
+    del.type = 'button';
+    del.setAttribute('aria-label', 'Supprimer la tâche');
+    del.title = 'Supprimer la tâche';
+    del.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z"/></svg>';
+    del.addEventListener('click', () => deleteTask(task.id));
+    li.appendChild(del);
+
+    attachTaskDrag(handle, li);
     list.appendChild(li);
   }
+  refreshTaskShares();
   updateRatioSum();
+}
+
+// Les barres de part se recalculent à chaque frappe dans un ratio : les
+// reconstruire ferait perdre le focus du champ en cours de saisie.
+function refreshTaskShares() {
+  const setup = getCurrentSetup();
+  if (!setup) return;
+  const total = setup.tasks.filter(t => !t.excluded).reduce((a, t) => a + (t.ratio || 0), 0);
+  for (const t of setup.tasks) {
+    const li = document.querySelector('.task-item[data-id="' + cssEscape(t.id) + '"]');
+    if (!li) continue;
+    const fill = li.querySelector('.task-share-fill');
+    const pct = li.querySelector('.task-share-pct');
+    const part = (!t.excluded && total > 0) ? ((t.ratio || 0) / total) * 100 : 0;
+    if (fill) fill.style.width = Math.max(0, Math.min(100, part)) + '%';
+    if (pct) pct.textContent = t.excluded ? '—' : (total > 0 ? Math.round(part) + ' %' : '—');
+  }
 }
 
 function updateRatioSum() {
   const el = document.getElementById('ratiototal');
   if (!el) return;
+  el.innerHTML = '';
   const setup = getCurrentSetup();
   if (!setup || setup.tasks.length === 0) { el.hidden = true; return; }
   el.hidden = false;
-  const sum = setup.tasks.filter(t => !t.excluded).reduce((s, t) => s + (t.ratio || 0), 0);
-  el.textContent = `Ratio de production total : ${formatRatio(sum)} h/${setup.unit || 'm²'}`;
+  const actives = setup.tasks.filter(t => !t.excluded);
+  const sum = actives.reduce((s, t) => s + (t.ratio || 0), 0);
+  const hors = setup.tasks.length - actives.length;
+  el.appendChild(dbEl('span', 'ratio-total-label', 'Ratio de production total'));
+  const v = dbEl('span', 'ratio-total-value', formatRatio(sum) + ' h/' + (setup.unit || 'm²'));
+  el.appendChild(v);
+  el.appendChild(dbEl('span', 'ratio-total-detail',
+    actives.length + (actives.length > 1 ? ' tâches comptées' : ' tâche comptée')
+    + (hors ? ' · ' + hors + ' hors ratio' : '')));
 }
 
 function toggleTaskExcluded(id) {
@@ -2589,7 +2648,7 @@ function addTask() {
   setup.tasks.push(task);
   save();
   renderTasks();
-  const input = document.querySelector(`.task-item[data-id="${task.id}"] input`);
+  const input = document.querySelector(`.task-item[data-id="${task.id}"] .task-name-input`);
   if (input) {
     input.focus();
     input.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -6501,76 +6560,156 @@ function renderDocLabelsConfig() {
   list.appendChild(addBtn);
 }
 
+// ---------- Données → eOTP : les lignes de budget ----------
+// Deux familles qui n'ont ni la même unité ni le même usage : les lignes en
+// heures pilotent l'onglet Heures, celles en euros les dépenses de
+// Consommable. Les mélanger dans une pile de cartes rendait la page illisible ;
+// on les sépare, on aligne les colonnes et on totalise chaque famille.
 function renderEOTPsConfig() {
-  const list = document.getElementById('eotplist');
-  if (!list) return;
-  list.innerHTML = '';
-  const eotps = getEOTPs();
-  if (eotps.length === 0) {
-    const empty = document.createElement('p');
-    empty.className = 'eotp-empty';
-    empty.textContent = 'Aucune ligne de budget. Tapez « + Ajouter » pour en créer.';
-    list.appendChild(empty);
-    return;
-  }
-  // Tri par code alphanumérique pour la lecture
-  const sorted = eotps.slice().sort((a, b) => (a.code || '').localeCompare(b.code || '', 'fr'));
-  for (const e of sorted) list.appendChild(buildEOTPRow(e));
+  const host = document.getElementById('eotplist');
+  if (!host) return;
+  host.innerHTML = '';
+  const eotps = getEOTPs().slice().sort((a, b) => (a.code || '').localeCompare(b.code || '', 'fr'));
+  const heures = eotps.filter(isHourEOTP);
+  const euros = eotps.filter(e => !isHourEOTP(e));
+
+  host.appendChild(buildEOTPSection({
+    unite: 'h',
+    titre: 'Main-d\'œuvre',
+    sousTitre: 'Budget en heures — ces lignes alimentent l\'onglet Avancement → Heures.',
+    lignes: heures,
+    total: fmtHeures(heures.reduce((a, e) => a + (Number(e.budget) || 0), 0)) + ' h',
+    vide: 'Aucune ligne en heures. Créez-en une pour suivre de la main-d\'œuvre.'
+  }));
+  host.appendChild(buildEOTPSection({
+    unite: 'eur',
+    titre: 'Achats et dépenses',
+    sousTitre: 'Budget en euros — ces lignes sont proposées à la saisie dans Consommable.',
+    lignes: euros,
+    total: fmtEur(euros.reduce((a, e) => a + (Number(e.budget) || 0), 0)),
+    vide: 'Aucune ligne en euros.'
+  }));
 }
+
+function buildEOTPSection(cfg) {
+  const sec = dbEl('div', 'eotp-section eotp-section-' + (cfg.unite === 'h' ? 'h' : 'eur'));
+  const head = dbEl('div', 'eotp-section-head');
+  const gauche = dbEl('div', 'eotp-section-titles');
+  gauche.appendChild(dbEl('h3', 'eotp-section-title', cfg.titre));
+  gauche.appendChild(dbEl('p', 'eotp-section-sub', cfg.sousTitre));
+  head.appendChild(gauche);
+  const chiffres = dbEl('div', 'eotp-section-figures');
+  chiffres.appendChild(dbEl('span', 'eotp-section-total', cfg.total));
+  chiffres.appendChild(dbEl('span', 'eotp-section-count',
+    cfg.lignes.length + (cfg.lignes.length > 1 ? ' lignes' : ' ligne')));
+  head.appendChild(chiffres);
+  sec.appendChild(head);
+
+  if (!cfg.lignes.length) {
+    sec.appendChild(dbEl('p', 'eotp-section-empty', cfg.vide));
+  } else {
+    // Une rangée d'intitulés : sans elle, on ne sait pas ce que sont les
+    // colonnes tant qu'on n'a pas cliqué dedans.
+    const cols = dbEl('div', 'eotp-cols' + (cfg.unite === 'h' ? ' is-h' : ''));
+    cols.appendChild(dbEl('span', '', 'Code'));
+    cols.appendChild(dbEl('span', '', 'Libellé'));
+    cols.appendChild(dbEl('span', 'is-num', 'Budget'));
+    if (cfg.unite === 'h') cols.appendChild(dbEl('span', '', 'Ouvrage rattaché'));
+    cols.appendChild(dbEl('span', ''));
+    sec.appendChild(cols);
+    const ul = dbEl('ul', 'eotp-list');
+    for (const e of cfg.lignes) ul.appendChild(buildEOTPRow(e));
+    sec.appendChild(ul);
+  }
+  const add = dbEl('button', 'eotp-add',
+    cfg.unite === 'h' ? '+ Ligne en heures' : '+ Ligne en euros');
+  add.type = 'button';
+  add.addEventListener('click', () => addEOTP(cfg.unite));
+  sec.appendChild(add);
+  return sec;
+}
+
 function buildEOTPRow(eotp) {
-  const li = document.createElement('li');
-  li.className = 'eotp-row';
+  const enHeures = isHourEOTP(eotp);
+  const li = dbEl('li', 'eotp-row' + (enHeures ? ' is-h' : ''));
   li.setAttribute('data-eotp-id', eotp.id);
-  li.innerHTML = `
-    <div class="eotp-row-main">
-      <input class="eotp-code" type="text" maxlength="30" placeholder="OTP-2026-001">
-      <div class="eotp-budget-wrap">
-        <input class="eotp-budget" type="text" inputmode="decimal" placeholder="0">
-        <button class="eotp-unit" type="button"></button>
-      </div>
-      <button class="eotp-remove" type="button" aria-label="Supprimer cette ligne">
-        <svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
-      </button>
-    </div>
-    <input class="eotp-label" type="text" maxlength="80" placeholder="Libellé (optionnel) : Plomberie phase 1, GO…">
-    <label class="eotp-link" hidden>
-      <span class="eotp-link-label">Ouvrage rattaché</span>
-      <select class="eotp-setup"></select>
-    </label>
-  `;
-  const code   = li.querySelector('.eotp-code');
-  const budget = li.querySelector('.eotp-budget');
-  const label  = li.querySelector('.eotp-label');
-  const unit   = li.querySelector('.eotp-unit');
-  code.value   = eotp.code || '';
+
+  const code = document.createElement('input');
+  code.className = 'eotp-code';
+  code.type = 'text'; code.maxLength = 30;
+  code.placeholder = 'OTP-2026-001';
+  code.value = eotp.code || '';
+  code.setAttribute('aria-label', 'Code de la ligne de budget');
+  code.addEventListener('input', () => setEOTPCode(eotp.id, code.value));
+  li.appendChild(code);
+
+  const label = document.createElement('input');
+  label.className = 'eotp-label';
+  label.type = 'text'; label.maxLength = 80;
+  label.placeholder = 'Libellé — Bardage petits bâtiments…';
+  label.value = eotp.label || '';
+  label.setAttribute('aria-label', 'Libellé de la ligne de budget');
+  label.addEventListener('input', () => setEOTPLabel(eotp.id, label.value));
+  li.appendChild(label);
+
+  const wrap = dbEl('div', 'eotp-budget-wrap');
+  const budget = document.createElement('input');
+  budget.className = 'eotp-budget';
+  budget.type = 'text'; budget.inputMode = 'decimal';
+  budget.placeholder = '0';
   budget.value = eotp.budget ? fmtPriceForInput(eotp.budget) : '';
-  label.value  = eotp.label || '';
-  const linkBox = li.querySelector('.eotp-link');
-  const setupSel = li.querySelector('.eotp-setup');
-  const fillLink = () => {
-    linkBox.hidden = !isHourEOTP(eotp);
-    if (linkBox.hidden) return;
-    setupSel.innerHTML = '';
-    const none = document.createElement('option');
-    none.value = '';
-    none.textContent = 'Saisie manuelle (aucun ouvrage)';
-    setupSel.appendChild(none);
-    for (const st of state.taskSetups) {
-      const opt = document.createElement('option');
-      opt.value = st.id;
-      opt.textContent = st.name || '(ouvrage sans nom)';
-      setupSel.appendChild(opt);
-    }
-    setupSel.value = eotp.setupId || '';
-  };
-  fillLink();
-  applyEOTPUnitButton(unit, eotp);
-  setupSel.addEventListener('change', () => setEOTPSetup(eotp.id, setupSel.value));
-  code.addEventListener('input',   () => setEOTPCode(eotp.id, code.value));
+  budget.setAttribute('aria-label', 'Budget de la ligne');
   budget.addEventListener('input', () => setEOTPBudget(eotp.id, budget.value));
-  label.addEventListener('input',  () => setEOTPLabel(eotp.id, label.value));
-  unit.addEventListener('click',   () => { toggleEOTPUnit(eotp.id); applyEOTPUnitButton(unit, eotp); fillLink(); });
-  li.querySelector('.eotp-remove').addEventListener('click', () => removeEOTP(eotp.id));
+  wrap.appendChild(budget);
+  const unit = dbEl('button', 'eotp-unit');
+  unit.type = 'button';
+  applyEOTPUnitButton(unit, eotp);
+  // Changer d'unité fait changer la ligne de section : on re-rend toute la
+  // page plutôt que de la laisser sous le mauvais titre.
+  unit.addEventListener('click', () => { toggleEOTPUnit(eotp.id); renderEOTPsConfig(); });
+  wrap.appendChild(unit);
+  li.appendChild(wrap);
+
+  if (enHeures) {
+    const sel = document.createElement('select');
+    sel.className = 'eotp-setup';
+    sel.setAttribute('aria-label', 'Ouvrage rattaché');
+    // Les options sont (re)construites à l'ouverture du menu : un ouvrage
+    // créé entre-temps dans Données → Tâches doit y figurer sans avoir à
+    // recharger la page.
+    const remplir = () => {
+      const courant = eotp.setupId || '';
+      sel.innerHTML = '';
+      const none = document.createElement('option');
+      none.value = '';
+      none.textContent = 'Aucun — saisie manuelle';
+      sel.appendChild(none);
+      for (const st of state.taskSetups) {
+        const opt = document.createElement('option');
+        opt.value = st.id;
+        opt.textContent = st.name || '(ouvrage sans nom)';
+        sel.appendChild(opt);
+      }
+      sel.value = courant;
+    };
+    remplir();
+    sel.addEventListener('mousedown', remplir);
+    sel.addEventListener('focus', remplir);
+    sel.addEventListener('change', () => { setEOTPSetup(eotp.id, sel.value); renderEOTPsConfig(); });
+    li.appendChild(sel);
+    if (eotp.setupId && !state.taskSetups.some(s => s.id === eotp.setupId)) {
+      li.classList.add('is-orphan');
+      sel.title = 'L\'ouvrage rattaché n\'existe plus : la ligne est repassée en saisie manuelle.';
+    }
+  }
+
+  const del = dbEl('button', 'eotp-remove');
+  del.type = 'button';
+  del.setAttribute('aria-label', 'Supprimer cette ligne de budget');
+  del.title = 'Supprimer cette ligne de budget';
+  del.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>';
+  del.addEventListener('click', () => removeEOTP(eotp.id));
+  li.appendChild(del);
   return li;
 }
 // Bouton d'unité de la ligne de budget : € (dépense) ou h (main-d'œuvre).
@@ -11052,11 +11191,18 @@ function getEOTP(code) {
   if (!k) return null;
   return getEOTPs().find(e => (e.code || '').trim() === k) || null;
 }
-function addEOTP() {
+function addEOTP(unite) {
   if (!Array.isArray(state.eotps)) state.eotps = [];
-  state.eotps.push({ id: 'eotp_' + uid(), code: '', label: '', budget: 0, unit: 'eur', setupId: '' });
+  const id = 'eotp_' + uid();
+  state.eotps.push({ id, code: '', label: '', budget: 0, unit: unite === 'h' ? 'h' : 'eur', setupId: '' });
   save();
   renderEOTPsConfig();
+  // La nouvelle ligne est vide : on met le curseur dedans plutôt que de
+  // laisser l'utilisateur la chercher au milieu des autres.
+  requestAnimationFrame(() => {
+    const inp = document.querySelector('.eotp-row[data-eotp-id="' + cssEscape(id) + '"] .eotp-code');
+    if (inp) { inp.focus(); inp.scrollIntoView({ block: 'nearest' }); }
+  });
 }
 // Unité du budget : 'eur' (défaut, dépenses de Consommable) ou 'h'
 // (main-d'œuvre). Les lignes en heures sont celles que suit l'onglet Heures,
@@ -20945,7 +21091,8 @@ function init() {
   });
 
   // Tâches
-  document.getElementById('taskfab').addEventListener('click', addTask);
+  const taskAdd = document.getElementById('taskadd');
+  if (taskAdd) taskAdd.addEventListener('click', addTask);
 
   // Avancement : flèches de navigation
   document.getElementById('ficheprev').addEventListener('click', () => navigateAvancement(-1));
@@ -21045,10 +21192,6 @@ function init() {
     const addLineBtn = document.getElementById('consoaddline');
     if (addLineBtn) addLineBtn.addEventListener('click', addOrderLine);
   }
-
-  // ----- Données → eOTP : bouton + Ajouter une ligne de budget -----
-  const eotpAddBtn = document.getElementById('eotpadd');
-  if (eotpAddBtn) eotpAddBtn.addEventListener('click', addEOTP);
 
   // ----- Données → Admin. : période du chantier -----
   const projStart = document.getElementById('projectstart');

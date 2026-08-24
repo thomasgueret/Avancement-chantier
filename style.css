@@ -1223,159 +1223,264 @@ option { background-color: var(--surface); color: var(--text); }
 }
 
 /* ============ DONNÉES : TÂCHES ============ */
-.setup-bar {
-  display: flex; align-items: center; gap: 6px;
-  margin-bottom: 14px;
+/* ---- Données → Tâches : les ouvrages et leurs tâches ---------------------
+   L'ancienne page était un menu déroulant, une bannière de total et une
+   grille de petites cartes sur trois colonnes : on ne voyait ni les autres
+   ouvrages, ni le poids de chaque tâche, et l'ordre de glissé était illisible
+   sur trois colonnes. Ici : des vignettes d'ouvrages, un panneau par ouvrage,
+   et une tâche par ligne avec sa part du ratio. */
+.ouvrage-bar {
+  display: flex; gap: 10px; flex-wrap: wrap;
+  margin: 0 0 14px;
 }
-.setup-select {
-  flex: 1; min-width: 0;
-  font-size: 16px; font-weight: 600;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  padding: 10px 12px;
-  -webkit-appearance: menulist;
-  min-height: 44px;
-}
-.setup-unit-select {
-  flex-shrink: 0;
-  width: 78px;
-  font-size: 14px; font-weight: 600;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  padding: 10px 6px;
-  -webkit-appearance: menulist;
-  min-height: 44px;
-}
-.setup-unit-select:focus { outline: none; border-color: var(--accent); }
-.setup-select:focus { outline: none; border-color: var(--accent); }
-.setup-rename-input {
-  flex: 1; min-width: 0;
-  font-size: 16px; font-weight: 600;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  padding: 10px 12px;
-  min-height: 44px;
-  box-shadow: 0 0 0 3px var(--accent-glow);
-}
-.setup-rename-input:focus { outline: none; }
-.setup-icon-btn {
-  flex-shrink: 0;
-  width: 44px; height: 44px;
-  border: 1px solid var(--border-strong);
-  background: var(--surface);
-  color: var(--text-2);
-  border-radius: var(--radius-sm);
-  display: inline-flex; align-items: center; justify-content: center;
-}
-.setup-icon-btn svg { width: 20px; height: 20px; fill: currentColor; }
-.setup-icon-btn:active { background: var(--surface-2); }
-.setup-icon-btn.danger { color: var(--danger); border-color: var(--danger); }
-.setup-icon-btn.danger:active { background: var(--danger-soft); }
-.setup-icon-btn:disabled { opacity: 0.35; }
-
-.ratio-total {
-  background: var(--accent-soft);
-  border: 1px solid var(--accent);
-  color: var(--accent-dark);
-  border-radius: var(--radius-sm);
-  padding: 10px 14px;
-  font-size: 13px; font-weight: 700;
-  margin-bottom: 12px;
-  text-align: center;
-}
-.ratio-total[hidden] { display: none; }
-
-.task-list { list-style: none; padding: 0; margin: 0 0 8px; display: flex; flex-direction: column; gap: 6px; }
-.task-item {
-  display: flex; align-items: center; gap: 6px;
+.ouvrage-chip {
+  display: flex; flex-direction: column; gap: 2px;
+  min-width: 168px; max-width: 280px;
+  padding: 9px 14px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 6px 8px 6px 4px;
-  box-shadow: var(--shadow-sm);
-  min-height: 52px;
-  transition: box-shadow 0.15s, background 0.15s;
-  will-change: transform;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
-.task-item.dragging {
-  z-index: 10;
-  box-shadow: 0 12px 28px rgba(20, 24, 33, 0.25);
-  background: var(--surface);
+.ouvrage-chip:hover { border-color: var(--border-strong); }
+.ouvrage-chip.is-active {
   border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.ouvrage-chip-name {
+  font-size: 14px; font-weight: 700; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ouvrage-chip.is-active .ouvrage-chip-name { color: var(--accent-dark); }
+.ouvrage-chip-meta { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+.ouvrage-chip-add {
+  border-style: dashed;
+  background: transparent;
+}
+.ouvrage-chip-add .ouvrage-chip-name { color: var(--text-3); }
+.ouvrage-chip-add:hover {
+  border-style: solid; border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.ouvrage-chip-add:hover .ouvrage-chip-name { color: var(--accent); }
+
+.ouvrage-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.ouvrage-head {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.ouvrage-name {
+  flex: 1 1 200px; min-width: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  font-size: 17px; font-weight: 700;
+  color: var(--text);
+  padding: 5px 8px;
+}
+.ouvrage-name::placeholder { color: var(--text-4); font-style: italic; font-weight: 500; }
+.ouvrage-name:hover { border-color: var(--border); }
+.ouvrage-name:focus {
+  outline: none; border-color: var(--accent);
+  background: var(--surface);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+.ouvrage-unit { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.ouvrage-unit-label {
+  font-size: 10.5px; font-weight: 800; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-4);
+}
+.ouvrage-unit-select {
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text);
+  font: inherit; font-size: 13px; font-weight: 600;
+  padding: 6px 8px;
+}
+.ouvrage-unit-select:focus { outline: none; border-color: var(--accent); }
+.ouvrage-del {
+  flex-shrink: 0;
+  border: 1px solid var(--border-strong); border-radius: 999px;
+  background: var(--surface);
+  font-size: 12px; font-weight: 700;
+  color: var(--text-3);
+  padding: 6px 14px;
+  cursor: pointer;
+}
+.ouvrage-del:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); background: var(--danger-soft); }
+.ouvrage-del:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Une tâche par ligne : la poignée, le nom, le ratio, la part, les actions.
+   Les colonnes s'alignent d'une ligne à l'autre. */
+.task-list { list-style: none; padding: 0; margin: 0; }
+.task-item {
+  display: grid;
+  grid-template-columns: 34px minmax(120px, 1fr) 132px minmax(90px, 200px) 34px 34px;
+  align-items: center; gap: 10px;
+  padding: 6px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.task-item:first-child { border-top: none; }
+.task-item:hover { background: var(--surface-2); }
+.task-item.dragging {
+  opacity: 0.85;
+  box-shadow: var(--shadow-md);
+  border-radius: var(--radius-sm);
+  position: relative; z-index: 3;
 }
 .drag-handle {
-  flex-shrink: 0;
-  width: 40px; height: 40px;
-  border: none; background: transparent;
+  width: 30px; height: 30px;
   display: inline-flex; align-items: center; justify-content: center;
-  color: var(--text-3);
-  border-radius: var(--radius-sm);
+  border: none; background: transparent;
+  color: var(--text-4);
+  border-radius: 6px;
   cursor: grab;
   touch-action: none;
+  -webkit-tap-highlight-color: transparent;
 }
-.drag-handle:active { cursor: grabbing; background: var(--surface-2); }
-.drag-handle svg { width: 20px; height: 20px; fill: currentColor; }
+.drag-handle:hover { color: var(--accent); background: var(--surface-3); }
+.drag-handle:active { cursor: grabbing; }
+.drag-handle svg { width: 18px; height: 18px; fill: currentColor; }
 .task-name-input {
-  flex: 1; min-width: 0;
-  border: none;
+  min-width: 0;
+  border: 1px solid transparent;
   background: transparent;
-  font-size: 15px;
-  font-weight: 500;
-  color: var(--text);
-  padding: 8px 4px;
-  border-bottom: 1px solid transparent;
-}
-.task-name-input::placeholder { color: var(--text-3); font-style: italic; }
-.task-name-input:focus {
-  outline: none;
-  border-bottom-color: var(--accent);
-}
-.task-ratio { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
-.task-ratio-input {
-  width: 46px;
-  text-align: right;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  border-radius: 6px;
-  padding: 6px 6px;
+  border-radius: var(--radius-sm);
   font-size: 14px; font-weight: 600;
   color: var(--text);
+  padding: 6px 8px;
 }
-.task-ratio-input:focus { outline: none; border-color: var(--accent); background: var(--surface); }
-.task-ratio-input::placeholder { color: var(--text-3); }
-.task-ratio-unit { font-size: 10px; color: var(--text-3); white-space: nowrap; }
-.task-hors-ratio {
+.task-name-input::placeholder { color: var(--text-4); font-style: italic; font-weight: 400; }
+.task-name-input:focus {
+  outline: none; border-color: var(--accent);
+  background: var(--bg);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+.task-ratio {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 3px 8px;
+  min-height: 34px;
+}
+.task-ratio:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+.task-ratio-input {
+  width: 100%; min-width: 0;
+  border: none; background: transparent;
+  font-size: 14px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  text-align: right;
+  padding: 0;
+}
+.task-ratio-input:focus { outline: none; }
+.task-ratio-input::placeholder { color: var(--text-4); font-weight: 500; }
+.task-ratio-unit { font-size: 10.5px; color: var(--text-3); white-space: nowrap; flex-shrink: 0; }
+/* Part de la tâche dans le ratio total : le chiffre seul ne disait pas
+   laquelle pèse. */
+.task-share { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.task-share-bar {
+  flex: 1; min-width: 0; height: 6px;
+  background: var(--surface-3);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.task-share-fill {
+  display: block; height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.18s ease;
+}
+.task-share-pct {
   flex-shrink: 0;
-  font-size: 11px; font-weight: 600;
+  font-size: 11.5px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
   color: var(--text-3);
-  font-style: italic;
-  white-space: nowrap;
+  min-width: 34px; text-align: right;
 }
 .task-exclude-btn {
-  flex-shrink: 0;
-  width: 34px; height: 34px;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text-3);
-  border-radius: 50%;
+  width: 30px; height: 30px;
   display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-4);
+  border-radius: 999px;
+  cursor: pointer;
 }
-.task-exclude-btn svg { width: 18px; height: 18px; fill: currentColor; }
-.task-exclude-btn:active { background: var(--surface); }
+.task-exclude-btn svg { width: 16px; height: 16px; fill: currentColor; }
+.task-exclude-btn:hover { border-color: var(--warning); color: var(--warning); }
 .task-exclude-btn.active {
-  background: var(--text-2);
-  border-color: var(--text-2);
-  color: white;
+  background: var(--warning); border-color: var(--warning); color: #fff;
 }
 .task-item.excluded { background: var(--surface-2); }
-.task-item.excluded .task-name-input { color: var(--text-2); }
-.task-item.excluded .task-ratio-input { color: var(--text-3); opacity: 0.75; }
+.task-item.excluded .task-name-input { color: var(--text-3); text-decoration: line-through; }
+.task-item.excluded .task-ratio-input { color: var(--text-3); }
+.task-item.excluded .task-ratio-unit { color: var(--warning); font-weight: 700; }
+.task-item.excluded .task-share-fill { background: var(--text-4); }
+
+.task-add {
+  display: block; width: calc(100% - 32px);
+  margin: 12px 16px;
+  padding: 9px;
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 700;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.task-add:hover { border-color: var(--accent); border-style: solid; color: var(--accent); background: var(--accent-soft); }
+
+/* Total : une rangée de pied, pas une bannière pleine largeur. */
+.ratio-total {
+  display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  padding: 12px 16px;
+  border-top: 2px solid var(--border-strong);
+  background: var(--surface-2);
+}
+.ratio-total[hidden] { display: none; }
+.ratio-total-label {
+  font-size: 10.5px; font-weight: 800; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-4);
+}
+.ratio-total-value {
+  font-size: 18px; font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+.ratio-total-detail { font-size: 12px; color: var(--text-3); margin-left: auto; }
+
+@media (max-width: 720px) {
+  .ouvrage-chip { min-width: 140px; flex: 1 1 140px; }
+  /* Le nom prend toute la ligne : accolé au sélecteur d'unité, il se
+     tronquait au bout de deux mots. */
+  .ouvrage-head { row-gap: 8px; }
+  .ouvrage-name { flex: 1 1 100%; font-size: 16px; }
+  .ouvrage-del { margin-left: auto; }
+  .task-item {
+    grid-template-columns: 30px 1fr 34px 34px;
+    grid-template-areas: 'poignee nom excl suppr' '. ratio ratio ratio' '. part part part';
+    row-gap: 6px; padding: 10px 12px;
+  }
+  .task-item > .drag-handle { grid-area: poignee; }
+  .task-item > .task-name-input { grid-area: nom; }
+  .task-item > .task-ratio { grid-area: ratio; }
+  .task-item > .task-share { grid-area: part; }
+  .task-item > .task-exclude-btn { grid-area: excl; }
+  .task-item > .icon-btn { grid-area: suppr; }
+  .task-add { width: calc(100% - 24px); margin: 12px; }
+}
 
 /* ============ AVANCEMENT : SÉLECTEURS EN CASCADE ============ */
 .zone-pickers { margin-bottom: 16px; }
@@ -2821,52 +2926,114 @@ option { background-color: var(--surface); color: var(--text); }
 /* Données → eOTP : lignes de budget consommables, structure analogue
    aux libellés de docs (code + budget alignés sur la première ligne,
    libellé optionnel sur la seconde, croix de suppression à droite). */
-.eotp-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
-.eotp-row {
-  display: flex; flex-direction: column; gap: 8px;
+/* ---- Données → eOTP : le budget, par famille -----------------------------
+   Deux familles qui n'ont ni la même unité ni le même usage : les heures
+   pilotent l'onglet Heures, les euros les dépenses de Consommable. Les
+   mélanger dans une pile de cartes rendait la page illisible. */
+.eotp-panel { display: flex; flex-direction: column; gap: 18px; }
+.eotp-section {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px 12px;
+  overflow: hidden;
 }
-.eotp-row-main {
-  display: flex; align-items: center; gap: 10px;
-}
-.eotp-code {
-  flex: 1; min-width: 0;
-  border: none;
-  background: transparent;
+.eotp-section-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--border);
-  font-size: 15px; font-weight: 600;
+  border-left: 4px solid var(--text-4);
+}
+.eotp-section-h   .eotp-section-head { border-left-color: var(--info); }
+.eotp-section-eur .eotp-section-head { border-left-color: var(--accent); }
+.eotp-section-titles { min-width: 0; }
+.eotp-section-title { margin: 0; font-size: 15px; font-weight: 700; color: var(--text); }
+.eotp-section-sub { margin: 2px 0 0; font-size: 12px; color: var(--text-3); }
+.eotp-section-figures { text-align: right; flex-shrink: 0; }
+.eotp-section-total {
+  display: block;
+  font-size: 17px; font-weight: 800;
+  font-variant-numeric: tabular-nums;
   color: var(--text);
-  padding: 6px 2px;
+}
+.eotp-section-h   .eotp-section-total { color: var(--info); }
+.eotp-section-eur .eotp-section-total { color: var(--accent); }
+.eotp-section-count { display: block; font-size: 11.5px; color: var(--text-3); }
+.eotp-section-empty {
+  margin: 0; padding: 18px 16px;
+  font-size: 13px; font-style: italic; color: var(--text-3);
+}
+/* Grille commune à la rangée d'intitulés et aux lignes : les colonnes
+   s'alignent d'une rangée à l'autre, c'est là tout le gain de lisibilité. */
+.eotp-cols, .eotp-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.1fr) minmax(140px, 2fr) 168px 34px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+}
+.eotp-cols.is-h, .eotp-row.is-h {
+  grid-template-columns: minmax(120px, 1.1fr) minmax(140px, 2fr) 168px minmax(150px, 1.2fr) 34px;
+}
+.eotp-cols {
+  padding-top: 10px; padding-bottom: 6px;
+  font-size: 10.5px; font-weight: 800; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--text-4);
+}
+.eotp-cols .is-num { text-align: right; }
+.eotp-list { list-style: none; padding: 0; margin: 0; }
+.eotp-row { border-top: 1px solid var(--border); }
+.eotp-row:first-child { border-top: none; }
+.eotp-row:hover { background: var(--surface-2); }
+.eotp-row.is-orphan { background: var(--warning-soft); }
+.eotp-code {
+  min-width: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  font-size: 13.5px; font-weight: 700;
+  color: var(--text);
+  padding: 6px 8px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   letter-spacing: 0.01em;
 }
-.eotp-code::placeholder { color: var(--text-3); font-style: italic; font-weight: 500; font-family: inherit; }
-.eotp-code:focus { outline: none; border-bottom-color: var(--accent); }
+.eotp-label {
+  min-width: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  font-size: 13.5px;
+  color: var(--text-2);
+  padding: 6px 8px;
+}
+.eotp-code::placeholder, .eotp-label::placeholder { color: var(--text-4); font-style: italic; font-weight: 400; }
+.eotp-code:focus, .eotp-label:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
 .eotp-budget-wrap {
-  flex-shrink: 0;
-  display: inline-flex; align-items: center; gap: 4px;
+  display: inline-flex; align-items: center; gap: 6px;
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  padding: 4px 8px;
+  padding: 3px 6px 3px 8px;
   min-height: 34px;
 }
-.eotp-budget-wrap:focus-within { border-color: var(--accent); }
+.eotp-budget-wrap:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
 .eotp-budget {
-  width: 84px;
+  flex: 1; min-width: 0;
   border: none; background: transparent;
-  font-size: 14px; font-weight: 600;
+  font-size: 14px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
   color: var(--text);
   text-align: right;
   padding: 0;
 }
 .eotp-budget:focus { outline: none; }
-.eotp-budget::placeholder { color: var(--text-3); font-weight: 500; }
-/* Bascule d'unité de la ligne de budget : gris € (dépense) / bleu h
-   (main-d'œuvre). Les lignes en heures alimentent l'onglet Heures. */
+.eotp-budget::placeholder { color: var(--text-4); font-weight: 500; }
+/* Bascule d'unité : gris € (dépense) / bleu h (main-d'œuvre). */
 .eotp-unit {
   flex-shrink: 0;
   width: 26px; height: 26px;
@@ -2882,49 +3049,55 @@ option { background-color: var(--surface); color: var(--text); }
 }
 .eotp-unit:hover { border-color: var(--accent); color: var(--accent); }
 .eotp-unit:active { transform: scale(0.94); }
-.eotp-unit.is-hours {
-  background: var(--info);
-  border-color: var(--info);
-  color: #fff;
-}
+.eotp-unit.is-hours { background: var(--info); border-color: var(--info); color: #fff; }
 .eotp-unit.is-hours:hover { color: #fff; border-color: var(--info); }
-/* Rattachement à un ouvrage : n'apparaît que sur les lignes en heures. */
-.eotp-link { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.eotp-link[hidden] { display: none; }
-.eotp-link-label {
-  font-size: 10.5px; font-weight: 800; letter-spacing: 0.04em;
-  text-transform: uppercase; color: var(--text-4);
-  flex-shrink: 0;
-}
 .eotp-setup {
-  flex: 1; min-width: 0;
+  min-width: 0;
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--surface); color: var(--text);
   font-size: 12.5px; font-family: inherit;
-  padding: 5px 8px;
+  padding: 7px 8px;
 }
-.eotp-setup:focus { outline: none; border-color: var(--accent); }
+.eotp-setup:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
 .eotp-remove {
-  flex-shrink: 0;
+  justify-self: end;
   width: 30px; height: 30px;
   border: none; background: transparent;
-  color: var(--text-3);
+  color: var(--text-4);
   display: inline-flex; align-items: center; justify-content: center;
   border-radius: 6px;
+  cursor: pointer;
 }
-.eotp-remove svg { width: 16px; height: 16px; fill: currentColor; }
-.eotp-remove:active { background: var(--surface-2); color: var(--danger); }
-.eotp-label {
-  width: 100%;
-  border: none;
+.eotp-remove svg { width: 15px; height: 15px; fill: currentColor; }
+.eotp-remove:hover { background: var(--danger-soft); color: var(--danger); }
+.eotp-add {
+  display: block; width: calc(100% - 32px);
+  margin: 10px 16px 14px;
+  padding: 9px;
   background: transparent;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
-  color: var(--text-2);
-  padding: 4px 2px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 700;
+  color: var(--text-3);
+  cursor: pointer;
 }
-.eotp-label::placeholder { color: var(--text-3); font-style: italic; }
-.eotp-label:focus { outline: none; border-bottom-color: var(--accent); }
+.eotp-add:hover { border-color: var(--accent); border-style: solid; color: var(--accent); background: var(--accent-soft); }
+/* Sur écran étroit, la grille se replie en deux rangées : le code et le
+   budget en tête, le libellé et le rattachement en dessous. */
+@media (max-width: 720px) {
+  .eotp-cols { display: none; }
+  .eotp-row, .eotp-row.is-h {
+    grid-template-columns: 1fr 168px 34px;
+    grid-template-areas: 'code budget suppr' 'label label label' 'lien lien lien';
+    row-gap: 4px; padding: 10px 12px;
+  }
+  .eotp-row > .eotp-code { grid-area: code; }
+  .eotp-row > .eotp-budget-wrap { grid-area: budget; }
+  .eotp-row > .eotp-remove { grid-area: suppr; }
+  .eotp-row > .eotp-label { grid-area: label; }
+  .eotp-row > .eotp-setup { grid-area: lien; }
+  .eotp-add { width: calc(100% - 24px); margin: 10px 12px 12px; }
+}
 .eotp-empty {
   font-style: italic; color: var(--text-3);
   text-align: center; padding: 16px 8px; margin: 0;
@@ -7624,7 +7797,7 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
    colonnes que la largeur le permet. Les en-têtes de section conservent
    toute la largeur. */
 @media (min-width: 1200px) {
-  .company-list, .task-list, .eotp-list, .lots-list, .doc-labels-list,
+  .company-list, .lots-list, .doc-labels-list,
   .backup-list, .caces-list, .legend-list {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
