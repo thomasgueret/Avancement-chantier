@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.85';
+const APP_VERSION = '1.86';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -2238,9 +2238,44 @@ const OUVRAGE_PALETTE = [
   { bg: 'rgba(121, 85, 72, 0.10)',   border: 'rgba(121, 85, 72, 0.35)'  },
   { bg: 'rgba(96, 125, 139, 0.10)',  border: 'rgba(96, 125, 139, 0.40)' }
 ];
-function getOuvrageColor(setup) {
+// La couleur d'un ouvrage était déduite de sa POSITION dans la liste :
+// réordonner les ouvrages aurait donc permuté toutes les couleurs de la
+// fiche d'avancement. Elle est désormais choisie et rangée sur l'ouvrage ;
+// à défaut, on retombe sur la couleur historique, celle de son rang.
+function getOuvrageColorIndex(setup) {
+  if (!setup) return 0;
+  const c = Number(setup.color);
+  if (Number.isInteger(c) && c >= 0 && c < OUVRAGE_PALETTE.length) return c;
   const idx = state.taskSetups.findIndex(s => s.id === setup.id);
-  return OUVRAGE_PALETTE[(idx >= 0 ? idx : 0) % OUVRAGE_PALETTE.length];
+  return (idx >= 0 ? idx : 0) % OUVRAGE_PALETTE.length;
+}
+function getOuvrageColor(setup) {
+  return OUVRAGE_PALETTE[getOuvrageColorIndex(setup)];
+}
+function setOuvrageColor(setupId, index) {
+  const st = getSetup(setupId);
+  if (!st) return;
+  st.color = index;
+  save();
+  renderSetupBar();
+  renderOuvrageHead();
+  renderAvancement();
+}
+
+// Ce qu'un ouvrage pèse réellement sur le chantier : dans combien de zones il
+// est affecté, quelle quantité cumulée, et combien d'heures cela représente.
+// Depuis cet onglet on ne voyait pas si un ouvrage servait à quelque chose.
+function getOuvrageUsage(setup) {
+  let zones = 0, quantite = 0;
+  for (const zid of Object.keys(state.zoneOuvrages || {})) {
+    const entry = (state.zoneOuvrages[zid] || []).find(o => o.setupId === setup.id);
+    if (!entry) continue;
+    zones++;
+    quantite += Number(entry.quantity) || 0;
+  }
+  const ratio = (setup.tasks || []).filter(t => !t.excluded).reduce((a, t) => a + (t.ratio || 0), 0);
+  const eotp = getEOTPs().find(e => e.setupId === setup.id) || null;
+  return { zones, quantite, ratio, heures: quantite * ratio, eotp };
 }
 function applyOuvrageColor(el, setup) {
   const c = getOuvrageColor(setup);
@@ -2377,22 +2412,40 @@ function setOuvrageQuantity(zoneId, setupId, quantity) {
 // L'ancienne barre était un menu déroulant : on ne voyait ni les autres
 // ouvrages, ni ce qu'ils contenaient. Ce sont maintenant des vignettes.
 function renderSetupBar() {
+  renderOuvrageStats();
   const bar = document.getElementById('setupbar');
   if (!bar) return;
   bar.innerHTML = '';
   for (const st of state.taskSetups) {
     const actif = st.id === state.currentSetupId;
-    const chip = dbEl('button', 'ouvrage-chip' + (actif ? ' is-active' : ''));
-    chip.type = 'button';
+    const chip = dbEl('div', 'ouvrage-chip' + (actif ? ' is-active' : ''));
     chip.dataset.setupId = st.id;
-    chip.setAttribute('aria-pressed', actif ? 'true' : 'false');
-    chip.appendChild(dbEl('span', 'ouvrage-chip-name', st.name || '(ouvrage sans nom)'));
+    applyOuvrageColor(chip, st);
+
+    const poignee = dbEl('button', 'ouvrage-chip-handle');
+    poignee.type = 'button';
+    poignee.title = 'Glisser pour réordonner les ouvrages';
+    poignee.setAttribute('aria-label', 'Déplacer « ' + (st.name || 'cet ouvrage') + ' »');
+    poignee.textContent = '⠿';
+    ouvrageAttachDrag(chip, poignee, st.id);
+    chip.appendChild(poignee);
+
+    const corps = dbEl('button', 'ouvrage-chip-body');
+    corps.type = 'button';
+    corps.setAttribute('aria-pressed', actif ? 'true' : 'false');
+    corps.appendChild(dbEl('span', 'ouvrage-chip-name', st.name || '(ouvrage sans nom)'));
     const n = (st.tasks || []).length;
-    const ratio = (st.tasks || []).filter(t => !t.excluded).reduce((a, t) => a + (t.ratio || 0), 0);
-    chip.appendChild(dbEl('span', 'ouvrage-chip-meta',
-      n ? n + (n > 1 ? ' tâches · ' : ' tâche · ') + formatRatio(ratio) + ' h/' + (st.unit || 'm²')
-        : 'aucune tâche'));
-    chip.addEventListener('click', () => switchSetup(st.id));
+    const u = getOuvrageUsage(st);
+    corps.appendChild(dbEl('span', 'ouvrage-chip-meta',
+      (n ? n + (n > 1 ? ' tâches · ' : ' tâche · ') + formatRatio(u.ratio) + ' h/' + (st.unit || 'm²')
+         : 'aucune tâche')));
+    // L'usage réel : sans lui, on ne sait pas si l'ouvrage sert.
+    corps.appendChild(dbEl('span', 'ouvrage-chip-usage',
+      u.zones
+        ? u.zones + (u.zones > 1 ? ' zones · ' : ' zone · ') + formatHours(u.heures) + ' h'
+        : 'affecté à aucune zone'));
+    corps.addEventListener('click', () => switchSetup(st.id));
+    chip.appendChild(corps);
     bar.appendChild(chip);
   }
   const add = dbEl('button', 'ouvrage-chip ouvrage-chip-add');
@@ -2403,14 +2456,143 @@ function renderSetupBar() {
   bar.appendChild(add);
 }
 
-// En-tête de l'ouvrage courant : nom modifiable sur place (plus de mode
-// « renommage » à activer), unité, et suppression.
+// Bandeau de tête : ce que pèsent les ouvrages, tous confondus.
+function renderOuvrageStats() {
+  const el = document.getElementById('ouvragestats');
+  if (!el) return;
+  el.innerHTML = '';
+  const setups = state.taskSetups || [];
+  let taches = 0, heures = 0, sansZone = 0;
+  for (const st of setups) {
+    taches += (st.tasks || []).length;
+    const u = getOuvrageUsage(st);
+    heures += u.heures;
+    if (!u.zones) sansZone++;
+  }
+  const carte = (valeur, libelle, alerte) => {
+    const c = dbEl('div', 'ouvrage-stat' + (alerte ? ' is-warn' : ''));
+    c.appendChild(dbEl('span', 'ouvrage-stat-value', valeur));
+    c.appendChild(dbEl('span', 'ouvrage-stat-label', libelle));
+    el.appendChild(c);
+  };
+  carte(String(setups.length), setups.length > 1 ? 'ouvrages' : 'ouvrage');
+  carte(String(taches), taches > 1 ? 'tâches' : 'tâche');
+  carte(formatHours(heures) + ' h', 'au budget des ouvrages affectés');
+  if (sansZone) carte(String(sansZone), sansZone > 1 ? 'ouvrages sans zone' : 'ouvrage sans zone', true);
+}
+
+// Réordonnancement des ouvrages par glissé. La couleur étant désormais
+// rangée sur l'ouvrage, changer l'ordre ne permute plus les couleurs de la
+// fiche d'avancement.
+let _ouvrageDrag = null;
+function ouvrageAttachDrag(chip, poignee, id) {
+  poignee.addEventListener('pointerdown', () => { chip.draggable = true; });
+  poignee.addEventListener('pointerup', () => { chip.draggable = false; });
+  chip.addEventListener('dragstart', (e) => {
+    _ouvrageDrag = id;
+    chip.classList.add('is-dragging');
+    if (e.dataTransfer) { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', id); }
+  });
+  chip.addEventListener('dragend', () => {
+    chip.classList.remove('is-dragging');
+    chip.draggable = false;
+    document.querySelectorAll('.ouvrage-chip.is-drop').forEach(el => el.classList.remove('is-drop'));
+    _ouvrageDrag = null;
+  });
+  chip.addEventListener('dragover', (e) => {
+    if (!_ouvrageDrag || _ouvrageDrag === id) return;
+    e.preventDefault();
+    document.querySelectorAll('.ouvrage-chip.is-drop').forEach(el => el.classList.remove('is-drop'));
+    chip.classList.add('is-drop');
+  });
+  chip.addEventListener('drop', (e) => {
+    if (!_ouvrageDrag || _ouvrageDrag === id) return;
+    e.preventDefault();
+    moveOuvrage(_ouvrageDrag, id);
+    _ouvrageDrag = null;
+  });
+  poignee.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    const l = state.taskSetups;
+    const i = l.findIndex(s => s.id === id);
+    const j = i + (e.key === 'ArrowLeft' ? -1 : 1);
+    if (i < 0 || j < 0 || j >= l.length) return;
+    moveOuvrage(id, l[j].id, e.key === 'ArrowRight');
+    requestAnimationFrame(() => {
+      const again = document.querySelector('.ouvrage-chip[data-setup-id="' + cssEscape(id) + '"] .ouvrage-chip-handle');
+      if (again) again.focus();
+    });
+  });
+}
+// Toute opération qui décale les rangs (déplacement, duplication,
+// suppression) doit d'abord GRAVER la couleur effective de chaque ouvrage :
+// celles qui étaient encore déduites du rang changeraient sinon sous les yeux
+// de l'utilisateur, dans cet onglet comme dans la fiche d'avancement.
+function figerCouleursOuvrages() {
+  for (const st of state.taskSetups) {
+    if (!Number.isInteger(Number(st.color))) st.color = getOuvrageColorIndex(st);
+  }
+}
+function moveOuvrage(dragId, targetId, apres) {
+  figerCouleursOuvrages();
+  const l = state.taskSetups;
+  const from = l.findIndex(s => s.id === dragId);
+  const to = l.findIndex(s => s.id === targetId);
+  if (from < 0 || to < 0 || from === to) return;
+  const [item] = l.splice(from, 1);
+  const at = l.findIndex(s => s.id === targetId);
+  l.splice(apres ? at + 1 : at, 0, item);
+  save();
+  renderSetupBar();
+  renderAvancement();
+}
+
+// Dupliquer : recréer « Bardage grands bâtiments » à partir de « Bardage
+// petits bâtiments » demandait de ressaisir six tâches et six ratios.
+function duplicateSetup() {
+  const src = getCurrentSetup();
+  if (!src) return;
+  figerCouleursOuvrages();
+  const copie = {
+    id: uid(),
+    name: (src.name || 'Ouvrage') + ' (copie)',
+    unit: src.unit,
+    color: getOuvrageColorIndex(src),
+    tasks: (src.tasks || []).map(t => ({ id: uid(), name: t.name, ratio: t.ratio, excluded: !!t.excluded })),
+  };
+  const i = state.taskSetups.findIndex(s => s.id === src.id);
+  state.taskSetups.splice(i + 1, 0, copie);
+  state.currentSetupId = copie.id;
+  save();
+  renderSetupBar();
+  renderOuvrageHead();
+  renderTasks();
+  renderEOTPsConfig();
+  showToast('Ouvrage dupliqué — les tâches et les ratios sont repris, pas les zones');
+  requestAnimationFrame(() => {
+    const inp = document.querySelector('.ouvrage-name');
+    if (inp) { inp.focus(); inp.select(); }
+  });
+}
+
 function renderOuvrageHead() {
   const head = document.getElementById('ouvragehead');
   if (!head) return;
   head.innerHTML = '';
   const setup = getCurrentSetup();
   if (!setup) return;
+  applyOuvrageColor(head, setup);
+
+  // Pastille de couleur : elle sert dans la fiche d'avancement, où elle
+  // distingue les ouvrages d'une même zone. Elle se choisit donc ici.
+  const pastille = dbEl('button', 'ouvrage-color');
+  pastille.type = 'button';
+  pastille.title = 'Couleur de l\'ouvrage dans la fiche d\'avancement';
+  pastille.setAttribute('aria-label', pastille.title);
+  pastille.style.background = OUVRAGE_PALETTE[getOuvrageColorIndex(setup)].border;
+  pastille.addEventListener('click', (e) => { e.stopPropagation(); openOuvrageColorPicker(setup, pastille); });
+  head.appendChild(pastille);
 
   const nom = document.createElement('input');
   nom.className = 'ouvrage-name';
@@ -2421,8 +2603,8 @@ function renderOuvrageHead() {
   nom.addEventListener('input', () => {
     setup.name = nom.value;
     save();
-    // La vignette et les menus qui citent cet ouvrage suivent la frappe,
-    // mais on ne re-rend pas le champ lui-même : le focus resterait perdu.
+    // La vignette suit la frappe, mais on ne re-rend pas le champ lui-même :
+    // le focus serait perdu à chaque lettre.
     const chip = document.querySelector('.ouvrage-chip[data-setup-id="' + cssEscape(setup.id) + '"] .ouvrage-chip-name');
     if (chip) chip.textContent = setup.name || '(ouvrage sans nom)';
   });
@@ -2447,8 +2629,20 @@ function renderOuvrageHead() {
   });
   uWrap.appendChild(uSel);
   head.appendChild(uWrap);
+  if (isUnitOuvrage(setup)) {
+    const tag = dbEl('span', 'ouvrage-unit-hint', 'avancement compté à la pièce');
+    tag.title = 'Unité « u » : dans Avancement, la saisie se fait en pièces posées et non en pourcentage.';
+    head.appendChild(tag);
+  }
 
-  const del = dbEl('button', 'ouvrage-del');
+  const dup = dbEl('button', 'ouvrage-action');
+  dup.type = 'button';
+  dup.textContent = 'Dupliquer';
+  dup.title = 'Créer un ouvrage identique — tâches et ratios repris, zones non reprises';
+  dup.addEventListener('click', duplicateSetup);
+  head.appendChild(dup);
+
+  const del = dbEl('button', 'ouvrage-action is-danger');
   del.type = 'button';
   del.textContent = 'Supprimer';
   del.title = 'Supprimer cet ouvrage et ses tâches';
@@ -2456,6 +2650,55 @@ function renderOuvrageHead() {
   if (del.disabled) del.title = 'Le dernier ouvrage ne peut pas être supprimé';
   del.addEventListener('click', deleteSetup);
   head.appendChild(del);
+
+  // Bandeau d'usage : où cet ouvrage sert, et quelle ligne de budget le suit.
+  const u = getOuvrageUsage(setup);
+  const bas = dbEl('div', 'ouvrage-usage');
+  if (u.zones) {
+    bas.appendChild(dbEl('span', 'ouvrage-usage-item',
+      'Affecté à ' + u.zones + (u.zones > 1 ? ' zones' : ' zone')
+      + ' · ' + formatQty(u.quantite) + ' ' + (setup.unit || 'm²') + ' au total'
+      + ' · ' + formatHours(u.heures) + ' h'));
+  } else {
+    bas.appendChild(dbEl('span', 'ouvrage-usage-item is-warn',
+      'Affecté à aucune zone — il ne pèse rien dans l\'avancement tant qu\'on ne l\'a pas posé dans Données → Zones.'));
+  }
+  if (u.eotp) {
+    const lien = dbEl('span', 'ouvrage-usage-item is-link',
+      '\u21C4 ' + (eotpDisplay(u.eotp) || 'ligne de budget'));
+    lien.title = 'Cette ligne de budget reprend les quantités et l\'avancement de l\'ouvrage (Données → eOTP).';
+    bas.appendChild(lien);
+  }
+  head.appendChild(bas);
+}
+
+// Choix de la couleur : un petit panneau de pastilles sous le bouton.
+function openOuvrageColorPicker(setup, ancre) {
+  const ancien = document.getElementById('ouvragecolorpop');
+  if (ancien) {
+    const memeOuvrage = ancien.dataset.for === setup.id;
+    ancien.remove();
+    if (memeOuvrage) return;
+  }
+  const pop = dbEl('div', 'ouvrage-color-pop');
+  pop.id = 'ouvragecolorpop';
+  pop.dataset.for = setup.id;
+  const courant = getOuvrageColorIndex(setup);
+  OUVRAGE_PALETTE.forEach((c, i) => {
+    const b = dbEl('button', 'ouvrage-color-opt' + (i === courant ? ' is-active' : ''));
+    b.type = 'button';
+    b.style.background = c.border;
+    b.setAttribute('aria-label', 'Couleur ' + (i + 1));
+    b.addEventListener('click', (e) => { e.stopPropagation(); pop.remove(); setOuvrageColor(setup.id, i); });
+    pop.appendChild(b);
+  });
+  ancre.parentNode.insertBefore(pop, ancre.nextSibling);
+  const fermer = (e) => {
+    if (pop.contains(e.target)) return;
+    pop.remove();
+    document.removeEventListener('click', fermer);
+  };
+  setTimeout(() => document.addEventListener('click', fermer), 0);
 }
 
 function switchSetup(setupId) {
@@ -2505,6 +2748,7 @@ function deleteSetup() {
     }
     if (Object.keys(state.taskProgress[zid]).length === 0) delete state.taskProgress[zid];
   }
+  figerCouleursOuvrages();
   state.taskSetups = state.taskSetups.filter(s => s.id !== setup.id);
   state.currentSetupId = state.taskSetups[0].id;
   if (state.avancementZoneId && !zoneIsTaskBearing(state.avancementZoneId)) state.avancementZoneId = null;
@@ -2720,7 +2964,10 @@ function attachTaskDrag(handle, itemEl) {
       itemEl.classList.add('dragging');
       if (navigator.vibrate) navigator.vibrate(12);
     };
-    const pressTimer = setTimeout(enterDrag, LONG_PRESS_MS);
+    // Glissé immédiat : la poignée ne sert qu'à ça, attendre 300 ms
+    // n'apportait rien et différait de la poignée de l'onglet Heures.
+    enterDrag();
+    const pressTimer = 0;
 
     const onMove = (ev) => {
       const dy = ev.clientY - startY;
