@@ -1607,6 +1607,14 @@ option { background-color: var(--surface); color: var(--text); }
 }
 .progress-item.is-excluded { background: var(--surface-2); }
 .counter.is-percent .counter-value { min-width: 52px; }
+/* Ouvrage compté à la pièce : le compteur porte « 12 / 84 u » plutôt qu'un
+   pourcentage. Le nombre posé est en avant, le total en retrait. */
+.progress-item.is-pieces .counter-value {
+  min-width: 84px;
+  display: inline-flex; align-items: baseline; justify-content: center; gap: 4px;
+}
+.counter-units-done { font-weight: 800; }
+.counter-units-total { font-size: 0.82em; color: var(--text-3); white-space: nowrap; }
 .progress-tick {
   flex-shrink: 0;
   width: 40px; height: 40px;

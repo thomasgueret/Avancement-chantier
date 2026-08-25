@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.84';
+const APP_VERSION = '1.85';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -2209,6 +2209,21 @@ function deleteZone(id) {
 // Picker (select natif iOS) pour AJOUTER un ouvrage à une zone.
 // Le select ne liste que les ouvrages pas encore affectés à la zone.
 const ZONE_UNITS = ['u', 'Ens.', 'm²', 'ml'];
+// Un ouvrage en « u » se compte à la pièce : 12 marquises sur 84, pas 14 %.
+// L'avancement reste stocké en pourcentage — c'est lui qui pondère les
+// heures, alimente la courbe et la matrice — mais il se SAISIT et s'AFFICHE
+// en pièces là où la quantité de la zone est connue.
+function isUnitOuvrage(setup) {
+  return !!setup && String(setup.unit || '').trim().toLowerCase() === 'u';
+}
+// Nombre de pièces correspondant à un pourcentage, et l'inverse.
+function unitsFromPercent(percent, quantity) {
+  return Math.round((quantity * (percent || 0)) / 100);
+}
+function percentFromUnits(units, quantity) {
+  if (!(quantity > 0)) return 0;
+  return Math.max(0, Math.min(100, (units / quantity) * 100));
+}
 
 // Palette de couleurs d'arrière-plan attribuées automatiquement aux ouvrages
 // (selon leur position dans state.taskSetups). Volontairement très transparentes
@@ -2801,8 +2816,13 @@ function getProgress(zoneId, taskId) {
   return state.taskProgress[zoneId]?.[taskId] || 0;
 }
 
-function setProgress(zoneId, taskId, percent) {
-  percent = Math.max(0, Math.min(100, Math.round(percent / 5) * 5));
+// `libre` : ne pas caler sur le pas de 5 %. Une saisie à la pièce doit
+// pouvoir valoir 13/84, ce que l'arrondi au multiple de 5 rendrait
+// impossible à atteindre.
+function setProgress(zoneId, taskId, percent, libre) {
+  percent = libre
+    ? Math.max(0, Math.min(100, percent))
+    : Math.max(0, Math.min(100, Math.round(percent / 5) * 5));
   if (percent === 0) {
     if (state.taskProgress[zoneId]) {
       delete state.taskProgress[zoneId][taskId];
@@ -2897,9 +2917,20 @@ function formatUpdatedDate(ts) {
   return `${dd}/${mm}/${d.getFullYear()}`;
 }
 
-function changeProgress(zoneId, taskId, delta) {
+function changeProgress(zoneId, taskId, delta, libre) {
   const cur = getProgress(zoneId, taskId);
-  setProgress(zoneId, taskId, cur + delta);
+  setProgress(zoneId, taskId, cur + delta, libre);
+  renderFicheHeader();
+  renderProgressList();
+  renderRecap();
+}
+// Avance ou recule d'un nombre de PIÈCES. On repart du compte affiché et non
+// du pourcentage brut : sinon un arrondi d'affichage ferait sauter deux
+// pièces d'un coup, ou aucune.
+function changeProgressUnits(zoneId, taskId, quantity, delta) {
+  const cur = getProgress(zoneId, taskId);
+  const pieces = unitsFromPercent(cur, quantity) + delta;
+  setProgress(zoneId, taskId, percentFromUnits(pieces, quantity), true);
   renderFicheHeader();
   renderProgressList();
   renderRecap();
@@ -3308,19 +3339,27 @@ function renderProgressList() {
 function buildProgressItem(zoneId, setup, task, quantity) {
   const percent = getProgress(zoneId, task.id);
   const isDone = percent >= 100;
+  // Ouvrage compté à la pièce ET quantité connue : on saisit des pièces.
+  // Sans quantité (rien de renseigné dans Données → Zones), il n'y a rien à
+  // compter — on retombe sur le pourcentage.
+  const enPieces = isUnitOuvrage(setup) && quantity > 0;
+  const unit = setup.unit || 'm²';
+  const pieces = enPieces ? unitsFromPercent(percent, quantity) : 0;
+
   const li = document.createElement('li');
   applyOuvrageColor(li, setup);
-  li.className = 'progress-item' + (isDone ? ' is-done' : '') + (task.excluded ? ' is-excluded' : '');
+  li.className = 'progress-item' + (isDone ? ' is-done' : '') + (task.excluded ? ' is-excluded' : '')
+    + (enPieces ? ' is-pieces' : '');
   li.innerHTML = `
     <div class="progress-info">
       <span class="progress-task-name"></span>
     </div>
     <div class="counter is-percent">
-      <button class="counter-btn" data-action="dec" aria-label="−5 %">−</button>
+      <button class="counter-btn" data-action="dec">−</button>
       <span class="counter-value"></span>
-      <button class="counter-btn" data-action="inc" aria-label="+5 %">+</button>
+      <button class="counter-btn" data-action="inc">+</button>
     </div>
-    <button class="progress-tick" data-action="tick" aria-label="Marquer terminé à 100 %">
+    <button class="progress-tick" data-action="tick" aria-label="Marquer terminé">
       <svg viewBox="0 0 24 24"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>
     </button>
   `;
@@ -3331,26 +3370,17 @@ function buildProgressItem(zoneId, setup, task, quantity) {
     tag.textContent = 'hors ratio';
     li.querySelector('.progress-info').appendChild(tag);
   }
-  // Récap quantité + heures, entre le nom et le sélecteur de %. Les deux
-  // lignes suivent le même format « réalisé / total » :
-  //   quantité totale de la tâche = quantité de l'ouvrage dans la zone,
-  //   quantité réalisée = quantité totale × avancement (ex. 22 m² à 75 %
-  //   → 16,5 / 22 m²) ;
-  //   heures allouées = quantité × ratio, heures réalisées = allouées ×
-  //   avancement (ex. 6,6 h à 75 % → 4,95 / 6,6 h).
-  // Rien n'est affiché si la quantité n'est pas renseignée dans
-  // Données → Zones. Ces heures sont la pondération de la tâche dans le
-  // % global de l'ouvrage (cf. getOuvrageRawProgress) — l'affichage des
-  // heures réalisées est purement informatif.
+  // Récap sous le nom, au même format « réalisé / total » que les heures.
+  // Quand le compteur affiche déjà les pièces, cette ligne porte le
+  // pourcentage : les deux lectures restent disponibles, sans doublon.
   if (quantity > 0) {
     const meta = document.createElement('span');
     meta.className = 'progress-task-meta';
-    // Deux lignes empilées (gain de largeur) : quantités au-dessus,
-    // heures en dessous.
-    const unit = setup.unit || 'm²';
     const qty = document.createElement('span');
     qty.className = 'progress-task-meta-qty';
-    qty.textContent = `${formatQty(quantity * percent / 100)} / ${formatQty(quantity)} ${unit}`;
+    qty.textContent = enPieces
+      ? `${formatPct(percent)} % de ${formatQty(quantity)} ${unit}`
+      : `${formatQty(quantity * percent / 100)} / ${formatQty(quantity)} ${unit}`;
     meta.appendChild(qty);
     const hours = quantity * (task.ratio || 0);
     if (!task.excluded && hours > 0) {
@@ -3363,14 +3393,38 @@ function buildProgressItem(zoneId, setup, task, quantity) {
     }
     li.querySelector('.progress-info').after(meta);
   }
-  li.querySelector('.counter-value').textContent = `${percent} %`;
+
+  const val = li.querySelector('.counter-value');
   const decBtn = li.querySelector('[data-action="dec"]');
   const incBtn = li.querySelector('[data-action="inc"]');
-  if (percent <= 0) decBtn.disabled = true;
-  if (percent >= 100) incBtn.disabled = true;
-  decBtn.addEventListener('click', () => changeProgress(zoneId, task.id, -5));
-  incBtn.addEventListener('click', () => changeProgress(zoneId, task.id, +5));
-  li.querySelector('[data-action="tick"]').addEventListener('click', () => {
+  if (enPieces) {
+    val.innerHTML = '';
+    val.appendChild(dbEl('strong', 'counter-units-done', String(pieces)));
+    val.appendChild(dbEl('span', 'counter-units-total', '/ ' + formatQty(quantity) + ' ' + unit));
+    // L'écart entre les deux nombres est un `gap` : il ne se lit ni à la
+    // synthèse vocale ni au copier-coller. On donne donc la phrase entière.
+    val.setAttribute('aria-label', pieces + ' sur ' + formatQty(quantity) + ' ' + unit + ' réalisées');
+    decBtn.setAttribute('aria-label', 'Une pièce de moins');
+    incBtn.setAttribute('aria-label', 'Une pièce de plus');
+    decBtn.disabled = pieces <= 0;
+    incBtn.disabled = pieces >= quantity;
+    decBtn.addEventListener('click', () => changeProgressUnits(zoneId, task.id, quantity, -1));
+    incBtn.addEventListener('click', () => changeProgressUnits(zoneId, task.id, quantity, +1));
+  } else {
+    val.textContent = `${percent} %`;
+    decBtn.setAttribute('aria-label', '−5 %');
+    incBtn.setAttribute('aria-label', '+5 %');
+    decBtn.disabled = percent <= 0;
+    incBtn.disabled = percent >= 100;
+    decBtn.addEventListener('click', () => changeProgress(zoneId, task.id, -5));
+    incBtn.addEventListener('click', () => changeProgress(zoneId, task.id, +5));
+  }
+  const tick = li.querySelector('[data-action="tick"]');
+  tick.title = isDone
+    ? 'Remettre à zéro'
+    : (enPieces ? 'Marquer les ' + formatQty(quantity) + ' ' + unit + ' comme posées' : 'Marquer terminé à 100 %');
+  tick.setAttribute('aria-label', tick.title);
+  tick.addEventListener('click', () => {
     setProgress(zoneId, task.id, isDone ? 0 : 100);
     renderFicheHeader();
     renderProgressList();
