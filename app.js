@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.86';
+const APP_VERSION = '1.87';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -50,7 +50,14 @@ const state = {
   currentSetupId: null,   // ouvrage en cours d'édition (onglet Données → Tâches)
   zoneOuvrages: {},       // { [zoneId]: [{ setupId, quantity }] } — ouvrages affectés à une zone, chacun avec sa quantité
   zoneCollapsed: {},      // { [zoneId]: true } — zones repliées dans l'arborescence
-  taskProgress: {},       // { [zoneId]: { [taskId]: percent 0..100 } }
+  taskProgress: {},
+  // Horodatage de CHAQUE cellule d'avancement : { [zoneId]: { [taskId]: ms } }.
+  // Sans lui, la fusion arbitrait toutes les cellules d'un coup avec un seul
+  // horodatage de clé — un appareil qui saisissait une zone faisait alors
+  // reculer les zones saisies ailleurs. L'entrée SURVIT à la suppression de
+  // la valeur (pierre tombale) : c'est ce qui permet à une remise à zéro de
+  // se propager au lieu d'être ressuscitée par un appareil en retard.
+  taskProgressAt: {},
   zoneUpdated: {},        // { [zoneId]: timestamp (ms) — dernière modif d'avancement }
   avancementZoneId: null, // zone affichée dans l'onglet Avancement
   recapBuildingId: null,  // zone racine sélectionnée dans Avancement → Récapitulatif
@@ -191,6 +198,10 @@ const state = {
   // Sert de garde au push : si le serveur a bougé depuis, on fusionne
   // d'abord. Persisté localement, jamais synchronisé.
   syncLastSeenRemoteTs: 0,
+  // Horodatage de la plus ancienne modification pas encore envoyée. Persisté
+  // et propre à l'appareil : sans lui, rouvrir l'application remettait le
+  // drapeau « rien à envoyer » à zéro et le travail restait sur place.
+  syncPendingSince: 0,
   currentDate: todayISO(),
   chartHidden: {},        // { [companyId]: true } — entreprises masquées du graphique
   chartRange: 30          // 7 | 30 | 'all'
@@ -213,6 +224,8 @@ function load() {
     if (data.zoneOuvrages) state.zoneOuvrages = data.zoneOuvrages;
     if (data.zoneCollapsed) state.zoneCollapsed = data.zoneCollapsed;
     if (data.taskProgress) state.taskProgress = data.taskProgress;
+    if (data.taskProgressAt) state.taskProgressAt = data.taskProgressAt;
+    migrerHorodatageAvancement();
     if (data.zoneUpdated) state.zoneUpdated = data.zoneUpdated;
     if (data.zonePickerCollapsed && typeof data.zonePickerCollapsed === 'object') state.zonePickerCollapsed = data.zonePickerCollapsed;
     if (data.zoneDates && typeof data.zoneDates === 'object') state.zoneDates = data.zoneDates;
@@ -307,6 +320,7 @@ function load() {
     if (typeof data.syncTimestamp === 'number') state.syncTimestamp = data.syncTimestamp;
     if (data.syncKeyStamps && typeof data.syncKeyStamps === 'object') state.syncKeyStamps = data.syncKeyStamps;
     if (typeof data.syncLastSeenRemoteTs === 'number') state.syncLastSeenRemoteTs = data.syncLastSeenRemoteTs;
+    if (typeof data.syncPendingSince === 'number') state.syncPendingSince = data.syncPendingSince;
     // Champs hérités (ancien modèle à liste unique) → migrés ensuite
     if (data.tasks) state._legacyTasks = data.tasks;
     if (data.zoneHasTasks) state._legacyZoneHasTasks = data.zoneHasTasks;
@@ -349,6 +363,7 @@ function buildPersistedData() {
     zoneOuvrages: state.zoneOuvrages,
     zoneCollapsed: state.zoneCollapsed,
     taskProgress: state.taskProgress,
+    taskProgressAt: state.taskProgressAt,
     zoneUpdated: state.zoneUpdated,
     zonePickerCollapsed: state.zonePickerCollapsed,
     zoneDates: state.zoneDates,
@@ -425,7 +440,8 @@ function buildPersistedData() {
     chartRange: state.chartRange,
     syncTimestamp: state.syncTimestamp,
     syncKeyStamps: state.syncKeyStamps,
-    syncLastSeenRemoteTs: state.syncLastSeenRemoteTs
+    syncLastSeenRemoteTs: state.syncLastSeenRemoteTs,
+    syncPendingSince: state.syncPendingSince
   };
 }
 
@@ -526,8 +542,10 @@ function save() {
   //    push vers Supabase (sauf pendant l'application de l'état distant).
   if (!_syncApplying) {
     state.syncTimestamp = now;
+    if (!_hasPendingPush) state.syncPendingSince = now;
     _hasPendingPush = true;
     if (typeof schedulePush === 'function') schedulePush();
+    if (typeof updateSyncChip === 'function') updateSyncChip();
   }
   return ok;
 }
@@ -3066,10 +3084,58 @@ function getProgress(zoneId, taskId) {
 // `libre` : ne pas caler sur le pas de 5 %. Une saisie à la pièce doit
 // pouvoir valoir 13/84, ce que l'arrondi au multiple de 5 rendrait
 // impossible à atteindre.
+// Migration : les avancements saisis avant cette version n'ont pas
+// d'horodatage propre. On leur en donne un, UNE FOIS, à partir du dernier
+// horodatage connu de la clé — c'est-à-dire « aussi vieux que ma dernière
+// modification d'avancement ». Sans cette étape, ces cellules se seraient
+// repliées sur l'horodatage COURANT de la clé, et un appareil périmé qui
+// touchait une seule zone serait redevenu « le plus récent » sur toutes les
+// autres. C'est précisément le mécanisme qui a détruit le relevé du chantier.
+function migrerHorodatageAvancement() {
+  if (!state.taskProgressAt || typeof state.taskProgressAt !== 'object') state.taskProgressAt = {};
+  const repli = Number((state.syncKeyStamps || {}).taskProgress) || Number(state.syncTimestamp) || 1;
+  let pose = 0;
+  for (const z of Object.keys(state.taskProgress || {})) {
+    const zone = state.taskProgress[z];
+    if (!zone || typeof zone !== 'object') continue;
+    for (const t of Object.keys(zone)) {
+      if (hasProgressStamp(state.taskProgressAt, z, t)) continue;
+      if (!state.taskProgressAt[z]) state.taskProgressAt[z] = {};
+      state.taskProgressAt[z][t] = repli;
+      pose++;
+    }
+  }
+  if (pose) console.info('[Avancement] ' + pose + ' cellule(s) datée(s) rétroactivement (migration).');
+}
+
+// --- Horodatage par cellule d'avancement -------------------------------
+// L'avancement d'une zone × tâche est la donnée la plus coûteuse à ressaisir
+// du chantier : elle se relève à pied, sur place. Elle mérite donc son propre
+// horodatage, et non l'horodatage global de la clé `taskProgress`.
+function touchProgressStamp(zoneId, taskId, ts) {
+  if (!state.taskProgressAt || typeof state.taskProgressAt !== 'object') state.taskProgressAt = {};
+  if (!state.taskProgressAt[zoneId]) state.taskProgressAt[zoneId] = {};
+  state.taskProgressAt[zoneId][taskId] = ts || Date.now();
+}
+function getProgressStamp(at, zoneId, taskId, repli) {
+  const z = at && at[zoneId];
+  const v = z && Number(z[taskId]);
+  return Number.isFinite(v) && v > 0 ? v : (repli || 0);
+}
+// Un horodatage de cellule EXISTE-t-il vraiment ? C'est ce qui distingue
+// « cette cellule a été remise à zéro ici » (pierre tombale, donc une
+// opinion à faire valoir) de « cet appareil n'a jamais entendu parler de
+// cette cellule » (aucune opinion, l'autre côté fait foi).
+function hasProgressStamp(at, zoneId, taskId) {
+  const z = at && at[zoneId];
+  return !!z && Number.isFinite(Number(z[taskId])) && Number(z[taskId]) > 0;
+}
+
 function setProgress(zoneId, taskId, percent, libre) {
   percent = libre
     ? Math.max(0, Math.min(100, percent))
     : Math.max(0, Math.min(100, Math.round(percent / 5) * 5));
+  const now = Date.now();
   if (percent === 0) {
     if (state.taskProgress[zoneId]) {
       delete state.taskProgress[zoneId][taskId];
@@ -3079,7 +3145,11 @@ function setProgress(zoneId, taskId, percent, libre) {
     if (!state.taskProgress[zoneId]) state.taskProgress[zoneId] = {};
     state.taskProgress[zoneId][taskId] = percent;
   }
-  state.zoneUpdated[zoneId] = Date.now();
+  // L'horodatage est posé MÊME quand la valeur est supprimée : c'est la
+  // pierre tombale qui permet à une remise à zéro de gagner sur un appareil
+  // en retard, au lieu de voir l'ancienne valeur ressusciter.
+  touchProgressStamp(zoneId, taskId, now);
+  state.zoneUpdated[zoneId] = now;
   save();
   invalidateHeuresModel();
   // Point d'historique du jour : c'est ce qui alimente la courbe
@@ -20872,7 +20942,7 @@ const SYNC_EXCLUDED_KEYS = new Set([
   'zonePickerCollapsed',             // branches repliées des sélecteurs de zone (UI)
   'recapPeriod', 'recapCurveMode', 'recapCurveZoom', // réglages d'affichage du récapitulatif (UI)
   'ganttZoom',                       // échelle du planning des bâtiments (UI)
-  'syncStatus', 'syncTimestamp', 'syncLastPulled', 'syncLastSeenRemoteTs',
+  'syncStatus', 'syncTimestamp', 'syncLastPulled', 'syncLastSeenRemoteTs', 'syncPendingSince',
   'protoPlan', 'protoPlanW', 'protoPlanH' // champs hérités migrés
 ]);
 
@@ -20881,6 +20951,43 @@ let _hasPendingPush = false;      // true si une modif locale n'a pas encore ét
 let syncPushTimer = null;
 let syncPollTimer = null;
 let syncRealtimeChannel = null;
+// Relance des envois en échec. Sans elle, une saisie faite dans un bâtiment
+// sans réseau restait sur l'appareil : l'évènement `online` ne relançait
+// l'envoi que si le navigateur avait lui-même signalé « hors ligne », ce qui
+// n'arrive pas sur un réseau qui répond mais échoue (portail captif, 5xx,
+// délai dépassé). Deux heures de relevé pouvaient ainsi ne jamais partir.
+let syncRetryTimer = null;
+// Au démarrage, une modification laissée en attente lors d'une session
+// précédente doit repartir d'elle-même. `_hasPendingPush` est une variable de
+// module : elle repartait à faux à chaque ouverture, et l'application se
+// croyait à jour alors que le relevé du chantier n'avait jamais quitté
+// l'appareil.
+function reprendreEnvoiEnAttente() {
+  if (!isSupabaseConfigured()) return;
+  if (!(Number(state.syncPendingSince) > 0)) return;
+  _hasPendingPush = true;
+  updateSyncChip();
+  withTimeout(doSyncPush(), 'push au démarrage', SYNC_PUSH_TIMEOUT_MS)
+    .catch(err => console.warn('[Sync] push au démarrage KO', err));
+}
+let syncRetryDelai = 0;
+const SYNC_RETRY_MIN_MS = 5000;
+const SYNC_RETRY_MAX_MS = 60000;
+function planifierReprise() {
+  if (!_hasPendingPush || !isSupabaseConfigured()) return;
+  clearTimeout(syncRetryTimer);
+  syncRetryDelai = syncRetryDelai ? Math.min(syncRetryDelai * 2, SYNC_RETRY_MAX_MS) : SYNC_RETRY_MIN_MS;
+  syncRetryTimer = setTimeout(() => {
+    if (!_hasPendingPush) return;
+    withTimeout(doSyncPush(), 'push reprise', SYNC_PUSH_TIMEOUT_MS)
+      .catch(err => console.warn('[Sync] reprise KO', err));
+  }, syncRetryDelai);
+}
+function arreterReprise() {
+  clearTimeout(syncRetryTimer);
+  syncRetryTimer = null;
+  syncRetryDelai = 0;
+}
 
 function schedulePush() {
   if (!isSupabaseConfigured()) return;
@@ -20946,12 +21053,17 @@ async function doSyncPush() {
     if (error) throw error;
     state.syncLastSeenRemoteTs = new Date(updatedAt).getTime();
     _hasPendingPush = false;
+    state.syncPendingSince = 0;
+    arreterReprise();
     setSyncStatus('idle');
     // Profite du réseau disponible pour écouler les images en attente
     processPlanUploadQueue();
   } catch (err) {
     console.error('Sync push KO', err);
     setSyncStatus('error');
+    // L'envoi a échoué : la modification reste en attente et sera relancée,
+    // avec un délai qui double à chaque échec.
+    planifierReprise();
   }
 }
 
@@ -21087,6 +21199,67 @@ function unionMergeById(localArr, remoteArr, remoteNewer) {
   return order.map(k => byId.get(k));
 }
 
+// Fusion de l'avancement, cellule par cellule.
+// Chaque zone × tâche est arbitrée par SON horodatage. Une cellule absente
+// d'un côté n'est pas « rien » : si son horodatage y est plus récent, c'est
+// une SUPPRESSION volontaire (retour à 0 %), et elle gagne. Sans cela, une
+// remise à zéro était systématiquement annulée par le premier appareil en
+// retard qui se synchronisait.
+// `repliLocal` / `repliDistant` : l'horodatage de clé, utilisé pour les
+// données d'avant cette version, qui n'ont pas encore d'horodatage propre.
+function mergeProgressByCell(locVal, locAt, repliLocal, remVal, remAt, repliDistant) {
+  const L = _isPlainObject(locVal) ? locVal : {};
+  const R = _isPlainObject(remVal) ? remVal : {};
+  const LA = _isPlainObject(locAt) ? locAt : {};
+  const RA = _isPlainObject(remAt) ? remAt : {};
+  const valeurs = {}, stamps = {};
+  const zones = new Set([...Object.keys(L), ...Object.keys(R), ...Object.keys(LA), ...Object.keys(RA)]);
+  for (const z of zones) {
+    const lz = _isPlainObject(L[z]) ? L[z] : {};
+    const rz = _isPlainObject(R[z]) ? R[z] : {};
+    const lza = _isPlainObject(LA[z]) ? LA[z] : {};
+    const rza = _isPlainObject(RA[z]) ? RA[z] : {};
+    const taches = new Set([...Object.keys(lz), ...Object.keys(rz), ...Object.keys(lza), ...Object.keys(rza)]);
+    for (const t of taches) {
+      const lv = Object.prototype.hasOwnProperty.call(lz, t) ? lz[t] : undefined;
+      const rv = Object.prototype.hasOwnProperty.call(rz, t) ? rz[t] : undefined;
+      // Repli à 0 et non sur l'horodatage de clé : après migration, toute
+      // cellule réelle porte le sien. Une cellule sans horodatage vient d'un
+      // client non mis à jour — la dater d'aujourd'hui lui donnerait raison
+      // contre un relevé de terrain plus récent.
+      const lt = getProgressStamp(LA, z, t, repliLocal);
+      const rt = getProgressStamp(RA, z, t, repliDistant);
+      // Un côté n'a une OPINION sur cette cellule que s'il en porte une
+      // valeur, ou une pierre tombale. Sans quoi l'absence serait lue comme
+      // une suppression, et une zone saisie sur un seul appareil
+      // disparaîtrait à la première fusion.
+      const lAvis = lv !== undefined || hasProgressStamp(LA, z, t);
+      const rAvis = rv !== undefined || hasProgressStamp(RA, z, t);
+      let val, ts;
+      if (lAvis && !rAvis)      { val = lv; ts = lt; }
+      else if (rAvis && !lAvis) { val = rv; ts = rt; }
+      else if (lt > rt)         { val = lv; ts = lt; }
+      else if (rt > lt)         { val = rv; ts = rt; }
+      else {
+        // Horodatages identiques : on garde la valeur présente plutôt que
+        // l'absence, et à défaut celle du serveur — choix déterministe.
+        val = (lv !== undefined && rv === undefined) ? lv
+            : (rv !== undefined ? rv : lv);
+        ts = lt;
+      }
+      if (ts > 0) {
+        if (!stamps[z]) stamps[z] = {};
+        stamps[z][t] = ts;
+      }
+      if (val !== undefined) {
+        if (!valeurs[z]) valeurs[z] = {};
+        valeurs[z][t] = val;
+      }
+    }
+  }
+  return { valeurs, stamps };
+}
+
 async function applyRemoteStateMerge(remoteState, remoteTs) {
   const remoteStamps = (remoteState.syncKeyStamps && typeof remoteState.syncKeyStamps === 'object')
     ? remoteState.syncKeyStamps : {};
@@ -21114,6 +21287,26 @@ async function applyRemoteStateMerge(remoteState, remoteTs) {
     // union — on ne perd jamais une entrée datée/nommée. Les suppressions
     // internes (valeur d'une clé) se propagent via « le plus récent gagne »
     // sur la feuille ; supprimer une clé entière est rare et non bloquant.
+    // L'AVANCEMENT est arbitré CELLULE PAR CELLULE, avec son propre
+    // horodatage. C'est la donnée qu'on relève à pied sur le chantier : elle
+    // ne doit pas dépendre d'un horodatage de clé commun à toutes les zones.
+    // Avant ce traitement, un appareil qui saisissait UNE zone faisait
+    // reculer toutes les autres zones dont il détenait une copie périmée.
+    if (k === 'taskProgress') {
+      const fusion = mergeProgressByCell(
+        state.taskProgress, state.taskProgressAt, lStamp,
+        remoteState.taskProgress, remoteState.taskProgressAt, rStamp);
+      if (!_jsonEq(fusion.valeurs, state.taskProgress)) {
+        toApply.push({ k: 'taskProgress', value: fusion.valeurs, stamp: Math.max(rStamp, lStamp) });
+      }
+      if (!_jsonEq(fusion.stamps, state.taskProgressAt)) {
+        toApply.push({ k: 'taskProgressAt', value: fusion.stamps, stamp: Math.max(rStamp, lStamp) });
+      }
+      if (!_jsonEq(fusion.valeurs, remoteState.taskProgress)) localWins++;
+      continue;
+    }
+    if (k === 'taskProgressAt') continue;   // traitée avec taskProgress
+
     if (SYNC_UNION_DICT_KEYS.has(k)) {
       const remoteNewer = rStamp >= lStamp;
       const merged = unionMergeDeep(_isPlainObject(state[k]) ? state[k] : {}, _isPlainObject(remoteState[k]) ? remoteState[k] : {}, remoteNewer);
@@ -21242,17 +21435,35 @@ function updateSyncChip() {
     error:   { txt: '🔴 Erreur de sync',         cls: 'is-error' },
     offline: { txt: '⚫ Hors-ligne',             cls: 'is-offline' }
   };
+  // Une modification en attente prime sur le statut : dire « Synchronisé »
+  // alors que le travail du jour n'a pas quitté l'appareil est le pire des
+  // messages — c'est ce qui laisse repartir du chantier en confiance.
+  if (_hasPendingPush && state.syncStatus !== 'syncing') {
+    chip.textContent = '🟠 Non envoyé';
+    chip.className = 'auth-sync-chip is-pending';
+    chip.title = 'Des saisies ne sont pas encore parties vers le serveur. '
+      + 'Elles sont enregistrées sur cet appareil. Touchez pour réessayer maintenant.';
+    return;
+  }
   const lbl = labels[state.syncStatus] || labels.idle;
   chip.textContent = lbl.txt;
   chip.className = 'auth-sync-chip ' + lbl.cls;
+  chip.title = state.syncStatus === 'error'
+    ? 'La dernière synchronisation a échoué. Touchez pour réessayer.'
+    : 'Touchez pour forcer une synchronisation.';
 }
 
 // Détecte le passage online/offline pour mettre à jour le chip et
 // déclencher un push des changements en attente
 window.addEventListener('online', () => {
-  if (state.syncStatus === 'offline') {
-    setSyncStatus('idle');
-    schedulePush();
+  if (state.syncStatus === 'offline') setSyncStatus('idle');
+  // On relance DÈS QU'IL Y A QUELQUE CHOSE EN ATTENTE, quel que soit le
+  // statut affiché : un envoi peut avoir échoué sans que le navigateur se
+  // soit jamais déclaré hors ligne.
+  if (_hasPendingPush) {
+    arreterReprise();
+    withTimeout(doSyncPush(), 'push retour réseau', SYNC_PUSH_TIMEOUT_MS)
+      .catch(err => console.warn('[Sync] push retour réseau KO', err));
   }
   processPlanUploadQueue(); // reprend les uploads d'images en attente
 });
@@ -21262,10 +21473,34 @@ window.addEventListener('offline', () => {
 // Quand l'utilisateur revient sur l'onglet (focus), pull immédiat pour
 // rattraper les changements éventuels des coéquipiers.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && isSupabaseConfigured()) {
-    withTimeout(doSyncPull(), 'pull visibility').catch(err => console.warn('[Sync] pull visibility KO', err));
+  if (!isSupabaseConfigured()) return;
+  if (document.visibilityState === 'visible') {
+    // POUSSER D'ABORD : cet appareil peut détenir des saisies que le serveur
+    // n'a pas. Tirer en premier reviendrait à fusionner par-dessus un travail
+    // que personne d'autre ne connaît encore.
+    const suite = _hasPendingPush
+      ? withTimeout(doSyncPush(), 'push visibility', SYNC_PUSH_TIMEOUT_MS)
+      : Promise.resolve();
+    suite
+      .catch(err => console.warn('[Sync] push visibility KO', err))
+      .then(() => withTimeout(doSyncPull(), 'pull visibility'))
+      .catch(err => console.warn('[Sync] pull visibility KO', err));
+  } else {
+    // L'application passe en arrière-plan (téléphone rangé, écran verrouillé) :
+    // on n'attend pas la fin de l'anti-rebond, on envoie tout de suite.
+    flushSyncPush();
   }
 });
+// Dernière chance avant la fermeture : l'anti-rebond de 1,5 s laissait partir
+// l'utilisateur avec sa dernière saisie non envoyée.
+function flushSyncPush() {
+  if (!isSupabaseConfigured() || !_hasPendingPush) return;
+  clearTimeout(syncPushTimer);
+  withTimeout(doSyncPush(), 'push flush', SYNC_PUSH_TIMEOUT_MS)
+    .catch(err => console.warn('[Sync] push flush KO', err));
+}
+window.addEventListener('pagehide', flushSyncPush);
+window.addEventListener('beforeunload', flushSyncPush);
 
 // ---------- Init ----------
 function init() {
@@ -21915,6 +22150,10 @@ function init() {
     if (syncForceBtn) syncForceBtn.hidden = false;
     updateSyncChip();
     (async () => {
+      // ENVOYER AVANT DE TIRER quand cet appareil détient un travail que le
+      // serveur n'a pas encore vu. Tirer d'abord ferait fusionner l'état
+      // distant par-dessus un relevé que personne d'autre ne connaît.
+      try { reprendreEnvoiEnAttente(); } catch (e) { console.warn('[Sync] reprise démarrage KO', e); }
       try { await withTimeout(doSyncPull(true), 'initial pull', 15000); } catch (e) { console.warn('[Sync] initial pull KO', e); }
       try { await withTimeout(setupSyncRealtime(), 'setupSyncRealtime'); } catch (e) { console.warn(e); }
       try { startSyncPolling(); } catch (e) { console.warn(e); }

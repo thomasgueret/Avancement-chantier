@@ -4810,6 +4810,15 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
 .auth-sync-chip.is-idle    { background: var(--success-soft); color: var(--success-2); }
 .auth-sync-chip.is-syncing { background: var(--warning-soft); color: var(--warning); }
 .auth-sync-chip.is-error   { background: var(--danger-soft); color: var(--danger); }
+/* Des saisies attendent d'être envoyées : plus visible qu'un simple statut,
+   c'est le message qui doit retenir avant de quitter le chantier. */
+.auth-sync-chip.is-pending {
+  background: var(--warning-soft); color: var(--warning);
+  font-weight: 800;
+  animation: syncPending 2.2s ease-in-out infinite;
+}
+@keyframes syncPending { 0%, 100% { opacity: 1; } 50% { opacity: 0.62; } }
+@media (prefers-reduced-motion: reduce) { .auth-sync-chip.is-pending { animation: none; } }
 .auth-sync-chip.is-offline { background: var(--surface-3); color: var(--text-3); }
 
 /* Bandeau en-tête : label + chip Synchro côte à côte */
