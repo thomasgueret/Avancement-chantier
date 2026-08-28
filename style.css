@@ -7958,3 +7958,67 @@ select.stock-form-input { -webkit-appearance: menulist; padding: 8px 6px; }
   #forceupdatebtn, .backup-create-btn, .eotp-add-btn, .lots-add-btn,
   .zone-add-root, .echeckin-report-btn { max-width: 460px; }
 }
+
+
+/* ---- Relevés d'avancement (Avancement → Avancement) ---------------------
+   Clôturer une tournée fige une copie de tout l'avancement. Le suivi courant
+   n'est pas interrompu : les courbes et le récapitulatif lisent toujours la
+   même donnée vivante. */
+.releves-bar { margin: 0 0 14px; }
+.releve-courant {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+}
+.releve-courant-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.releve-courant-titre { font-size: 13.5px; font-weight: 700; color: var(--text); }
+.releve-courant-meta { font-size: 11.5px; color: var(--text-3); }
+.releve-cloturer {
+  flex-shrink: 0;
+  border: 1px solid var(--accent); border-radius: 999px;
+  background: var(--surface);
+  font-size: 12.5px; font-weight: 700;
+  color: var(--accent);
+  padding: 7px 16px;
+  cursor: pointer;
+}
+.releve-cloturer:hover { background: var(--accent); color: #fff; }
+.releve-vide {
+  margin: 8px 0 0; padding: 10px 14px;
+  font-size: 12px; font-style: italic; color: var(--text-3);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+.releve-liste {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 8px; margin-top: 8px;
+}
+.releve-carte {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.releve-carte-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.releve-nom {
+  font-size: 13px; font-weight: 700; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.releve-meta { font-size: 11px; color: var(--text-3); white-space: nowrap; }
+.releve-act {
+  flex-shrink: 0;
+  border: 1px solid var(--border-strong); border-radius: 999px;
+  background: var(--surface);
+  font-size: 11.5px; font-weight: 700;
+  color: var(--text-3);
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.releve-act:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.releve-act.is-danger { padding: 4px 9px; font-size: 14px; line-height: 1; }
+.releve-act.is-danger:hover { border-color: var(--danger); color: var(--danger); background: var(--danger-soft); }

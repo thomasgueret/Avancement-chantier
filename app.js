@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.87';
+const APP_VERSION = '1.88';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -58,6 +58,12 @@ const state = {
   // la valeur (pierre tombale) : c'est ce qui permet à une remise à zéro de
   // se propager au lieu d'être ressuscitée par un appareil en retard.
   taskProgressAt: {},
+  // Relevés d'avancement : des instantanés FIGÉS de l'avancement, pris à la
+  // clôture d'une tournée de chantier. Rangés par identifiant pour que la
+  // fusion les unisse sans jamais en perdre un. L'avancement courant, lui,
+  // reste vivant et continu — les courbes n'en voient rien.
+  avancementReleves: {},
+  avancementReleveDebut: 0,   // début de la période en cours (ms)
   zoneUpdated: {},        // { [zoneId]: timestamp (ms) — dernière modif d'avancement }
   avancementZoneId: null, // zone affichée dans l'onglet Avancement
   recapBuildingId: null,  // zone racine sélectionnée dans Avancement → Récapitulatif
@@ -225,6 +231,8 @@ function load() {
     if (data.zoneCollapsed) state.zoneCollapsed = data.zoneCollapsed;
     if (data.taskProgress) state.taskProgress = data.taskProgress;
     if (data.taskProgressAt) state.taskProgressAt = data.taskProgressAt;
+    if (data.avancementReleves && typeof data.avancementReleves === 'object') state.avancementReleves = data.avancementReleves;
+    if (typeof data.avancementReleveDebut === 'number') state.avancementReleveDebut = data.avancementReleveDebut;
     migrerHorodatageAvancement();
     if (data.zoneUpdated) state.zoneUpdated = data.zoneUpdated;
     if (data.zonePickerCollapsed && typeof data.zonePickerCollapsed === 'object') state.zonePickerCollapsed = data.zonePickerCollapsed;
@@ -364,6 +372,8 @@ function buildPersistedData() {
     zoneCollapsed: state.zoneCollapsed,
     taskProgress: state.taskProgress,
     taskProgressAt: state.taskProgressAt,
+    avancementReleves: state.avancementReleves,
+    avancementReleveDebut: state.avancementReleveDebut,
     zoneUpdated: state.zoneUpdated,
     zonePickerCollapsed: state.zonePickerCollapsed,
     zoneDates: state.zoneDates,
@@ -3531,9 +3541,197 @@ function buildAvancementZonePicker(zone) {
   return wrap;
 }
 
+// ========================================================================
+//   RELEVÉS D'AVANCEMENT — clôturer une tournée, la figer, y revenir
+//   L'avancement d'une zone est une donnée COURANTE, pas hebdomadaire :
+//   « la façade est à 75 % », un point. Un relevé n'est donc pas une copie
+//   de travail à éditer, mais un INSTANTANÉ FIGÉ pris à la clôture d'une
+//   tournée. L'avancement courant reste vivant et continu — les courbes,
+//   la matrice et le récapitulatif n'en voient rien.
+// ========================================================================
+const RELEVES_MAX = 52;   // un an de relevés hebdomadaires
+
+function getReleves() {
+  if (!state.avancementReleves || typeof state.avancementReleves !== 'object') state.avancementReleves = {};
+  return Object.values(state.avancementReleves).sort((a, b) => (b.closedAt || 0) - (a.closedAt || 0));
+}
+// Numéro de semaine ISO, pour proposer un nom par défaut parlant.
+function numeroSemaineISO(d) {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const jour = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - jour);
+  const debut = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  return Math.ceil((((t - debut) / 86400000) + 1) / 7);
+}
+// Combien de cellules d'avancement ont bougé depuis le début de la période.
+function compterSaisiesPeriode() {
+  const debut = Number(state.avancementReleveDebut) || 0;
+  if (!debut) return 0;
+  let n = 0;
+  for (const z of Object.keys(state.taskProgressAt || {})) {
+    for (const t of Object.keys(state.taskProgressAt[z] || {})) {
+      if (Number(state.taskProgressAt[z][t]) >= debut) n++;
+    }
+  }
+  return n;
+}
+// Avancement global d'un instantané, pondéré comme partout ailleurs.
+function pctInstantane(progress) {
+  const vrai = state.taskProgress;
+  try {
+    state.taskProgress = progress || {};
+    invalidateHeuresModel();
+    return computeAvancementModel('').pct;
+  } finally {
+    state.taskProgress = vrai;
+    invalidateHeuresModel();
+  }
+}
+
+function cloturerReleve() {
+  const n = compterSaisiesPeriode();
+  const d = new Date();
+  const defaut = 'Semaine ' + numeroSemaineISO(d);
+  const nom = prompt(
+    'Clôturer le relevé en cours ?\n\n'
+    + 'Une copie figée de tout l\'avancement est conservée. Elle ne bougera plus, '
+    + 'et vous pourrez y revenir ou la restaurer.\n'
+    + 'L\'avancement courant, lui, continue : rien n\'est remis à zéro.\n\n'
+    + 'Nom du relevé :', defaut);
+  if (nom === null) return;
+  const id = 'rel_' + uid();
+  state.avancementReleves[id] = {
+    id,
+    name: (nom || defaut).trim() || defaut,
+    startedAt: Number(state.avancementReleveDebut) || 0,
+    closedAt: Date.now(),
+    saisies: n,
+    pct: pctInstantane(state.taskProgress),
+    taskProgress: JSON.parse(JSON.stringify(state.taskProgress || {})),
+    taskProgressAt: JSON.parse(JSON.stringify(state.taskProgressAt || {})),
+  };
+  // Purge : on garde les plus récents, sans quoi chaque synchro transporterait
+  // une année entière d'instantanés.
+  const tous = getReleves();
+  for (const r of tous.slice(RELEVES_MAX)) delete state.avancementReleves[r.id];
+  state.avancementReleveDebut = Date.now();
+  save();
+  renderAvancement();
+  showToast('Relevé « ' + state.avancementReleves[id].name + ' » clôturé et figé');
+}
+
+function restaurerReleve(id) {
+  const r = (state.avancementReleves || {})[id];
+  if (!r) return;
+  const quand = r.closedAt ? formatDateShortFR(new Date(r.closedAt).toISOString().slice(0, 10)) : '';
+  if (!confirm(
+    'Restaurer le relevé « ' + r.name + ' » ' + (quand ? '(' + quand + ') ' : '') + '?\n\n'
+    + 'L\'avancement courant sera REMPLACÉ par celui de ce relevé, sur tous les '
+    + 'bâtiments. Une sauvegarde de l\'état actuel est prise avant, et un relevé '
+    + '« avant restauration » est créé.')) return;
+  // Filet : on fige d'abord l'état courant, pour pouvoir revenir en arrière.
+  const idAvant = 'rel_' + uid();
+  state.avancementReleves[idAvant] = {
+    id: idAvant,
+    name: 'Avant restauration du ' + (r.name || 'relevé'),
+    startedAt: Number(state.avancementReleveDebut) || 0,
+    closedAt: Date.now(),
+    saisies: compterSaisiesPeriode(),
+    pct: pctInstantane(state.taskProgress),
+    taskProgress: JSON.parse(JSON.stringify(state.taskProgress || {})),
+    taskProgressAt: JSON.parse(JSON.stringify(state.taskProgressAt || {})),
+  };
+  // La restauration doit GAGNER la prochaine fusion, sinon un autre appareil
+  // la défera aussitôt : on redate chaque cellule restaurée.
+  const now = Date.now();
+  state.taskProgress = JSON.parse(JSON.stringify(r.taskProgress || {}));
+  const at = {};
+  for (const z of Object.keys(r.taskProgressAt || {})) {
+    at[z] = {};
+    for (const t of Object.keys(r.taskProgressAt[z] || {})) at[z][t] = now;
+  }
+  for (const z of Object.keys(state.taskProgress)) {
+    if (!at[z]) at[z] = {};
+    for (const t of Object.keys(state.taskProgress[z])) at[z][t] = now;
+  }
+  state.taskProgressAt = at;
+  state.avancementReleveDebut = now;
+  save();
+  invalidateHeuresModel();
+  stampAvancementHistory();
+  renderAvancement();
+  showToast('Relevé « ' + r.name + ' » restauré — l\'état précédent a été figé, rien n\'est perdu');
+}
+
+function supprimerReleve(id) {
+  const r = (state.avancementReleves || {})[id];
+  if (!r) return;
+  if (!confirm('Supprimer le relevé « ' + r.name + ' » ?\nIl ne sera plus possible d\'y revenir.')) return;
+  delete state.avancementReleves[id];
+  save();
+  renderAvancement();
+  showToast('Relevé supprimé');
+}
+
+function renderRelevesBar() {
+  const el = document.getElementById('relevesbar');
+  if (!el) return;
+  el.innerHTML = '';
+  if (!state.avancementReleveDebut) { state.avancementReleveDebut = Date.now(); }
+  const n = compterSaisiesPeriode();
+  const releves = getReleves();
+
+  const courant = dbEl('div', 'releve-courant');
+  const gauche = dbEl('div', 'releve-courant-txt');
+  gauche.appendChild(dbEl('span', 'releve-courant-titre', 'Relevé en cours'));
+  const debut = new Date(state.avancementReleveDebut);
+  gauche.appendChild(dbEl('span', 'releve-courant-meta',
+    'ouvert depuis le ' + formatDateShortFR(debut.toISOString().slice(0, 10))
+    + ' · ' + n + (n > 1 ? ' saisies' : ' saisie')));
+  courant.appendChild(gauche);
+  const btn = dbEl('button', 'releve-cloturer', 'Clôturer le relevé');
+  btn.type = 'button';
+  btn.title = 'Fige une copie de tout l\'avancement. L\'avancement courant continue : rien n\'est remis à zéro.';
+  btn.addEventListener('click', cloturerReleve);
+  courant.appendChild(btn);
+  el.appendChild(courant);
+
+  if (!releves.length) {
+    const vide = dbEl('p', 'releve-vide',
+      'Aucun relevé figé. Clôturez le relevé à la fin d\'une tournée : vous garderez une copie de l\'avancement, à laquelle revenir en cas de fausse manœuvre.');
+    el.appendChild(vide);
+    return;
+  }
+  const liste = dbEl('div', 'releve-liste');
+  for (const r of releves) {
+    const carte = dbEl('div', 'releve-carte');
+    const t = dbEl('div', 'releve-carte-txt');
+    t.appendChild(dbEl('span', 'releve-nom', r.name || 'Relevé'));
+    const d = r.closedAt ? formatDateShortFR(new Date(r.closedAt).toISOString().slice(0, 10)) : '';
+    t.appendChild(dbEl('span', 'releve-meta',
+      d + ' · ' + formatPct(Math.round((r.pct || 0) * 10) / 10) + ' %'
+      + (r.saisies ? ' · ' + r.saisies + (r.saisies > 1 ? ' saisies' : ' saisie') : '')));
+    carte.appendChild(t);
+    const rest = dbEl('button', 'releve-act', 'Restaurer');
+    rest.type = 'button';
+    rest.title = 'Remettre l\'avancement dans l\'état de ce relevé';
+    rest.addEventListener('click', () => restaurerReleve(r.id));
+    carte.appendChild(rest);
+    const sup = dbEl('button', 'releve-act is-danger', '×');
+    sup.type = 'button';
+    sup.title = 'Supprimer ce relevé';
+    sup.setAttribute('aria-label', 'Supprimer le relevé ' + (r.name || ''));
+    sup.addEventListener('click', () => supprimerReleve(r.id));
+    carte.appendChild(sup);
+    liste.appendChild(carte);
+  }
+  el.appendChild(liste);
+}
+
 function renderAvancement() {
   renderRecap();
   renderHeures();
+  renderRelevesBar();
   const pickers = document.getElementById('zonepickers');
   const fiche = document.getElementById('zonefiche');
   const empty = document.getElementById('avancementempty');
@@ -21149,7 +21347,7 @@ async function doSyncPull(initial = false, opts = {}) {
 const SYNC_UNION_DICT_KEYS = new Set([
   'presences', 'weather', 'taskProgress', 'zoneUpdated', 'avancementHistory', 'zoneDates', 'stockArticles',
   'adminDocs', 'workerDocs', 'heuresData', 'crEntries', 'stEntries',
-  'travauxCells'
+  'travauxCells', 'avancementReleves'
 ]);
 const SYNC_UNION_ARRAY_KEYS = new Set([
   'stockEntries', 'consommableEntries', 'protoShapes', 'devis',
