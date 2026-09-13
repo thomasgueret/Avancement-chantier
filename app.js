@@ -7,7 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.88';
+const APP_VERSION = '1.89';
 
 // ====================================================================
 //   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
@@ -233,7 +233,8 @@ function load() {
     if (data.taskProgressAt) state.taskProgressAt = data.taskProgressAt;
     if (data.avancementReleves && typeof data.avancementReleves === 'object') state.avancementReleves = data.avancementReleves;
     if (typeof data.avancementReleveDebut === 'number') state.avancementReleveDebut = data.avancementReleveDebut;
-    migrerHorodatageAvancement();
+    // (l'horodatage rétroactif de l'avancement est posé dans
+    //  runPostLoadMigrations(), une fois zoneUpdated et syncKeyStamps relus)
     if (data.zoneUpdated) state.zoneUpdated = data.zoneUpdated;
     if (data.zonePickerCollapsed && typeof data.zonePickerCollapsed === 'object') state.zonePickerCollapsed = data.zonePickerCollapsed;
     if (data.zoneDates && typeof data.zoneDates === 'object') state.zoneDates = data.zoneDates;
@@ -357,6 +358,10 @@ function runPostLoadMigrations() {
   migratePresences();
   migrateSetups();
   migrateDevisVersions();
+  // APRÈS la relecture de zoneUpdated / syncKeyStamps / syncTimestamp : la
+  // datation rétroactive de l'avancement a besoin de ces trois repères pour ne
+  // pas envoyer tout le chantier en 1970 (cf. commentaire de la fonction).
+  migrerHorodatageAvancement();
   initSyncStamps();
 }
 
@@ -512,6 +517,13 @@ function initSyncStamps() {
 let _lastQuotaToastAt = 0;
 function save() {
   const now = Date.now();
+  // 0) Marque « il reste quelque chose à envoyer », posée AVANT la
+  //    sérialisation : buildPersistedData() lit `state`, donc une marque posée
+  //    plus bas n'atteignait le stockage qu'au save SUIVANT. Une saisie unique
+  //    suivie d'une fermeture brutale laissait alors la marque à zéro, et
+  //    l'application se croyait à jour au redémarrage — le défaut même que la
+  //    persistance de ce marqueur devait fermer.
+  if (!_syncApplying && !_hasPendingPush) state.syncPendingSince = now;
   // 1) Détection des clés modifiées → bump de leur stamp (fusion synchro).
   //    Le JSON de chaque clé est assemblé à la main pour ne stringifier
   //    qu'une seule fois (les plans pèsent lourd).
@@ -552,8 +564,7 @@ function save() {
   //    push vers Supabase (sauf pendant l'application de l'état distant).
   if (!_syncApplying) {
     state.syncTimestamp = now;
-    if (!_hasPendingPush) state.syncPendingSince = now;
-    _hasPendingPush = true;
+    _hasPendingPush = true;   // la marque persistée est posée en (0), plus haut
     if (typeof schedulePush === 'function') schedulePush();
     if (typeof updateSyncChip === 'function') updateSyncChip();
   }
@@ -3095,27 +3106,47 @@ function getProgress(zoneId, taskId) {
 // pouvoir valoir 13/84, ce que l'arrondi au multiple de 5 rendrait
 // impossible à atteindre.
 // Migration : les avancements saisis avant cette version n'ont pas
-// d'horodatage propre. On leur en donne un, UNE FOIS, à partir du dernier
-// horodatage connu de la clé — c'est-à-dire « aussi vieux que ma dernière
-// modification d'avancement ». Sans cette étape, ces cellules se seraient
-// repliées sur l'horodatage COURANT de la clé, et un appareil périmé qui
-// touchait une seule zone serait redevenu « le plus récent » sur toutes les
-// autres. C'est précisément le mécanisme qui a détruit le relevé du chantier.
+// d'horodatage propre. On leur en donne un, UNE FOIS.
+//
+// La date retenue est, par ordre de préférence :
+//   1. `zoneUpdated[zone]` — « dernière modification d'avancement DE CETTE
+//      ZONE ». C'est de loin le meilleur repère, et il existe dans toutes les
+//      données anciennes : il date la zone au jour près au lieu de dater tout
+//      le chantier d'un seul coup.
+//   2. l'horodatage de la clé `taskProgress`, puis `syncTimestamp` : « aussi
+//      vieux que ma dernière modification d'avancement, quelque part ».
+//
+// ATTENTION À L'ORDRE D'APPEL : cette fonction doit tourner APRÈS que
+// `syncKeyStamps`, `syncTimestamp` et `zoneUpdated` ont été relus du stockage.
+// Appelée trop tôt, elle ne trouvait rien et datait TOUT le chantier de 1970 ;
+// un appareil resté en version précédente gagnait alors chaque conflit avec sa
+// copie périmée, et le relevé de terrain était détruit. Elle est donc appelée
+// depuis `runPostLoadMigrations()`, jamais depuis le corps de `load()`.
 function migrerHorodatageAvancement() {
-  if (!state.taskProgressAt || typeof state.taskProgressAt !== 'object') state.taskProgressAt = {};
-  const repli = Number((state.syncKeyStamps || {}).taskProgress) || Number(state.syncTimestamp) || 1;
-  let pose = 0;
+  if (!_isPlainObject(state.taskProgressAt)) state.taskProgressAt = {};
+  const repliGlobal = Number((state.syncKeyStamps || {}).taskProgress)
+    || Number(state.syncTimestamp) || 0;
+  let pose = 0, sansRepere = 0;
   for (const z of Object.keys(state.taskProgress || {})) {
     const zone = state.taskProgress[z];
-    if (!zone || typeof zone !== 'object') continue;
+    if (!_isPlainObject(zone)) continue;
+    const parZone = Number((state.zoneUpdated || {})[z]);
+    const date = (Number.isFinite(parZone) && parZone > 0) ? parZone : repliGlobal;
+    if (!date) sansRepere++;
     for (const t of Object.keys(zone)) {
       if (hasProgressStamp(state.taskProgressAt, z, t)) continue;
-      if (!state.taskProgressAt[z]) state.taskProgressAt[z] = {};
-      state.taskProgressAt[z][t] = repli;
+      if (!_isPlainObject(state.taskProgressAt[z])) state.taskProgressAt[z] = {};
+      // Sans le moindre repère (chantier jamais synchronisé, aucune date de
+      // zone), on date de 1 plutôt que de « maintenant » : une donnée dont on
+      // ignore l'âge ne doit pas gagner contre un relevé de terrain daté.
+      state.taskProgressAt[z][t] = date || 1;
       pose++;
     }
   }
-  if (pose) console.info('[Avancement] ' + pose + ' cellule(s) datée(s) rétroactivement (migration).');
+  if (pose) {
+    console.info('[Avancement] ' + pose + ' cellule(s) datée(s) rétroactivement (migration)'
+      + (sansRepere ? ' — dont ' + sansRepere + ' zone(s) sans repère de date' : '') + '.');
+  }
 }
 
 // --- Horodatage par cellule d'avancement -------------------------------
@@ -21403,16 +21434,39 @@ function unionMergeById(localArr, remoteArr, remoteNewer) {
 // une SUPPRESSION volontaire (retour à 0 %), et elle gagne. Sans cela, une
 // remise à zéro était systématiquement annulée par le premier appareil en
 // retard qui se synchronisait.
-// `repliLocal` / `repliDistant` : l'horodatage de clé, utilisé pour les
-// données d'avant cette version, qui n'ont pas encore d'horodatage propre.
-function mergeProgressByCell(locVal, locAt, repliLocal, remVal, remAt, repliDistant) {
-  const L = _isPlainObject(locVal) ? locVal : {};
-  const R = _isPlainObject(remVal) ? remVal : {};
-  const LA = _isPlainObject(locAt) ? locAt : {};
-  const RA = _isPlainObject(remAt) ? remAt : {};
-  const valeurs = {}, stamps = {};
+//
+// LE REPLI, quand une cellule n'a pas d'horodatage propre (appareil resté en
+// version antérieure, donnée importée) : on prend `zoneUpdated[zone]`, la
+// dernière modification d'avancement DE CETTE ZONE, avant de se rabattre sur
+// l'horodatage de la clé. Cette précision est tout le sujet : l'horodatage de
+// clé est commun à TOUTES les zones, si bien qu'un appareil ayant saisi une
+// seule zone paraissait « le plus récent » sur toutes les autres et faisait
+// reculer les relevés faits ailleurs. C'est le mécanisme qui a détruit deux
+// heures de relevé de chantier ; le repli par zone le neutralise.
+//
+// `loc` / `rem` : { progress, at, zoneUpdated, repli }.
+function mergeProgressByCell(loc, rem) {
+  loc = loc || {}; rem = rem || {};
+  const L = _isPlainObject(loc.progress) ? loc.progress : {};
+  const R = _isPlainObject(rem.progress) ? rem.progress : {};
+  const LA = _isPlainObject(loc.at) ? loc.at : {};
+  const RA = _isPlainObject(rem.at) ? rem.at : {};
+  const LZU = _isPlainObject(loc.zoneUpdated) ? loc.zoneUpdated : {};
+  const RZU = _isPlainObject(rem.zoneUpdated) ? rem.zoneUpdated : {};
+  const repliLocalGlobal = Number(loc.repli) > 0 ? Number(loc.repli) : 0;
+  const repliDistantGlobal = Number(rem.repli) > 0 ? Number(rem.repli) : 0;
+  const repliDe = (zu, z, global) => {
+    const v = Number(zu[z]);
+    return Number.isFinite(v) && v > 0 ? v : global;
+  };
+  // Accumulateurs SANS prototype : une zone nommée « __proto__ » (donnée
+  // importée ou corrompue) polluerait sinon Object.prototype, et l'avancement
+  // de tout le chantier avec.
+  const valeurs = Object.create(null), stamps = Object.create(null);
   const zones = new Set([...Object.keys(L), ...Object.keys(R), ...Object.keys(LA), ...Object.keys(RA)]);
   for (const z of zones) {
+    const repliLocal = repliDe(LZU, z, repliLocalGlobal);
+    const repliDistant = repliDe(RZU, z, repliDistantGlobal);
     const lz = _isPlainObject(L[z]) ? L[z] : {};
     const rz = _isPlainObject(R[z]) ? R[z] : {};
     const lza = _isPlainObject(LA[z]) ? LA[z] : {};
@@ -21421,10 +21475,9 @@ function mergeProgressByCell(locVal, locAt, repliLocal, remVal, remAt, repliDist
     for (const t of taches) {
       const lv = Object.prototype.hasOwnProperty.call(lz, t) ? lz[t] : undefined;
       const rv = Object.prototype.hasOwnProperty.call(rz, t) ? rz[t] : undefined;
-      // Repli à 0 et non sur l'horodatage de clé : après migration, toute
-      // cellule réelle porte le sien. Une cellule sans horodatage vient d'un
-      // client non mis à jour — la dater d'aujourd'hui lui donnerait raison
-      // contre un relevé de terrain plus récent.
+      // Repli PAR ZONE (cf. en-tête) : une cellule sans horodatage propre vient
+      // d'un appareil non mis à jour ou d'un import. On la date de la dernière
+      // modification connue de SA zone, jamais de « maintenant ».
       const lt = getProgressStamp(LA, z, t, repliLocal);
       const rt = getProgressStamp(RA, z, t, repliDistant);
       // Un côté n'a une OPINION sur cette cellule que s'il en porte une
@@ -21445,12 +21498,18 @@ function mergeProgressByCell(locVal, locAt, repliLocal, remVal, remAt, repliDist
             : (rv !== undefined ? rv : lv);
         ts = lt;
       }
+      // INVARIANT : toute valeur retenue repart avec un horodatage. Sans lui,
+      // l'appareil pousserait un avancement que le prochain arbitrage devrait
+      // à nouveau dater par repli — c'est-à-dire par le mécanisme même qui
+      // faisait perdre les relevés. À défaut de tout repère : 1, qui dit
+      // honnêtement « âge inconnu » plutôt que de se faire passer pour frais.
+      if (val !== undefined && !(ts > 0)) ts = 1;
       if (ts > 0) {
-        if (!stamps[z]) stamps[z] = {};
+        if (!stamps[z]) stamps[z] = Object.create(null);
         stamps[z][t] = ts;
       }
       if (val !== undefined) {
-        if (!valeurs[z]) valeurs[z] = {};
+        if (!valeurs[z]) valeurs[z] = Object.create(null);
         valeurs[z][t] = val;
       }
     }
@@ -21492,8 +21551,10 @@ async function applyRemoteStateMerge(remoteState, remoteTs) {
     // reculer toutes les autres zones dont il détenait une copie périmée.
     if (k === 'taskProgress') {
       const fusion = mergeProgressByCell(
-        state.taskProgress, state.taskProgressAt, lStamp,
-        remoteState.taskProgress, remoteState.taskProgressAt, rStamp);
+        { progress: state.taskProgress, at: state.taskProgressAt,
+          zoneUpdated: state.zoneUpdated, repli: lStamp },
+        { progress: remoteState.taskProgress, at: remoteState.taskProgressAt,
+          zoneUpdated: remoteState.zoneUpdated, repli: rStamp });
       if (!_jsonEq(fusion.valeurs, state.taskProgress)) {
         toApply.push({ k: 'taskProgress', value: fusion.valeurs, stamp: Math.max(rStamp, lStamp) });
       }

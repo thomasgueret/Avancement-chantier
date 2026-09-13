@@ -1,0 +1,11 @@
+{
+  "name": "avancement-chantier-tests",
+  "private": true,
+  "description": "Bancs de test Playwright — synchro, relevés, régressions.",
+  "scripts": {
+    "serve": "sh srv.sh"
+  },
+  "dependencies": {
+    "playwright": "^1.62.1"
+  }
+}
