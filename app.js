@@ -7,16 +7,7 @@
 const STORAGE_KEY = 'chantier_v1';
 // Version affichée. Convention : '0.N' correspond au cache 'chantier-vN'
 // dans sw.js — toujours bumper les deux ensemble.
-const APP_VERSION = '1.89';
-
-// ====================================================================
-//   MOT DE PASSE DES ONGLETS PROTÉGÉS (« ST » et « Devis »)
-// ====================================================================
-// Pour CHANGER le mot de passe : modifiez la valeur ci-dessous (fichier
-// app.js, tout en haut). C'est le seul endroit à éditer, et il protège
-// les DEUX onglets ST et Devis. Note : c'est une protection d'affichage
-// (le code est public côté navigateur), pas un secret cryptographique.
-const ST_PASSWORD = 'Thomas123';
+const APP_VERSION = '1.90';
 
 // ---------- Supabase (synchro multi-appareils + équipe) ----------
 // À remplir avec les valeurs de TON projet Supabase (Settings → API).
@@ -128,7 +119,6 @@ const state = {
   stockCBMode: 'product',    // 'product' | 'eotp' : axe de regroupement du récap CB Stock
   projectStart: '',          // date ISO YYYY-MM-DD : début prévu du chantier
   projectEnd: '',            // date ISO YYYY-MM-DD : fin prévue du chantier
-  tauxHoraire: 0,            // €/h — valorisation de la main d'œuvre (devis)
   workBatches: [],           // Proto : lots de travaux [{ id, name, color }]
   // Proto : plans organisés en dossiers (multi-plans).
   // Les anciens champs protoPlan/W/H sont migrés au 1er load.
@@ -161,18 +151,6 @@ const state = {
   crCustomSections: [],      // [{ key: 'custom_<uid>', label }] — rubriques ajoutées par l'utilisateur
   crWeeks: {},               // { [companyId]: [{ id, label, createdAt }] }
   crSelectedWeekId: {},      // { [companyId]: weekId } — semaine active (UI per-device)
-  // ST (sous-traitants) : lignes texte + montants € par groupe et par entreprise.
-  // { [companyId]: { [groupKey]: [{ id, text, amount, sourceDevisLineId? }] } }
-  stEntries: {},
-  stSelectedCompanyId: null, // entreprise affichée dans le slider ST (UI per-device)
-  // Devis : [{ id, number, etat, avenantNum,
-  //   versions: [{ id, indice: '0'|'A'|'B'…, date, lines: [{ id, text,
-  //     amount, companyId, hoursText, hours, materielText, materielAmount,
-  //     materiauxText, materiauxAmount }] }] }]
-  // Le DERNIER indice est la version courante (celle qui alimente ST).
-  devis: [],
-  devisSelectedId: '',       // devis affiché (UI per-device)
-  devisSelectedVersion: {},  // { [devisId]: versionId } — indice affiché (UI per-device)
   // Travaux : matrice du scope chantier — lots (lignes, depuis Données →
   // Lots) × localisations (colonnes), une matrice PAR ZONE sélectionnée.
   // travauxCells[zoneId][lotId][locationId] = description de l'ouvrage.
@@ -287,7 +265,6 @@ function load() {
     if (data.stockCBMode === 'product' || data.stockCBMode === 'eotp') state.stockCBMode = data.stockCBMode;
     if (typeof data.projectStart === 'string') state.projectStart = data.projectStart;
     if (typeof data.projectEnd === 'string') state.projectEnd = data.projectEnd;
-    if (typeof data.tauxHoraire === 'number') state.tauxHoraire = data.tauxHoraire;
     if (Array.isArray(data.workBatches)) state.workBatches = data.workBatches;
     if (Array.isArray(data.protoFolders)) state.protoFolders = data.protoFolders;
     if (Array.isArray(data.protoPlans))   state.protoPlans   = data.protoPlans;
@@ -309,11 +286,6 @@ function load() {
     if (data.crWeeks && typeof data.crWeeks === 'object') state.crWeeks = data.crWeeks;
     if (data.crSelectedCompanyId) state.crSelectedCompanyId = data.crSelectedCompanyId;
     if (data.crSelectedWeekId && typeof data.crSelectedWeekId === 'object') state.crSelectedWeekId = data.crSelectedWeekId;
-    if (data.stEntries && typeof data.stEntries === 'object') state.stEntries = data.stEntries;
-    if (data.stSelectedCompanyId) state.stSelectedCompanyId = data.stSelectedCompanyId;
-    if (Array.isArray(data.devis)) state.devis = data.devis;
-    if (typeof data.devisSelectedId === 'string') state.devisSelectedId = data.devisSelectedId;
-    if (data.devisSelectedVersion && typeof data.devisSelectedVersion === 'object') state.devisSelectedVersion = data.devisSelectedVersion;
     if (Array.isArray(data.travauxLocations)) state.travauxLocations = data.travauxLocations;
     if (Array.isArray(data.travauxItems)) state.travauxItems = data.travauxItems;
     if (data.travauxCells && typeof data.travauxCells === 'object') state.travauxCells = data.travauxCells;
@@ -357,7 +329,6 @@ function runPostLoadMigrations() {
   migrateHeuresWeeks();
   migratePresences();
   migrateSetups();
-  migrateDevisVersions();
   // APRÈS la relecture de zoneUpdated / syncKeyStamps / syncTimestamp : la
   // datation rétroactive de l'avancement a besoin de ces trois repères pour ne
   // pas envoyer tout le chantier en 1970 (cf. commentaire de la fonction).
@@ -417,7 +388,6 @@ function buildPersistedData() {
     stockCBMode: state.stockCBMode,
     projectStart: state.projectStart,
     projectEnd: state.projectEnd,
-    tauxHoraire: state.tauxHoraire,
     workBatches: state.workBatches,
     protoFolders: state.protoFolders,
     protoPlans: state.protoPlans,
@@ -436,11 +406,6 @@ function buildPersistedData() {
     crWeeks: state.crWeeks,
     crSelectedCompanyId: state.crSelectedCompanyId,
     crSelectedWeekId: state.crSelectedWeekId,
-    stEntries: state.stEntries,
-    stSelectedCompanyId: state.stSelectedCompanyId,
-    devis: state.devis,
-    devisSelectedId: state.devisSelectedId,
-    devisSelectedVersion: state.devisSelectedVersion,
     travauxLocations: state.travauxLocations,
     travauxItems: state.travauxItems,
     travauxCells: state.travauxCells,
@@ -707,14 +672,11 @@ function renderAll() {
   renderEOTPsConfig();
   renderProjectDates();
   renderZonePlanning();
-  renderTauxHoraire();
   renderWorkBatchesConfig();
   renderProto();
   renderStock();
   renderConsommable();
   renderCR();
-  renderST();
-  renderDevis();
   renderTravaux();
   renderHeures();
   renderDashboard();
@@ -996,8 +958,6 @@ function renderDashboard() {
   renderDashboardConsommable();
   renderDashboardEOTPAlerts();
   renderDashboardHeures();
-  renderDashboardDevis();
-  renderDashboardST();
   renderDashboardTravaux();
   renderDashboardCR();
   renderDashboardCompaniesPresence();
@@ -1212,19 +1172,6 @@ function computeProjectAlerts() {
     }
   }
   push('warning', lateCR, 'tâche de compte-rendu en retard d\'échéance', 'tâches de compte-rendu en retard d\'échéance', 'CR', 'cr');
-
-  // Devis et ST — chiffres protégés par mot de passe
-  if (protectedUnlocked) {
-    const waiting = getDevisList().filter(d => d.etat === 'envoye').length;
-    push('info', waiting, 'devis envoyé en attente de réponse', 'devis envoyés en attente de réponse', 'Devis', 'devis');
-    let overST = 0;
-    for (const c of state.companies) {
-      if (!ST_GROUPS.some(g => getSTEntries(c.id, g.key).length > 0)) continue;
-      const r = computeSTRecap(c.id);
-      if (r.budget > 0 && r.depenses > r.budget) overST++;
-    }
-    push('danger', overST, 'sous-traitant au-delà du budget', 'sous-traitants au-delà du budget', 'ST', 'st');
-  }
 
   const rank = { danger: 0, warning: 1, info: 2 };
   out.sort((a, b) => rank[a.sev] - rank[b.sev] || (Number(b.n) || 0) - (Number(a.n) || 0));
@@ -1444,16 +1391,6 @@ function dashMiniRow(label, value, tone) {
   return r;
 }
 
-// Carte verrouillée (Devis / ST) : ces onglets sont protégés par mot de
-// passe — leurs chiffres ne s'affichent sur le tableau de bord qu'une
-// fois le déverrouillage fait dans la session.
-function dashboardLockedBody(tabLabel) {
-  const body = document.createElement('div');
-  body.className = 'dash-locked';
-  body.innerHTML = `<span class="dash-locked-icon">🔒</span><p class="dash-empty-text">Contenu protégé. Ouvrez l'onglet ${tabLabel} et saisissez le mot de passe pour afficher ces chiffres.</p>`;
-  return body;
-}
-
 // --- Widget « Suivi des heures » (semaine active) ---
 function renderDashboardHeures() {
   const el = document.getElementById('dashheures');
@@ -1491,79 +1428,6 @@ function renderDashboardHeures() {
   const ec = body.querySelector('.dash-heures-ecart');
   ec.textContent = `Écart au stade : ${sumEcart >= 0 ? '+' : ''}${fmtHeures(sumEcart)} h`;
   ec.classList.add(sumEcart >= 0 ? 'is-positive' : 'is-negative');
-  el.appendChild(body);
-}
-
-// --- Widget « Devis » (sommes par état, version courante de chaque devis) ---
-function renderDashboardDevis() {
-  const el = document.getElementById('dashdevis');
-  if (!el) return;
-  el.innerHTML = '';
-  el.appendChild(dashboardCardHeader('Devis', 'devis'));
-  if (!protectedUnlocked) { el.appendChild(dashboardLockedBody('Devis')); return; }
-  const body = document.createElement('div');
-  body.className = 'dash-devis';
-  const list = getDevisList();
-  if (list.length === 0) {
-    body.innerHTML = '<p class="dash-empty-text">Aucun devis.</p>';
-    el.appendChild(body);
-    return;
-  }
-  const ul = document.createElement('ul');
-  ul.className = 'dash-devis-list';
-  for (const e of DEVIS_ETATS) {
-    const items = list.filter(d => d.etat === e.key);
-    if (items.length === 0) continue;
-    const sum = items.reduce((s, d) => s + computeDevisRecap(d).total, 0);
-    const li = document.createElement('li');
-    li.className = 'dash-devis-row';
-    li.innerHTML = `<span class="dash-devis-dot"></span><span class="dash-devis-label"></span><span class="dash-devis-count"></span><span class="dash-devis-sum"></span>`;
-    li.querySelector('.dash-devis-dot').style.background = e.color;
-    li.querySelector('.dash-devis-label').textContent = e.label;
-    li.querySelector('.dash-devis-count').textContent = items.length;
-    li.querySelector('.dash-devis-sum').textContent = fmtEur(sum);
-    ul.appendChild(li);
-  }
-  body.appendChild(ul);
-  el.appendChild(body);
-}
-
-// --- Widget « ST » (budget / dépenses / écart cumulés, toutes entreprises) ---
-function renderDashboardST() {
-  const el = document.getElementById('dashst');
-  if (!el) return;
-  el.innerHTML = '';
-  el.appendChild(dashboardCardHeader('Sous-traitants', 'st'));
-  if (!protectedUnlocked) { el.appendChild(dashboardLockedBody('ST')); return; }
-  const body = document.createElement('div');
-  body.className = 'dash-st';
-  const companies = state.companies.filter(c =>
-    ST_GROUPS.some(g => getSTEntries(c.id, g.key).length > 0));
-  if (companies.length === 0) {
-    body.innerHTML = '<p class="dash-empty-text">Aucune donnée ST saisie.</p>';
-    el.appendChild(body);
-    return;
-  }
-  let budget = 0, depenses = 0;
-  for (const c of companies) {
-    const r = computeSTRecap(c.id);
-    budget += r.budget;
-    depenses += r.depenses;
-  }
-  const ecart = budget - depenses;
-  const pct = budget !== 0 ? Math.round((ecart / budget) * 1000) / 10 : null;
-  body.innerHTML = `
-    <div class="dash-st-row"><span class="dash-st-lbl">Total budget</span><span class="dash-st-val"></span></div>
-    <div class="dash-st-row"><span class="dash-st-lbl">Total dépenses</span><span class="dash-st-val"></span></div>
-    <div class="dash-st-row dash-st-ecart"><span class="dash-st-lbl">Écart</span><span class="dash-st-val"></span></div>
-    <div class="dash-st-foot"></div>
-  `;
-  const vals = body.querySelectorAll('.dash-st-val');
-  vals[0].textContent = fmtEur(budget);
-  vals[1].textContent = fmtEur(depenses);
-  vals[2].textContent = pct != null ? `${fmtEur(ecart)} (${formatPct(pct)} %)` : fmtEur(ecart);
-  body.querySelector('.dash-st-ecart').classList.add(ecart >= 0 ? 'is-positive' : 'is-negative');
-  body.querySelector('.dash-st-foot').textContent = `${companies.length} sous-traitant${companies.length > 1 ? 's' : ''} suivi${companies.length > 1 ? 's' : ''}`;
   el.appendChild(body);
 }
 
@@ -7897,19 +7761,6 @@ function resetGanttModal() {
   showToast('Ce bâtiment suit la période du chantier');
 }
 
-// Taux horaire (€/h) — Données → Admin. Utilisé par les totaux de devis.
-function renderTauxHoraire() {
-  const inp = document.getElementById('tauxhoraire');
-  if (!inp || document.activeElement === inp) return;
-  inp.value = state.tauxHoraire ? fmtPriceForInput(state.tauxHoraire) : '';
-}
-function setTauxHoraire(value) {
-  const n = parseFloat(String(value).replace(/[^\d,.-]/g, '').replace(',', '.'));
-  state.tauxHoraire = Number.isFinite(n) && n >= 0 ? n : 0;
-  save();
-  renderDevis(); // les totaux de lignes/devis dépendent du taux
-}
-
 function setProjectStart(value) {
   state.projectStart = value || '';
   save();
@@ -14018,1181 +13869,6 @@ async function exportHeuresToPDF() {
 }
 
 // ========================================================================
-// ST (sous-traitants) — onglets par entreprise (comme CR) + 4 groupes de
-// lignes texte/montant avec total en bas de chaque groupe.
-// ========================================================================
-const ST_GROUPS = [
-  { key: 'conforme', label: 'Conforme' },
-  { key: 'marche',   label: 'Marché traité' },
-  { key: 'rad',      label: 'Reste à Dépenser' },
-  { key: 'rat',      label: 'Reste à Traiter' }
-];
-
-function getSTSelectedCompany() {
-  if (!state.companies.length) return null;
-  if (state.stSelectedCompanyId) {
-    const c = state.companies.find(c => c.id === state.stSelectedCompanyId);
-    if (c) return c;
-  }
-  return state.companies[0];
-}
-function setSTSelectedCompany(companyId) {
-  state.stSelectedCompanyId = companyId;
-  save();
-  renderST();
-}
-
-function getSTEntries(companyId, groupKey) {
-  const c = state.stEntries[companyId];
-  if (!c || !Array.isArray(c[groupKey])) return [];
-  return c[groupKey];
-}
-function ensureSTBucket(companyId, groupKey) {
-  if (!state.stEntries[companyId]) state.stEntries[companyId] = {};
-  if (!Array.isArray(state.stEntries[companyId][groupKey])) state.stEntries[companyId][groupKey] = [];
-  return state.stEntries[companyId][groupKey];
-}
-// Une entrée ST issue d'un devis encore Brouillon/Envoyé est « en
-// attente » : affichée sur fond gris et EXCLUE des totaux (groupe
-// Conforme + bandeau récap) tant que le devis n'est pas validé ou plus.
-function isSTEntryPendingDevis(entry) {
-  if (!entry || !entry.sourceDevisLineId) return false;
-  const d = getDevisByLineId(entry.sourceDevisLineId);
-  return !!d && !isDevisValidated(d);
-}
-function getSTGroupTotal(companyId, groupKey) {
-  return getSTEntries(companyId, groupKey).reduce((s, e) =>
-    s + (isSTEntryPendingDevis(e) ? 0 : (Number(e.amount) || 0)), 0);
-}
-function addSTEntry(companyId, groupKey) {
-  const list = ensureSTBucket(companyId, groupKey);
-  list.push({ id: uid(), text: '', amount: 0 });
-  save();
-  renderST();
-  requestAnimationFrame(() => {
-    const last = document.querySelector(
-      `.st-entry[data-company-id="${cssEscape(companyId)}"][data-group-key="${groupKey}"]:last-of-type .st-entry-text`);
-    if (last) last.focus();
-  });
-}
-function setSTEntryField(companyId, groupKey, entryId, field, value) {
-  const list = getSTEntries(companyId, groupKey);
-  const entry = list.find(e => e.id === entryId);
-  if (!entry) return;
-  if (field === 'text') {
-    entry.text = value;
-    save();
-    // pas de re-render : on ne casse pas le focus de la frappe
-  } else if (field === 'amount') {
-    const n = parseFloat(String(value).replace(/[^\d,.-]/g, '').replace(',', '.'));
-    entry.amount = Number.isFinite(n) ? n : 0;
-    save();
-    refreshSTGroupTotal(companyId, groupKey); // total du groupe à jour…
-    refreshSTRecap(companyId);                // …et le bandeau récap
-  }
-}
-function deleteSTEntry(companyId, groupKey, entryId) {
-  const c = state.stEntries[companyId];
-  if (!c || !Array.isArray(c[groupKey])) return;
-  c[groupKey] = c[groupKey].filter(e => e.id !== entryId);
-  save();
-  renderST();
-}
-function refreshSTGroupTotal(companyId, groupKey) {
-  const el = document.querySelector(
-    `.st-group[data-company-id="${cssEscape(companyId)}"][data-group-key="${groupKey}"] .st-group-total-val`);
-  if (el) el.textContent = fmtEur(getSTGroupTotal(companyId, groupKey));
-}
-
-// Déverrouillage PARTAGÉ des onglets protégés (ST + Devis) — valable pour
-// la session (jusqu'au rechargement). Non persisté, non synchronisé.
-// Un seul mot de passe (ST_PASSWORD) et un seul déverrouillage pour les deux.
-let protectedUnlocked = false;
-
-// Écran de saisie du mot de passe (cf. constante ST_PASSWORD en haut du
-// fichier). onUnlock() est appelé une fois le bon mot de passe entré.
-function buildProtectedLock(tabLabel, onUnlock) {
-  const wrap = document.createElement('div');
-  wrap.className = 'st-lock';
-  wrap.innerHTML = `
-    <div class="st-lock-icon">🔒</div>
-    <p class="st-lock-title">Contenu protégé</p>
-    <p class="st-lock-help">Entrez le mot de passe pour afficher l'onglet ${tabLabel}.</p>
-    <input type="password" class="st-lock-input" placeholder="Mot de passe" autocomplete="off" autocapitalize="off" spellcheck="false">
-    <button type="button" class="btn-primary st-lock-btn">Déverrouiller</button>
-    <p class="st-lock-error" hidden>Mot de passe incorrect.</p>
-  `;
-  const input = wrap.querySelector('.st-lock-input');
-  const btn   = wrap.querySelector('.st-lock-btn');
-  const err   = wrap.querySelector('.st-lock-error');
-  const attempt = () => {
-    if (input.value === ST_PASSWORD) {
-      protectedUnlocked = true;
-      onUnlock();
-    } else {
-      err.hidden = false;
-      input.value = '';
-      input.focus();
-    }
-  };
-  btn.addEventListener('click', attempt);
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); attempt(); } });
-  input.addEventListener('input', () => { err.hidden = true; });
-  setTimeout(() => input.focus(), 60);
-  return wrap;
-}
-
-function renderST() {
-  const slider = document.getElementById('stslider');
-  const body = document.getElementById('stbody');
-  const empty = document.getElementById('stempty');
-  if (!slider || !body) return;
-  if (!state.stEntries || typeof state.stEntries !== 'object') state.stEntries = {};
-  slider.innerHTML = '';
-  body.innerHTML = '';
-  // Verrou : tant que le mot de passe n'est pas saisi, on masque tout le
-  // contenu (sélecteur + groupes) et on affiche l'écran de déverrouillage.
-  if (!protectedUnlocked) {
-    slider.hidden = true;
-    if (empty) empty.hidden = true;
-    body.hidden = false;
-    body.appendChild(buildProtectedLock('ST', renderST));
-    return;
-  }
-  if (!state.companies.length) {
-    if (empty) empty.hidden = false;
-    slider.hidden = true; body.hidden = true;
-    return;
-  }
-  if (empty) empty.hidden = true;
-  slider.hidden = false; body.hidden = false;
-
-  const selected = getSTSelectedCompany();
-  for (const c of state.companies) {
-    const chip = document.createElement('button');
-    chip.type = 'button';
-    chip.className = 'cr-slider-chip' + (selected && c.id === selected.id ? ' is-active' : '');
-    chip.dataset.stAction = 'select-company';
-    chip.dataset.companyId = c.id;
-    chip.textContent = c.name;
-    slider.appendChild(chip);
-  }
-  if (!selected) return;
-
-  const card = document.createElement('div');
-  card.className = 'st-company';
-  card.appendChild(buildSTRecap(selected.id));
-  for (const g of ST_GROUPS) card.appendChild(buildSTGroup(selected.id, g));
-  body.appendChild(card);
-}
-
-// Récap financier de l'entreprise sélectionnée.
-//  Total budget   = groupe « Conforme »
-//  Total dépenses = « Marché traité » + « Reste à Dépenser » + « Reste à Traiter »
-//  Écart          = budget − dépenses   (pourcentage = écart / budget × 100)
-function computeSTRecap(companyId) {
-  const budget = getSTGroupTotal(companyId, 'conforme');
-  const depenses = getSTGroupTotal(companyId, 'marche')
-    + getSTGroupTotal(companyId, 'rad')
-    + getSTGroupTotal(companyId, 'rat');
-  const ecart = budget - depenses;
-  const pct = budget !== 0 ? (ecart / budget) * 100 : null;
-  return { budget, depenses, ecart, pct };
-}
-function stEcartText(r) {
-  return r.pct != null
-    ? `${fmtEur(r.ecart)} (${formatPct(Math.round(r.pct * 10) / 10)} %)`
-    : fmtEur(r.ecart);
-}
-function buildSTRecap(companyId) {
-  const r = computeSTRecap(companyId);
-  const el = document.createElement('div');
-  el.className = 'st-recap';
-  el.dataset.companyId = companyId;
-  el.innerHTML = `
-    <div class="st-recap-cell">
-      <span class="st-recap-label">Total budget</span>
-      <span class="st-recap-val" data-st-recap="budget"></span>
-    </div>
-    <div class="st-recap-cell">
-      <span class="st-recap-label">Total dépenses</span>
-      <span class="st-recap-val" data-st-recap="depenses"></span>
-    </div>
-    <div class="st-recap-cell">
-      <span class="st-recap-label">Écart</span>
-      <span class="st-recap-val" data-st-recap="ecart"></span>
-    </div>
-  `;
-  el.querySelector('[data-st-recap="budget"]').textContent = fmtEur(r.budget);
-  el.querySelector('[data-st-recap="depenses"]').textContent = fmtEur(r.depenses);
-  el.querySelector('[data-st-recap="ecart"]').textContent = stEcartText(r);
-  return el;
-}
-function refreshSTRecap(companyId) {
-  const el = document.querySelector(`.st-recap[data-company-id="${cssEscape(companyId)}"]`);
-  if (!el) return;
-  const r = computeSTRecap(companyId);
-  el.querySelector('[data-st-recap="budget"]').textContent = fmtEur(r.budget);
-  el.querySelector('[data-st-recap="depenses"]').textContent = fmtEur(r.depenses);
-  el.querySelector('[data-st-recap="ecart"]').textContent = stEcartText(r);
-}
-
-function buildSTGroup(companyId, group) {
-  const wrap = document.createElement('div');
-  wrap.className = 'st-group';
-  wrap.dataset.companyId = companyId;
-  wrap.dataset.groupKey = group.key;
-
-  const head = document.createElement('div');
-  head.className = 'st-group-head';
-  head.innerHTML = `
-    <span class="st-group-name"></span>
-    <button type="button" class="st-add-entry" data-st-action="add-entry" data-company-id="${companyId}" data-group-key="${group.key}" aria-label="Ajouter une ligne">+</button>
-  `;
-  head.querySelector('.st-group-name').textContent = group.label;
-  wrap.appendChild(head);
-
-  const list = document.createElement('div');
-  list.className = 'st-group-body';
-  const entries = getSTEntries(companyId, group.key);
-  if (entries.length === 0) {
-    const ph = document.createElement('p');
-    ph.className = 'st-group-empty';
-    ph.textContent = 'Aucune ligne. Touchez + pour en ajouter une.';
-    list.appendChild(ph);
-  } else {
-    for (const e of entries) list.appendChild(buildSTEntry(companyId, group.key, e));
-  }
-  wrap.appendChild(list);
-
-  // Total du groupe : bandeau orange, écriture blanche.
-  const foot = document.createElement('div');
-  foot.className = 'st-group-total';
-  foot.innerHTML = `<span class="st-group-total-label">Total</span><span class="st-group-total-val"></span>`;
-  foot.querySelector('.st-group-total-val').textContent = fmtEur(getSTGroupTotal(companyId, group.key));
-  wrap.appendChild(foot);
-  return wrap;
-}
-
-function buildSTEntry(companyId, groupKey, entry) {
-  const row = document.createElement('div');
-  row.className = 'st-entry';
-  row.dataset.companyId = companyId;
-  row.dataset.groupKey = groupKey;
-  row.dataset.entryId = entry.id;
-
-  const ta = document.createElement('textarea');
-  ta.className = 'st-entry-text';
-  ta.rows = 1;
-  ta.placeholder = 'Description…';
-  ta.value = entry.text || '';
-  ta.dataset.stAction = 'edit-text';
-  ta.dataset.companyId = companyId;
-  ta.dataset.groupKey = groupKey;
-  ta.dataset.entryId = entry.id;
-  const autoResize = () => { ta.style.height = 'auto'; ta.style.height = (ta.scrollHeight + 2) + 'px'; };
-  ta.addEventListener('input', autoResize);
-  setTimeout(autoResize, 0);
-  row.appendChild(ta);
-
-  const amtWrap = document.createElement('div');
-  amtWrap.className = 'st-entry-amount-wrap';
-  // Devis pas encore validé : montant exclu du total du groupe, avec un
-  // fond qui suit l'état du devis (gris = Brouillon, orange = Envoyé).
-  if (isSTEntryPendingDevis(entry)) {
-    amtWrap.classList.add('is-pending');
-    const srcDevis = getDevisByLineId(entry.sourceDevisLineId);
-    if (srcDevis && srcDevis.etat === 'envoye') amtWrap.classList.add('is-pending-envoye');
-    amtWrap.title = 'Devis non validé : montant non compté dans le total';
-  }
-  const amt = document.createElement('input');
-  amt.className = 'st-entry-amount';
-  amt.type = 'text';
-  amt.inputMode = 'decimal';
-  amt.placeholder = '0';
-  amt.value = entry.amount ? fmtPriceForInput(entry.amount) : '';
-  amt.dataset.stAction = 'edit-amount';
-  amt.dataset.companyId = companyId;
-  amt.dataset.groupKey = groupKey;
-  amt.dataset.entryId = entry.id;
-  amtWrap.appendChild(amt);
-  const eur = document.createElement('span');
-  eur.className = 'st-entry-eur';
-  eur.textContent = '€';
-  amtWrap.appendChild(eur);
-  row.appendChild(amtWrap);
-
-  const del = document.createElement('button');
-  del.type = 'button';
-  del.className = 'st-entry-delete';
-  del.dataset.stAction = 'delete-entry';
-  del.dataset.companyId = companyId;
-  del.dataset.groupKey = groupKey;
-  del.dataset.entryId = entry.id;
-  del.setAttribute('aria-label', 'Supprimer cette ligne');
-  del.innerHTML = '×';
-  row.appendChild(del);
-  return row;
-}
-
-// ========================================================================
-// DEVIS — onglets colorés par état, encart récap, lignes texte + montant €
-// + entreprise bénéficiaire. Chaque ligne rattachée à une entreprise crée
-// automatiquement une entrée « Devis n°XX : … » dans ST → groupe Conforme.
-// ========================================================================
-const DEVIS_ETATS = [
-  { key: 'brouillon', label: 'Brouillon',    color: '#6b7280' }, // gris
-  { key: 'envoye',    label: 'Envoyé',       color: '#f2691e' }, // orange
-  { key: 'valide',    label: 'Validé',       color: '#16a34a' }, // vert
-  { key: 'os',        label: 'OS reçu',      color: '#14532d' }, // vert foncé
-  { key: 'avenant',   label: 'Avenant reçu', color: '#111827' }, // noir
-  { key: 'refuse',    label: 'Refusé',       color: '#dc2626' }  // rouge
-];
-function getDevisEtat(key) {
-  return DEVIS_ETATS.find(e => e.key === key) || DEVIS_ETATS[0];
-}
-// « Validé ou plus » : le devis compte dans les budgets ST à partir de
-// Validé (Validé, OS reçu, Avenant reçu). Brouillon/Envoyé = en attente.
-function isDevisValidated(d) {
-  return !!d && ['valide', 'os', 'avenant'].includes(d.etat);
-}
-function getDevisByLineId(lineId) {
-  for (const d of getDevisList()) {
-    for (const v of getDevisVersions(d)) {
-      if ((v.lines || []).some(l => l.id === lineId)) return d;
-    }
-  }
-  return null;
-}
-// Localise une ligne dans les versions d'un devis.
-function findDevisLine(d, lineId) {
-  for (const v of getDevisVersions(d)) {
-    const line = (v.lines || []).find(l => l.id === lineId);
-    if (line) return { version: v, line };
-  }
-  return null;
-}
-// Une ligne n'alimente ST que si elle appartient à la version COURANTE
-// (dernier indice) — les indices précédents sont un historique.
-function isDevisLineCurrent(d, lineId) {
-  const cur = getDevisCurrentVersion(d);
-  return (cur.lines || []).some(l => l.id === lineId);
-}
-
-function getDevisList() { return Array.isArray(state.devis) ? state.devis : (state.devis = []); }
-function getDevisById(id) { return getDevisList().find(d => d.id === id) || null; }
-
-// --- Indices (versions) d'un devis : 0 puis A, B, C… ---
-function devisIndiceLabel(idx) {
-  if (idx === 0) return '0';
-  let n = idx, s = '';
-  while (n > 0) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); }
-  return s;
-}
-// Migration : les devis pré-versions ({ lines, date } à plat) deviennent
-// un indice « 0 ». Idempotente ; s'exécute au boot et défensivement à
-// l'accès (un payload d'ancien client peut réintroduire l'ancien format).
-function ensureDevisVersions(d) {
-  if (!d) return d;
-  if (!Array.isArray(d.versions) || d.versions.length === 0) {
-    d.versions = [{
-      id: 'dvv_' + uid(),
-      indice: '0',
-      date: d.date || '',
-      lines: Array.isArray(d.lines) ? d.lines : []
-    }];
-    delete d.lines;
-  }
-  return d;
-}
-function migrateDevisVersions() {
-  for (const d of getDevisList()) ensureDevisVersions(d);
-}
-function getDevisVersions(d) { return ensureDevisVersions(d).versions; }
-// La version COURANTE (dernier indice) : celle qui alimente ST.
-function getDevisCurrentVersion(d) {
-  const v = getDevisVersions(d);
-  return v[v.length - 1];
-}
-function getSelectedDevisVersion(d) {
-  const versions = getDevisVersions(d);
-  const wanted = (state.devisSelectedVersion || {})[d.id];
-  return versions.find(v => v.id === wanted) || versions[versions.length - 1];
-}
-function setSelectedDevisVersion(devisId, versionId) {
-  if (!state.devisSelectedVersion) state.devisSelectedVersion = {};
-  state.devisSelectedVersion[devisId] = versionId;
-  save();
-  renderDevis();
-}
-// Nouvel indice = copie de la version courante (lignes dupliquées avec de
-// nouveaux ids). Le pont ST bascule sur les nouvelles lignes : l'ancien
-// indice devient un historique qui n'alimente plus ST.
-function addDevisVersion(devisId) {
-  const d = getDevisById(devisId);
-  if (!d) return;
-  const versions = getDevisVersions(d);
-  const prev = versions[versions.length - 1];
-  const copy = {
-    id: 'dvv_' + uid(),
-    indice: devisIndiceLabel(versions.length),
-    date: todayISO(),
-    lines: (prev.lines || []).map(l => ({ ...l, id: 'dl_' + uid() }))
-  };
-  // Bascule ST : retire les entrées des anciennes lignes, crée celles des copies.
-  for (const l of (prev.lines || [])) removeSTEntryForDevisLine(l.id);
-  versions.push(copy);
-  for (const l of copy.lines) syncDevisLineToST(l, d);
-  if (!state.devisSelectedVersion) state.devisSelectedVersion = {};
-  state.devisSelectedVersion[devisId] = copy.id;
-  save();
-  renderDevis();
-  renderST();
-}
-function deleteDevisVersion(devisId, versionId) {
-  const d = getDevisById(devisId);
-  if (!d) return;
-  const versions = getDevisVersions(d);
-  if (versions.length <= 1) return;
-  const idx = versions.findIndex(v => v.id === versionId);
-  if (idx < 0) return;
-  const wasCurrent = idx === versions.length - 1;
-  const v = versions[idx];
-  if (!confirm(`Supprimer l'indice ${v.indice} de ce devis ?`)) return;
-  if (wasCurrent) {
-    // La version précédente redevient courante → re-bascule du pont ST.
-    for (const l of (v.lines || [])) removeSTEntryForDevisLine(l.id);
-    versions.splice(idx, 1);
-    const cur = versions[versions.length - 1];
-    for (const l of (cur.lines || [])) syncDevisLineToST(l, d);
-  } else {
-    versions.splice(idx, 1);
-  }
-  if (state.devisSelectedVersion) delete state.devisSelectedVersion[devisId];
-  save();
-  renderDevis();
-  renderST();
-}
-function getSelectedDevis() {
-  const list = getDevisList();
-  if (!list.length) return null;
-  return list.find(d => d.id === state.devisSelectedId) || list[0];
-}
-function setSelectedDevis(id) {
-  state.devisSelectedId = id;
-  save();
-  renderDevis();
-}
-function getNextDevisNumber() {
-  let max = 0;
-  for (const d of getDevisList()) if (Number(d.number) > max) max = Number(d.number);
-  return max + 1;
-}
-function addDevis() {
-  const d = {
-    id: 'dv_' + uid(), number: getNextDevisNumber(), etat: 'brouillon', avenantNum: '',
-    versions: [{ id: 'dvv_' + uid(), indice: '0', date: todayISO(), lines: [] }]
-  };
-  getDevisList().push(d);
-  state.devisSelectedId = d.id;
-  save();
-  renderDevis();
-}
-function deleteDevis(id) {
-  const d = getDevisById(id);
-  if (!d) return;
-  if (!confirm(`Supprimer le devis n°${d.number} et ses lignes ?\nLes lignes ST liées seront aussi retirées.`)) return;
-  for (const v of getDevisVersions(d)) {
-    for (const line of (v.lines || [])) removeSTEntryForDevisLine(line.id);
-  }
-  state.devis = getDevisList().filter(x => x.id !== id);
-  if (state.devisSelectedId === id) {
-    const list = getDevisList();
-    state.devisSelectedId = list.length ? list[list.length - 1].id : '';
-  }
-  save();
-  renderDevis();
-  renderST();
-}
-function setDevisEtat(id, etat) {
-  const d = getDevisById(id);
-  if (!d) return;
-  d.etat = etat;
-  // Re-synchronise les lignes de la version courante : un passage en
-  // « Refusé » les retire de ST → Conforme ; en sortir les recrée.
-  for (const line of (getDevisCurrentVersion(d).lines || [])) {
-    syncDevisLineToST(line, d);
-  }
-  save();
-  renderDevis(); // recolore l'onglet
-  renderST();    // les montants liés entrent/sortent du groupe Conforme
-}
-function setDevisDate(id, value) {
-  const d = getDevisById(id);
-  if (!d) return;
-  // La date de rédaction est propre à l'indice affiché.
-  const v = getSelectedDevisVersion(d);
-  if (v) v.date = value || '';
-  save();
-}
-function setDevisAvenantNum(id, value) {
-  const d = getDevisById(id);
-  if (!d) return;
-  d.avenantNum = String(value || '');
-  save();
-}
-// Taux horaire propre au devis (vide/0 = taux global de Données).
-// Rafraîchit les totaux affichés sans re-render (préserve le focus).
-function setDevisTauxHoraire(id, value) {
-  const d = getDevisById(id);
-  if (!d) return;
-  const n = parseFloat(String(value).replace(/[^\d,.-]/g, '').replace(',', '.'));
-  d.tauxHoraire = Number.isFinite(n) && n >= 0 ? n : 0;
-  save();
-  const v = getSelectedDevisVersion(d);
-  for (const line of (v.lines || [])) refreshDevisLineTotal(d.id, line.id);
-  refreshDevisRecap(d.id);
-}
-
-// --- Lignes de devis (opèrent sur l'indice AFFICHÉ) ---
-function addDevisLine(devisId) {
-  const d = getDevisById(devisId);
-  if (!d) return;
-  const v = getSelectedDevisVersion(d);
-  if (!Array.isArray(v.lines)) v.lines = [];
-  const line = { id: 'dl_' + uid(), text: '', amount: 0, companyId: '' };
-  v.lines.push(line);
-  save();
-  renderDevis();
-  requestAnimationFrame(() => {
-    const last = document.querySelector(`.devis-line[data-line-id="${cssEscape(line.id)}"] .devis-line-text`);
-    if (last) last.focus();
-  });
-}
-const DEVIS_LINE_TEXT_FIELDS = new Set(['hoursText', 'materielText', 'materiauxText']);
-const DEVIS_LINE_NUM_FIELDS = new Set(['hours', 'materielAmount', 'materiauxAmount']);
-
-function setDevisLineField(devisId, lineId, field, value) {
-  const d = getDevisById(devisId);
-  if (!d) return;
-  const found = findDevisLine(d, lineId);
-  if (!found) return;
-  const line = found.line;
-  // Seule la version courante alimente ST (les autres = historique).
-  const bridgeST = isDevisLineCurrent(d, lineId);
-  if (field === 'text') {
-    line.text = value;
-    if (bridgeST) syncDevisLineToST(line, d);
-    save();
-  } else if (field === 'amount') {
-    const n = parseFloat(String(value).replace(/[^\d,.-]/g, '').replace(',', '.'));
-    line.amount = Number.isFinite(n) ? n : 0;
-    if (bridgeST) syncDevisLineToST(line, d);
-    save();
-    refreshDevisLineTotal(d.id, lineId);
-    refreshDevisRecap(d.id);
-    if (bridgeST) renderST(); // le montant Conforme change → récap ST à jour
-  } else if (field === 'companyId') {
-    line.companyId = value || '';
-    if (bridgeST) { syncDevisLineToST(line, d); renderST(); }
-    save();
-  } else if (DEVIS_LINE_TEXT_FIELDS.has(field)) {
-    line[field] = value;
-    save();
-  } else if (DEVIS_LINE_NUM_FIELDS.has(field)) {
-    const n = parseFloat(String(value).replace(/[^\d,.-]/g, '').replace(',', '.'));
-    line[field] = Number.isFinite(n) ? n : 0;
-    save();
-    // Heures / matériel / matériaux entrent dans le total de la ligne
-    refreshDevisLineTotal(d.id, lineId);
-    refreshDevisRecap(d.id);
-  }
-}
-function deleteDevisLine(devisId, lineId) {
-  const d = getDevisById(devisId);
-  if (!d) return;
-  const found = findDevisLine(d, lineId);
-  if (!found) return;
-  found.version.lines = (found.version.lines || []).filter(l => l.id !== lineId);
-  removeSTEntryForDevisLine(lineId);
-  save();
-  renderDevis();
-  renderST();
-}
-
-// --- Pont Devis → ST (groupe Conforme de l'entreprise bénéficiaire) ---
-function findSTEntryForDevisLine(lineId) {
-  for (const cid of Object.keys(state.stEntries || {})) {
-    const arr = state.stEntries[cid] && state.stEntries[cid].conforme;
-    if (!Array.isArray(arr)) continue;
-    const e = arr.find(x => x.sourceDevisLineId === lineId);
-    if (e) return { companyId: cid, entry: e };
-  }
-  return null;
-}
-function removeSTEntryForDevisLine(lineId) {
-  for (const cid of Object.keys(state.stEntries || {})) {
-    const arr = state.stEntries[cid] && state.stEntries[cid].conforme;
-    if (!Array.isArray(arr)) continue;
-    state.stEntries[cid].conforme = arr.filter(x => x.sourceDevisLineId !== lineId);
-  }
-}
-// Crée / met à jour / déplace / retire l'entrée ST liée à une ligne de devis.
-function syncDevisLineToST(line, devis) {
-  const existing = findSTEntryForDevisLine(line.id);
-  // Devis REFUSÉ : ses lignes n'apparaissent pas du tout dans ST →
-  // Conforme (retirées si présentes). Elles reviennent automatiquement
-  // si le devis change d'état.
-  if (devis && devis.etat === 'refuse') {
-    if (existing) removeSTEntryForDevisLine(line.id);
-    return;
-  }
-  if (!line.companyId) {                 // pas d'entreprise → pas d'entrée ST
-    if (existing) removeSTEntryForDevisLine(line.id);
-    return;
-  }
-  const text = `Devis n°${devis.number} : ${line.text || ''}`;
-  const amount = Number(line.amount) || 0;
-  if (existing && existing.companyId === line.companyId) {
-    existing.entry.text = text;
-    existing.entry.amount = amount;
-  } else {
-    if (existing) removeSTEntryForDevisLine(line.id); // entreprise changée → on déplace
-    const bucket = ensureSTBucket(line.companyId, 'conforme');
-    bucket.push({ id: uid(), text, amount, sourceDevisLineId: line.id });
-  }
-}
-
-// --- Totaux ---
-// Taux horaire global (Données → Admin) : valeur PAR DÉFAUT.
-function getTauxHoraire() { return Number(state.tauxHoraire) || 0; }
-// Taux horaire effectif d'un devis : le sien s'il est renseigné (> 0),
-// sinon le taux global de Données. Les taux varient selon les devis.
-function getDevisTauxHoraire(devis) {
-  const own = Number(devis && devis.tauxHoraire) || 0;
-  return own > 0 ? own : getTauxHoraire();
-}
-// Total d'une ligne de devis = montant sous-traitant + heures × taux
-// horaire (celui du devis) + matériel + matériaux.
-function computeDevisLineTotal(line, taux) {
-  return (Number(line.amount) || 0)
-    + (Number(line.hours) || 0) * (Number(taux) || 0)
-    + (Number(line.materielAmount) || 0)
-    + (Number(line.materiauxAmount) || 0);
-}
-function refreshDevisLineTotal(devisId, lineId) {
-  const d = getDevisById(devisId);
-  const found = d && findDevisLine(d, lineId);
-  if (!found) return;
-  const el = document.querySelector(`.devis-line[data-line-id="${cssEscape(lineId)}"] .devis-line-total-val`);
-  if (el) el.textContent = fmtEur(computeDevisLineTotal(found.line, getDevisTauxHoraire(d)));
-}
-// --- Récaps ---
-// Récap d'une VERSION (bandeau du corps : l'indice affiché).
-function computeDevisVersionRecap(version, taux) {
-  const lines = (version && version.lines) || [];
-  const total = lines.reduce((s, l) => s + computeDevisLineTotal(l, taux), 0);
-  return { total, count: lines.length };
-}
-// Récap d'un DEVIS = sa version courante (dernier indice), à son taux.
-// Utilisé par l'onglet Récap (sommes par état).
-function computeDevisRecap(devis) {
-  return computeDevisVersionRecap(getDevisCurrentVersion(devis), getDevisTauxHoraire(devis));
-}
-function refreshDevisRecap(devisId) {
-  const d = getDevisById(devisId);
-  if (!d) return;
-  const el = document.querySelector(`.devis-recap[data-devis-id="${cssEscape(devisId)}"]`);
-  if (!el) return;
-  const r = computeDevisVersionRecap(getSelectedDevisVersion(d), getDevisTauxHoraire(d));
-  const t = el.querySelector('[data-devis-recap="total"]');
-  const c = el.querySelector('[data-devis-recap="count"]');
-  if (t) t.textContent = fmtEur(r.total);
-  if (c) c.textContent = String(r.count);
-}
-
-// --- Rendu ---
-function renderDevis() {
-  const tabs = document.getElementById('devistabs');
-  const body = document.getElementById('devisbody');
-  if (!tabs || !body) return;
-  tabs.innerHTML = '';
-  body.innerHTML = '';
-  // Verrou partagé avec ST
-  const scrollbarEl = document.getElementById('devistabsscrollbar');
-  if (!protectedUnlocked) {
-    tabs.hidden = true;
-    if (scrollbarEl) scrollbarEl.hidden = true;
-    body.hidden = false;
-    body.appendChild(buildProtectedLock('Devis', renderDevis));
-    return;
-  }
-  tabs.hidden = false; body.hidden = false;
-
-  const list = getDevisList();
-  const isRecap = state.devisSelectedId === '__recap__';
-  const selected = isRecap ? null : getSelectedDevis();
-
-  // Onglet Récapitulatif (sommes par état, tous devis confondus)
-  const recapTab = document.createElement('button');
-  recapTab.type = 'button';
-  recapTab.className = 'devis-tab devis-tab-recap' + (isRecap ? ' is-active' : '');
-  recapTab.dataset.devisAction = 'select';
-  recapTab.dataset.devisId = '__recap__';
-  recapTab.textContent = 'Récap';
-  tabs.appendChild(recapTab);
-
-  for (const d of list) {
-    const et = getDevisEtat(d.etat);
-    const tab = document.createElement('button');
-    tab.type = 'button';
-    tab.className = 'devis-tab' + (selected && d.id === selected.id ? ' is-active' : '');
-    tab.dataset.devisAction = 'select';
-    tab.dataset.devisId = d.id;
-    tab.style.background = et.color;
-    tab.textContent = 'Devis ' + d.number;
-    tabs.appendChild(tab);
-  }
-  const add = document.createElement('button');
-  add.type = 'button';
-  add.className = 'devis-tab devis-tab-add';
-  add.dataset.devisAction = 'add';
-  add.setAttribute('aria-label', 'Nouveau devis');
-  add.textContent = '+';
-  tabs.appendChild(add);
-  requestAnimationFrame(updateDevisTabsScrollbar);
-
-  if (isRecap) {
-    body.appendChild(buildDevisRecapBody());
-    return;
-  }
-  if (!selected) {
-    const empty = document.createElement('p');
-    empty.className = 'st-group-empty';
-    empty.style.padding = '20px 4px';
-    empty.textContent = 'Aucun devis. Touchez + pour en créer un.';
-    body.appendChild(empty);
-    return;
-  }
-  body.appendChild(buildDevisBody(selected));
-}
-
-// --- Barre de défilement personnalisée sous les onglets de devis ---
-// Les barres natives « overlay » n'apparaissent qu'en cours de geste
-// (voire jamais sur iOS) : celle-ci est toujours visible dès que les
-// onglets débordent, et elle est draggable.
-function updateDevisTabsScrollbar() {
-  const tabs = document.getElementById('devistabs');
-  const bar = document.getElementById('devistabsscrollbar');
-  const thumb = document.getElementById('devistabsscrollthumb');
-  if (!tabs || !bar || !thumb) return;
-  const overflow = tabs.scrollWidth - tabs.clientWidth;
-  if (overflow <= 1) { bar.hidden = true; return; }
-  bar.hidden = false;
-  const trackW = bar.clientWidth;
-  const thumbW = Math.max(28, (tabs.clientWidth / tabs.scrollWidth) * trackW);
-  const maxX = trackW - thumbW;
-  const x = (tabs.scrollLeft / overflow) * maxX;
-  thumb.style.width = thumbW + 'px';
-  thumb.style.transform = `translateX(${x}px)`;
-}
-function setupDevisTabsScrollbar() {
-  const tabs = document.getElementById('devistabs');
-  const bar = document.getElementById('devistabsscrollbar');
-  const thumb = document.getElementById('devistabsscrollthumb');
-  if (!tabs || !bar || !thumb) return;
-  tabs.addEventListener('scroll', updateDevisTabsScrollbar, { passive: true });
-  window.addEventListener('resize', updateDevisTabsScrollbar);
-  // Drag du curseur (pointer events : souris + tactile)
-  let dragging = false, startX = 0, startScroll = 0;
-  thumb.addEventListener('pointerdown', (e) => {
-    dragging = true;
-    startX = e.clientX;
-    startScroll = tabs.scrollLeft;
-    thumb.setPointerCapture(e.pointerId);
-    e.preventDefault();
-  });
-  thumb.addEventListener('pointermove', (e) => {
-    if (!dragging) return;
-    const overflow = tabs.scrollWidth - tabs.clientWidth;
-    const maxX = bar.clientWidth - thumb.offsetWidth;
-    if (maxX <= 0) return;
-    tabs.scrollLeft = startScroll + (e.clientX - startX) * (overflow / maxX);
-  });
-  const endDrag = () => { dragging = false; };
-  thumb.addEventListener('pointerup', endDrag);
-  thumb.addEventListener('pointercancel', endDrag);
-  // Clic sur la piste : saute à la position correspondante
-  bar.addEventListener('pointerdown', (e) => {
-    if (e.target === thumb) return;
-    const rect = bar.getBoundingClientRect();
-    const ratio = (e.clientX - rect.left - thumb.offsetWidth / 2) / Math.max(1, bar.clientWidth - thumb.offsetWidth);
-    tabs.scrollLeft = Math.max(0, Math.min(1, ratio)) * (tabs.scrollWidth - tabs.clientWidth);
-  });
-}
-
-// Onglet Récap : pour chaque état, nombre de devis et somme de leurs
-// montants ; bandeau orange avec le total général en tête.
-function buildDevisRecapBody() {
-  const list = getDevisList();
-  const card = document.createElement('div');
-  card.className = 'devis-card';
-
-  let grandTotal = 0, grandCount = 0;
-  const perEtat = DEVIS_ETATS.map(e => {
-    const items = list.filter(d => d.etat === e.key);
-    const sum = items.reduce((s, d) => s + computeDevisRecap(d).total, 0);
-    grandTotal += sum; grandCount += items.length;
-    return { etat: e, count: items.length, sum };
-  });
-
-  const banner = document.createElement('div');
-  banner.className = 'st-recap';
-  banner.innerHTML = `
-    <div class="st-recap-cell">
-      <span class="st-recap-label">Total tous devis</span>
-      <span class="st-recap-val"></span>
-    </div>
-    <div class="st-recap-cell">
-      <span class="st-recap-label">Nombre de devis</span>
-      <span class="st-recap-val"></span>
-    </div>
-  `;
-  banner.querySelectorAll('.st-recap-val')[0].textContent = fmtEur(grandTotal);
-  banner.querySelectorAll('.st-recap-val')[1].textContent = String(grandCount);
-  card.appendChild(banner);
-
-  const rows = document.createElement('div');
-  rows.className = 'devis-recap-rows';
-  for (const { etat, count, sum } of perEtat) {
-    const row = document.createElement('div');
-    row.className = 'devis-recap-row';
-    row.innerHTML = `
-      <span class="devis-recap-dot"></span>
-      <span class="devis-recap-label"></span>
-      <span class="devis-recap-count"></span>
-      <span class="devis-recap-sum"></span>
-    `;
-    row.querySelector('.devis-recap-dot').style.background = etat.color;
-    row.querySelector('.devis-recap-label').textContent = etat.label;
-    row.querySelector('.devis-recap-count').textContent = count === 0 ? '—' : (count + (count > 1 ? ' devis' : ' devis'));
-    row.querySelector('.devis-recap-sum').textContent = fmtEur(sum);
-    rows.appendChild(row);
-  }
-  card.appendChild(rows);
-  return card;
-}
-
-function buildDevisBody(devis) {
-  const card = document.createElement('div');
-  card.className = 'devis-card';
-  const version = getSelectedDevisVersion(devis);
-  const isCurrent = version.id === getDevisCurrentVersion(devis).id;
-
-  // Slider des indices (versions) : 0, A, B, C… + « + » pour un nouvel
-  // indice (copie de la version courante).
-  const verBar = document.createElement('div');
-  verBar.className = 'devis-versions';
-  for (const v of getDevisVersions(devis)) {
-    const chip = document.createElement('button');
-    chip.type = 'button';
-    chip.className = 'devis-version-chip' + (v.id === version.id ? ' is-active' : '');
-    chip.dataset.devisAction = 'select-version';
-    chip.dataset.devisId = devis.id;
-    chip.dataset.versionId = v.id;
-    chip.textContent = 'Indice ' + v.indice;
-    verBar.appendChild(chip);
-  }
-  if (getDevisVersions(devis).length > 1) {
-    const delVer = document.createElement('button');
-    delVer.type = 'button';
-    delVer.className = 'devis-version-chip devis-version-del';
-    delVer.dataset.devisAction = 'delete-version';
-    delVer.dataset.devisId = devis.id;
-    delVer.dataset.versionId = version.id;
-    delVer.title = 'Supprimer l\'indice affiché';
-    delVer.textContent = '×';
-    verBar.appendChild(delVer);
-  }
-  const addVer = document.createElement('button');
-  addVer.type = 'button';
-  addVer.className = 'devis-version-chip devis-version-add';
-  addVer.dataset.devisAction = 'add-version';
-  addVer.dataset.devisId = devis.id;
-  addVer.title = 'Nouvel indice (copie de la version courante)';
-  addVer.textContent = '+';
-  verBar.appendChild(addVer);
-  card.appendChild(verBar);
-
-  if (!isCurrent) {
-    const note = document.createElement('p');
-    note.className = 'devis-version-note';
-    note.textContent = `Indice ${version.indice} — version archivée : ses montants n'alimentent pas l'onglet ST (seul le dernier indice compte).`;
-    card.appendChild(note);
-  }
-
-  // Ligne état + suppression
-  const etatRow = document.createElement('div');
-  etatRow.className = 'devis-etat-row';
-  const sel = document.createElement('select');
-  sel.className = 'devis-etat-select';
-  sel.dataset.devisAction = 'set-etat';
-  sel.dataset.devisId = devis.id;
-  sel.setAttribute('aria-label', 'État du devis');
-  for (const e of DEVIS_ETATS) {
-    const opt = new Option(e.label, e.key);
-    if (e.key === devis.etat) opt.selected = true;
-    sel.appendChild(opt);
-  }
-  const etatLabel = document.createElement('span');
-  etatLabel.className = 'devis-etat-label';
-  etatLabel.textContent = 'État :';
-  etatRow.appendChild(etatLabel);
-  etatRow.appendChild(sel);
-  const delBtn = document.createElement('button');
-  delBtn.type = 'button';
-  delBtn.className = 'devis-delete-btn';
-  delBtn.dataset.devisAction = 'delete';
-  delBtn.dataset.devisId = devis.id;
-  delBtn.textContent = 'Supprimer le devis';
-  etatRow.appendChild(delBtn);
-  card.appendChild(etatRow);
-
-  // N° d'avenant — visible uniquement quand l'état est « Avenant reçu ».
-  if (devis.etat === 'avenant') {
-    const avRow = document.createElement('div');
-    avRow.className = 'devis-etat-row devis-avenant-row';
-    const avLabel = document.createElement('span');
-    avLabel.className = 'devis-etat-label';
-    avLabel.textContent = 'N° d\'avenant :';
-    avRow.appendChild(avLabel);
-    const avInp = document.createElement('input');
-    avInp.type = 'text';
-    avInp.className = 'devis-avenant-input';
-    avInp.maxLength = 20;
-    avInp.placeholder = 'ex. AV-03';
-    avInp.value = devis.avenantNum || '';
-    avInp.dataset.devisAction = 'set-avenant';
-    avInp.dataset.devisId = devis.id;
-    avInp.setAttribute('aria-label', 'Numéro de l\'avenant');
-    avRow.appendChild(avInp);
-    card.appendChild(avRow);
-  }
-
-  // Taux horaire propre au devis (les taux varient selon les devis).
-  // Vide = taux global de Données (affiché en placeholder).
-  const tauxRow = document.createElement('div');
-  tauxRow.className = 'devis-etat-row devis-taux-row';
-  const tauxLabel = document.createElement('span');
-  tauxLabel.className = 'devis-etat-label';
-  tauxLabel.textContent = 'Taux horaire :';
-  tauxRow.appendChild(tauxLabel);
-  const tauxInp = document.createElement('input');
-  tauxInp.type = 'text';
-  tauxInp.inputMode = 'decimal';
-  tauxInp.className = 'devis-taux-input';
-  tauxInp.placeholder = getTauxHoraire() > 0 ? fmtPriceForInput(getTauxHoraire()) + ' (défaut)' : '0';
-  tauxInp.value = (Number(devis.tauxHoraire) || 0) > 0 ? fmtPriceForInput(devis.tauxHoraire) : '';
-  tauxInp.dataset.devisAction = 'set-taux';
-  tauxInp.dataset.devisId = devis.id;
-  tauxInp.setAttribute('aria-label', 'Taux horaire de ce devis');
-  tauxRow.appendChild(tauxInp);
-  const tauxUnit = document.createElement('span');
-  tauxUnit.className = 'devis-etat-label';
-  tauxUnit.textContent = '€ / h';
-  tauxRow.appendChild(tauxUnit);
-  card.appendChild(tauxRow);
-
-  // Date de rédaction — sur sa propre ligne, sous l'état (par indice).
-  const dateRow = document.createElement('div');
-  dateRow.className = 'devis-etat-row devis-date-row';
-  const dateLabel = document.createElement('span');
-  dateLabel.className = 'devis-etat-label';
-  dateLabel.textContent = 'Rédigé le :';
-  dateRow.appendChild(dateLabel);
-  const dateInp = document.createElement('input');
-  dateInp.type = 'date';
-  dateInp.className = 'devis-date-input';
-  dateInp.value = version.date || '';
-  dateInp.dataset.devisAction = 'set-date';
-  dateInp.dataset.devisId = devis.id;
-  dateInp.setAttribute('aria-label', 'Date de rédaction de cet indice');
-  dateRow.appendChild(dateInp);
-  card.appendChild(dateRow);
-
-  // Encart récap (orange, comme ST) — totaux de l'indice affiché
-  const r = computeDevisVersionRecap(version, getDevisTauxHoraire(devis));
-  const recap = document.createElement('div');
-  recap.className = 'st-recap devis-recap';
-  recap.dataset.devisId = devis.id;
-  recap.innerHTML = `
-    <div class="st-recap-cell">
-      <span class="st-recap-label">Montant total</span>
-      <span class="st-recap-val" data-devis-recap="total"></span>
-    </div>
-    <div class="st-recap-cell">
-      <span class="st-recap-label">Nombre de lignes</span>
-      <span class="st-recap-val" data-devis-recap="count"></span>
-    </div>
-  `;
-  recap.querySelector('[data-devis-recap="total"]').textContent = fmtEur(r.total);
-  recap.querySelector('[data-devis-recap="count"]').textContent = String(r.count);
-  card.appendChild(recap);
-
-  // Lignes de l'indice affiché
-  const lines = document.createElement('div');
-  lines.className = 'devis-lines';
-  if (!version.lines || version.lines.length === 0) {
-    const ph = document.createElement('p');
-    ph.className = 'st-group-empty';
-    ph.textContent = 'Aucune ligne. Touchez « + Ajouter une ligne ».';
-    lines.appendChild(ph);
-  } else {
-    for (const line of version.lines) lines.appendChild(buildDevisLine(devis.id, line));
-  }
-  card.appendChild(lines);
-
-  const addLine = document.createElement('button');
-  addLine.type = 'button';
-  addLine.className = 'cr-add-section devis-add-line';
-  addLine.dataset.devisAction = 'add-line';
-  addLine.dataset.devisId = devis.id;
-  addLine.textContent = '+ Ajouter une ligne';
-  card.appendChild(addLine);
-  return card;
-}
-
-// Champ montant (droite d'une sous-ligne) : input décimal + suffixe (€/h).
-function buildDevisAmountWrap(devisId, lineId, field, value, suffix) {
-  const wrap = document.createElement('div');
-  wrap.className = 'st-entry-amount-wrap';
-  const inp = document.createElement('input');
-  inp.className = 'st-entry-amount';
-  inp.type = 'text';
-  inp.inputMode = 'decimal';
-  inp.placeholder = '0';
-  inp.value = value ? fmtPriceForInput(value) : '';
-  inp.dataset.devisAction = 'edit-line-field';
-  inp.dataset.devisId = devisId;
-  inp.dataset.lineId = lineId;
-  inp.dataset.field = field;
-  wrap.appendChild(inp);
-  const suf = document.createElement('span');
-  suf.className = 'st-entry-eur';
-  suf.textContent = suffix;
-  wrap.appendChild(suf);
-  return wrap;
-}
-
-// Bloc de devis (une « tâche », comme les cartes de l'onglet CR) :
-//   description
-//   entreprise affectée      | montant €   (→ alimente ST → Conforme)
-//   main d'œuvre             | heures h
-//   matériel                 | montant €
-//   matériaux                | montant €
-function buildDevisLine(devisId, line) {
-  const card = document.createElement('div');
-  card.className = 'devis-line';
-  card.dataset.devisId = devisId;
-  card.dataset.lineId = line.id;
-
-  // Ligne 1 : description + suppression du bloc
-  const top = document.createElement('div');
-  top.className = 'devis-line-row devis-line-toprow';
-  const ta = document.createElement('textarea');
-  ta.className = 'devis-line-text';
-  ta.rows = 1;
-  ta.placeholder = 'Description du devis…';
-  ta.value = line.text || '';
-  ta.dataset.devisAction = 'edit-text';
-  ta.dataset.devisId = devisId;
-  ta.dataset.lineId = line.id;
-  const autoResize = () => { ta.style.height = 'auto'; ta.style.height = (ta.scrollHeight + 2) + 'px'; };
-  ta.addEventListener('input', autoResize);
-  setTimeout(autoResize, 0);
-  top.appendChild(ta);
-  const del = document.createElement('button');
-  del.type = 'button';
-  del.className = 'st-entry-delete';
-  del.dataset.devisAction = 'delete-line';
-  del.dataset.devisId = devisId;
-  del.dataset.lineId = line.id;
-  del.setAttribute('aria-label', 'Supprimer ce bloc');
-  del.innerHTML = '×';
-  top.appendChild(del);
-  card.appendChild(top);
-
-  // Ligne 2 : sous-traitant + montant € (celui repris dans ST), avec un
-  // libellé fixe au-dessus (les placeholders disparaissent à la saisie).
-  const compGroup = document.createElement('div');
-  compGroup.className = 'devis-field-group';
-  const compLabel = document.createElement('span');
-  compLabel.className = 'devis-field-label';
-  compLabel.textContent = 'Sous-traitant';
-  compGroup.appendChild(compLabel);
-  const compRow = document.createElement('div');
-  compRow.className = 'devis-line-row';
-  const comp = document.createElement('select');
-  comp.className = 'devis-line-company';
-  comp.dataset.devisAction = 'edit-company';
-  comp.dataset.devisId = devisId;
-  comp.dataset.lineId = line.id;
-  comp.setAttribute('aria-label', 'Entreprise sous-traitante');
-  const none = new Option('— Entreprise —', '');
-  if (!line.companyId) none.selected = true;
-  comp.appendChild(none);
-  for (const c of state.companies) {
-    const opt = new Option(c.name, c.id);
-    if (c.id === line.companyId) opt.selected = true;
-    comp.appendChild(opt);
-  }
-  compRow.appendChild(comp);
-  compRow.appendChild(buildDevisAmountWrap(devisId, line.id, 'amount', line.amount, '€'));
-  compGroup.appendChild(compRow);
-  card.appendChild(compGroup);
-
-  // Lignes 3-5 : main d'œuvre (heures), matériel (€), matériaux (€) —
-  // chacune avec son libellé fixe au-dessus du champ.
-  const subRows = [
-    { label: 'Main d\'œuvre', textField: 'hoursText',     placeholder: 'Détail (optionnel)…', amountField: 'hours',           suffix: 'h' },
-    { label: 'Matériel',      textField: 'materielText',  placeholder: 'Détail (optionnel)…', amountField: 'materielAmount',  suffix: '€' },
-    { label: 'Matériaux',     textField: 'materiauxText', placeholder: 'Détail (optionnel)…', amountField: 'materiauxAmount', suffix: '€' },
-  ];
-  for (const sub of subRows) {
-    const group = document.createElement('div');
-    group.className = 'devis-field-group';
-    const lbl = document.createElement('span');
-    lbl.className = 'devis-field-label';
-    lbl.textContent = sub.label;
-    group.appendChild(lbl);
-    const row = document.createElement('div');
-    row.className = 'devis-line-row';
-    const inp = document.createElement('input');
-    inp.type = 'text';
-    inp.className = 'devis-line-sub';
-    inp.placeholder = sub.placeholder;
-    inp.value = line[sub.textField] || '';
-    inp.dataset.devisAction = 'edit-line-field';
-    inp.dataset.devisId = devisId;
-    inp.dataset.lineId = line.id;
-    inp.dataset.field = sub.textField;
-    row.appendChild(inp);
-    row.appendChild(buildDevisAmountWrap(devisId, line.id, sub.amountField, line[sub.amountField], sub.suffix));
-    group.appendChild(row);
-    card.appendChild(group);
-  }
-
-  // Total du bloc : sous-traitant + heures × taux horaire (du devis) + matériel + matériaux
-  const totalRow = document.createElement('div');
-  totalRow.className = 'devis-line-total';
-  totalRow.innerHTML = `<span class="devis-line-total-label">Total ligne</span><span class="devis-line-total-val"></span>`;
-  totalRow.querySelector('.devis-line-total-val').textContent =
-    fmtEur(computeDevisLineTotal(line, getDevisTauxHoraire(getDevisById(devisId))));
-  card.appendChild(totalRow);
-  return card;
-}
-
-// ========================================================================
 // TRAVAUX — le CCTP du chantier, en 3 vues sur les MÊMES données
 //   • Visite : « je suis ici » → tout ce qui est dû dans ce lieu, classé
 //     par lot (cas d'usage : je visite un logement).
@@ -18501,8 +17177,6 @@ function switchPage(name) {
   if (name === 'dashboard') renderDashboard();
   if (name === 'proto') renderProto();
   if (name === 'cr') renderCR();
-  if (name === 'st') renderST();
-  if (name === 'devis') renderDevis();
   if (name === 'travaux') renderTravaux();
   // Synchro : à chaque changement d'onglet, on tente un pull en arrière-
   // plan pour récupérer les dernières modifs des coéquipiers.
@@ -21161,9 +19835,6 @@ const SYNC_EXCLUDED_KEYS = new Set([
   'echeckinCollapsed',               // sections eCheckIn pliées/dépliées
   'crSelectedCompanyId',             // entreprise sélectionnée dans le slider CR (UI)
   'crSelectedWeekId',                // semaine CR sélectionnée par entreprise (UI)
-  'stSelectedCompanyId',             // entreprise sélectionnée dans le slider ST (UI)
-  'devisSelectedId',                 // devis sélectionné (UI)
-  'devisSelectedVersion',            // indice sélectionné par devis (UI)
   'travauxSelectedLevel',            // niveau de zones affiché dans Travaux (UI)
   'travauxSelectedZoneId',           // zone affichée dans Travaux (UI)
   'travauxLotFilter',                // filtre de lots dans Travaux (UI)
@@ -21375,13 +20046,24 @@ async function doSyncPull(initial = false, opts = {}) {
 // enregistrement entier ne se propage pas depuis un appareil très en
 // retard (il « réapparaît » — bénin et rare, contre une perte de données
 // catastrophique).
+// Clés d'onglets RETIRÉS de l'application. Elles ne sont plus dans le
+// state, donc plus poussées ; mais la ligne partagée en contient encore
+// tant qu'un appareil non mis à jour n'a pas écrit par-dessus. Sans ce
+// filtre, la fusion les réintroduirait comme de simples scalaires et
+// elles reviendraient à chaque synchro.
+const SYNC_RETIRED_KEYS = new Set([
+  'devis', 'devisSelectedId', 'devisSelectedVersion',   // onglet Devis (retiré en v1.90)
+  'stEntries', 'stSelectedCompanyId',                   // onglet ST (retiré en v1.90)
+  'tauxHoraire',                                        // n'alimentait que les totaux de devis
+]);
+
 const SYNC_UNION_DICT_KEYS = new Set([
   'presences', 'weather', 'taskProgress', 'zoneUpdated', 'avancementHistory', 'zoneDates', 'stockArticles',
-  'adminDocs', 'workerDocs', 'heuresData', 'crEntries', 'stEntries',
+  'adminDocs', 'workerDocs', 'heuresData', 'crEntries',
   'travauxCells', 'avancementReleves'
 ]);
 const SYNC_UNION_ARRAY_KEYS = new Set([
-  'stockEntries', 'consommableEntries', 'protoShapes', 'devis',
+  'stockEntries', 'consommableEntries', 'protoShapes',
   'travauxLocations', 'travauxItems', 'travauxOuvrages', 'travauxPrescriptions'
 ]);
 
@@ -21534,7 +20216,7 @@ async function applyRemoteStateMerge(remoteState, remoteTs) {
   const toApply = [];
   let localWins = 0;
   for (const k of keys) {
-    if (SYNC_EXCLUDED_KEYS.has(k) || k.startsWith('_')) continue;
+    if (SYNC_EXCLUDED_KEYS.has(k) || SYNC_RETIRED_KEYS.has(k) || k.startsWith('_')) continue;
     const inRemote = Object.prototype.hasOwnProperty.call(remoteState, k);
     if (!inRemote) { localWins++; continue; } // clé locale inconnue du serveur
     const rStamp = Number(remoteStamps[k]) || remoteTs || 0;
@@ -21573,7 +20255,7 @@ async function applyRemoteStateMerge(remoteState, remoteTs) {
       if (!_jsonEq(merged, remoteState[k])) localWins++;
       continue;
     }
-    // Collections ARRAY supprimables (formes Proto, devis, travaux, stock,
+    // Collections ARRAY supprimables (formes Proto, travaux, stock,
     // conso…) : union ARBITRÉE PAR HORODATAGE. Le côté le plus récent gagne
     // le tableau entier → les SUPPRESSIONS se propagent (bug corrigé). On
     // n'unionne (anti-perte) que sur égalité stricte de stamp = vraie
@@ -21993,8 +20675,6 @@ function init() {
   const projEnd   = document.getElementById('projectend');
   if (projStart) projStart.addEventListener('change', () => setProjectStart(projStart.value));
   if (projEnd)   projEnd.addEventListener('change',   () => setProjectEnd(projEnd.value));
-  const tauxInp = document.getElementById('tauxhoraire');
-  if (tauxInp) tauxInp.addEventListener('input', () => setTauxHoraire(tauxInp.value));
 
   // ----- Consommable → Récap : bascule produit / eOTP -----
   document.querySelectorAll('.recap-mode-btn[data-recap-mode]').forEach(btn => {
@@ -22271,30 +20951,6 @@ function init() {
     });
   }
 
-  // ----- ST : délégation d'événements sur la page entière -----
-  const stPage = document.getElementById('page-st');
-  if (stPage) {
-    stPage.addEventListener('click', (e) => {
-      const t = e.target.closest('[data-st-action]');
-      if (!t) return;
-      const { stAction, companyId, groupKey, entryId } = t.dataset;
-      if (stAction === 'select-company') setSTSelectedCompany(companyId);
-      else if (stAction === 'add-entry') addSTEntry(companyId, groupKey);
-      else if (stAction === 'delete-entry') {
-        if (confirm('Supprimer cette ligne ?')) deleteSTEntry(companyId, groupKey, entryId);
-      }
-    });
-    stPage.addEventListener('input', (e) => {
-      const el = e.target.closest('[data-st-action]');
-      if (!el) return;
-      if (el.dataset.stAction === 'edit-text') {
-        setSTEntryField(el.dataset.companyId, el.dataset.groupKey, el.dataset.entryId, 'text', el.value);
-      } else if (el.dataset.stAction === 'edit-amount') {
-        setSTEntryField(el.dataset.companyId, el.dataset.groupKey, el.dataset.entryId, 'amount', el.value);
-      }
-    });
-  }
-
   // ----- Travaux : barres d'outils des vues Visite et CCTP -----
   // Les champs et boutons vivent dans le HTML et ne sont jamais recréés :
   // la saisie ne perd donc jamais le focus, et l'état visuel est piloté par
@@ -22351,41 +21007,6 @@ function init() {
     zoneModal.addEventListener('click', (e) => { if (e.target === zoneModal) closeTravauxZoneModal(); });
   }
 
-  // ----- Devis : barre de défilement des onglets + délégation -----
-  setupDevisTabsScrollbar();
-  const devisPage = document.getElementById('page-devis');
-  if (devisPage) {
-    devisPage.addEventListener('click', (e) => {
-      const t = e.target.closest('[data-devis-action]');
-      if (!t) return;
-      const { devisAction, devisId, lineId, versionId } = t.dataset;
-      if (devisAction === 'select') setSelectedDevis(devisId);
-      else if (devisAction === 'add') addDevis();
-      else if (devisAction === 'delete') deleteDevis(devisId);
-      else if (devisAction === 'select-version') setSelectedDevisVersion(devisId, versionId);
-      else if (devisAction === 'add-version') addDevisVersion(devisId);
-      else if (devisAction === 'delete-version') deleteDevisVersion(devisId, versionId);
-      else if (devisAction === 'add-line') addDevisLine(devisId);
-      else if (devisAction === 'delete-line') {
-        if (confirm('Supprimer cette ligne ? La ligne ST liée sera aussi retirée.')) deleteDevisLine(devisId, lineId);
-      }
-    });
-    devisPage.addEventListener('change', (e) => {
-      const t = e.target.closest('[data-devis-action]');
-      if (!t) return;
-      if (t.dataset.devisAction === 'set-etat') setDevisEtat(t.dataset.devisId, t.value);
-      else if (t.dataset.devisAction === 'set-date') setDevisDate(t.dataset.devisId, t.value);
-      else if (t.dataset.devisAction === 'edit-company') setDevisLineField(t.dataset.devisId, t.dataset.lineId, 'companyId', t.value);
-    });
-    devisPage.addEventListener('input', (e) => {
-      const t = e.target.closest('[data-devis-action]');
-      if (!t) return;
-      if (t.dataset.devisAction === 'edit-text') setDevisLineField(t.dataset.devisId, t.dataset.lineId, 'text', t.value);
-      else if (t.dataset.devisAction === 'edit-line-field') setDevisLineField(t.dataset.devisId, t.dataset.lineId, t.dataset.field, t.value);
-      else if (t.dataset.devisAction === 'set-avenant') setDevisAvenantNum(t.dataset.devisId, t.value);
-      else if (t.dataset.devisAction === 'set-taux') setDevisTauxHoraire(t.dataset.devisId, t.value);
-    });
-  }
 
   // ----- Sync : chip d'état (droite) + bouton 🔄 (gauche), tous deux dans le header -----
   const syncChip     = document.getElementById('syncchip');
